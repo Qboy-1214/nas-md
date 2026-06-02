@@ -2,14 +2,250 @@
 
 from __future__ import annotations
 
+import os
+import re
 import time
 from typing import Optional
 
 from nas_md.config import server_cfg
-from nas_md.fs import FS, DIR_USER_ROOT, new_user_fs
+from nas_md.fs import (
+    FS, DIR_USER_ROOT, DIR_ARCHIVE, DIR_JABITS,
+    CHAT_FILENAME, LATER_FILENAME, DONE_FILENAME,
+    new_user_fs,
+)
+from nas_md.journal import add_record
+from nas_md.pkg.txt.md import (
+    checklist_items, remove_completed_checklist_items,
+    add_header_and_text,
+)
+from nas_md.pkg.txt.str import strip_chat_timestamp
 from nas_md.userconfig import UserConfig
 
 _now = time.time
+
+
+def beginning_of_the_day(t: float) -> float:
+    """Return the beginning of the day for a given timestamp."""
+    import datetime
+    dt = datetime.datetime.utcfromtimestamp(t)
+    beginning = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return beginning.timestamp()
+
+
+def tomorrow() -> int:
+    """Return tomorrow's beginning of day as unix timestamp."""
+    import datetime
+    t = datetime.datetime.utcnow() + datetime.timedelta(days=1)
+    beginning = t.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(beginning.timestamp())
+
+
+def format_task_date(scheduled_at: int) -> str:
+    """Format a scheduled date for display."""
+    import datetime
+    today = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    task_date = datetime.datetime.utcfromtimestamp(scheduled_at).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    diff_days = (task_date - today).days
+
+    if diff_days == 0:
+        return "Today"
+    elif diff_days == 1:
+        return "Tomorrow"
+    elif 1 < diff_days <= 6:
+        return task_date.strftime("%A %d")
+    elif 7 <= diff_days <= 13:
+        return "Next " + task_date.strftime("%A %d")
+    else:
+        return task_date.strftime("%d %B, %A")
+
+
+def schedule_report(schedules: list) -> str:
+    """Format scheduled tasks into a report."""
+    from collections import OrderedDict
+    schedule = OrderedDict()
+    order = []
+
+    for s in schedules:
+        day = format_task_date(s.get("scheduledAt", 0))
+        filename = s.get("filename", "")
+        if day not in schedule:
+            order.append(day)
+            schedule[day] = []
+        schedule[day].append(filename)
+
+    parts = []
+    for day in order:
+        parts.append(f"<b>{day}</b>")
+        for task in schedule[day]:
+            parts.append(f"- {task}")
+        parts.append("")
+
+    return "\n".join(parts).strip()
+
+
+def move_due_tasks(storage_path: str, config_filename: str, tg) -> None:
+    """Move due scheduled tasks into user inboxes."""
+    root_fs = new_user_fs(storage_path)
+    user_dirs, _ = root_fs.files_and_dirs(DIR_USER_ROOT)
+
+    for user_dir in user_dirs:
+        try:
+            user_id = int(user_dir.name)
+        except (ValueError, TypeError):
+            continue
+
+        user_path = os.path.join(storage_path, str(user_id))
+        user_fs = new_user_fs(user_path)
+        user_config = UserConfig(user_fs, user_id, config_filename)
+        schedules = user_config.schedules()
+
+        for sched in schedules:
+            scheduled_at = sched.get("scheduledAt", 0)
+            seconds_left = scheduled_at - int(_now())
+            if seconds_left > 0:
+                continue
+
+            filename = sched.get("filename", "")
+            cron = sched.get("cron", "")
+
+            # Move task to inbox (Chat.md)
+            chat_content, _ = user_fs.read(DIR_USER_ROOT, CHAT_FILENAME)
+            chat_content = chat_content or ""
+            if chat_content:
+                chat_content += "\n"
+            chat_content += f"- [ ] {filename}"
+            user_fs.write(DIR_USER_ROOT, CHAT_FILENAME, chat_content)
+
+            # Remove from Done.md if present
+            done_content, _ = user_fs.read(DIR_ARCHIVE, DONE_FILENAME)
+            if done_content:
+                # Simple removal of the filename from done
+                done_lines = done_content.split("\n")
+                done_lines = [l for l in done_lines if filename not in l]
+                user_fs.write(DIR_ARCHIVE, DONE_FILENAME, "\n".join(done_lines))
+
+            # Remove from Later.md if present
+            later_content, _ = user_fs.read(DIR_USER_ROOT, LATER_FILENAME)
+            if later_content:
+                later_lines = later_content.split("\n")
+                later_lines = [l for l in later_lines if filename not in l]
+                user_fs.write(DIR_USER_ROOT, LATER_FILENAME, "\n".join(later_lines))
+
+            if cron:
+                # Reschedule for next occurrence
+                import datetime
+                next_time = int(_now()) + 86400  # Simplified: next day
+                user_config.add_to_schedule(filename, next_time, cron)
+            else:
+                user_config.del_from_schedule(filename)
+
+
+def remove_completed_checklist_items(storage_path: str, config_filename: str) -> None:
+    """Remove completed checklist items from Chat.md and Later.md, archive to Done.md."""
+    import datetime
+
+    root_fs = new_user_fs(storage_path)
+    user_dirs, _ = root_fs.files_and_dirs(DIR_USER_ROOT)
+
+    for user_dir in user_dirs:
+        try:
+            user_id = int(user_dir.name)
+        except (ValueError, TypeError):
+            continue
+
+        user_path = os.path.join(storage_path, str(user_id))
+        user_fs = new_user_fs(user_path)
+        user_config = UserConfig(user_fs, user_id, config_filename)
+
+        # Process Chat.md and Later.md
+        for filename in [CHAT_FILENAME, LATER_FILENAME]:
+            content, _ = user_fs.read(DIR_USER_ROOT, filename)
+            if not content:
+                continue
+
+            reduced, removed = _remove_completed_items(content)
+            if not removed:
+                continue
+
+            user_fs.write(DIR_USER_ROOT, filename, reduced)
+
+            # Archive to Done.md
+            done_content, _ = user_fs.read(DIR_ARCHIVE, DONE_FILENAME)
+            done_content = done_content or ""
+            today = datetime.datetime.utcnow()
+            header = f"#### {today.day} {today.strftime('%B')} {today.year}, {today.strftime('%A')}"
+            done_content = add_header_and_text(done_content, header, removed)
+            user_fs.write(DIR_ARCHIVE, DONE_FILENAME, done_content)
+
+            # Add to journal
+            items = checklist_items(removed)
+            for item_text, item_hash, is_done in items:
+                clean_text = strip_chat_timestamp(item_text)
+                add_record(user_fs, f"✅ {clean_text}")
+
+
+def _remove_completed_items(md: str) -> tuple:
+    """Remove completed checklist items from markdown content.
+    Returns (reduced_md, removed_items_md).
+    """
+    lines = md.split("\n")
+    done_re = re.compile(r"^- \[[xX]\] ")
+    ts_re = re.compile(r"^- \[[ xX]\] (?:\`\d{2}:\d{2}\` )?")
+
+    kept = []
+    removed_lines = []
+    in_block = False
+    block_lines = []
+    is_done_block = False
+
+    for line in lines:
+        if done_re.match(line):
+            # Start of a done block
+            if block_lines and not is_done_block:
+                kept.extend(block_lines)
+            elif block_lines and is_done_block:
+                removed_lines.extend(block_lines)
+            block_lines = [line]
+            is_done_block = True
+            in_block = True
+        elif line.startswith("- [ ] ") or line.startswith("- [x] "):
+            # Start of a new item block
+            if block_lines:
+                if is_done_block:
+                    removed_lines.extend(block_lines)
+                else:
+                    kept.extend(block_lines)
+            block_lines = [line]
+            is_done_block = False
+            in_block = True
+        elif in_block and line.strip() and not line.startswith("- ["):
+            # Continuation of current block
+            block_lines.append(line)
+        else:
+            # End of block or non-item line
+            if block_lines:
+                if is_done_block:
+                    removed_lines.extend(block_lines)
+                else:
+                    kept.extend(block_lines)
+                block_lines = []
+                in_block = False
+            kept.append(line)
+
+    # Handle last block
+    if block_lines:
+        if is_done_block:
+            removed_lines.extend(block_lines)
+        else:
+            kept.extend(block_lines)
+
+    # Format removed items as checklist
+    removed_md = "\n".join(removed_lines).strip()
+    kept_md = "\n".join(kept).strip()
+
+    return kept_md, removed_md
 
 
 class Worker:
@@ -26,12 +262,20 @@ class Worker:
 
     def _run_schedules(self) -> None:
         """Process scheduled tasks for all users."""
-        # In the real implementation, this would iterate over all user directories
-        pass
+        storage_path = server_cfg.storage_path
+        config_filename = server_cfg.config_filename
+        move_due_tasks(storage_path, config_filename, self.tg)
 
     def _cleanup_done(self) -> None:
         """Clean up old completed tasks."""
-        pass
+        import datetime
+        # Only run near end of day (23:50+)
+        now = datetime.datetime.utcnow()
+        if now.hour != 23 or now.minute < 50:
+            return
+        storage_path = server_cfg.storage_path
+        config_filename = server_cfg.config_filename
+        remove_completed_checklist_items(storage_path, config_filename)
 
 
 def new_worker(tg, get_user_fs) -> Worker:

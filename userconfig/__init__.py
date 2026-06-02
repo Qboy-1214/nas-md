@@ -139,6 +139,72 @@ class UserConfig:
     def channels(self) -> list[int]:
         return self._read().get("channels", [])
 
+    def add_channel(self, channel_id: int) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            channels = cfg.get("channels", [])
+            if channel_id not in channels:
+                channels.append(channel_id)
+                cfg["channels"] = channels
+                self._write(cfg)
+
+    def del_channel(self, channel_id: int) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            channels = [c for c in cfg.get("channels", []) if c != channel_id]
+            cfg["channels"] = channels
+            self._write(cfg)
+
+    def quick_cmds(self) -> list[str]:
+        return self._read().get("quickCommands", [])
+
+    def add_quick_cmd(self, cmd: str) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            cmds = cfg.get("quickCommands", [])
+            if cmd not in cmds:
+                cmds.append(cmd)
+                cfg["quickCommands"] = cmds
+                self._write(cfg)
+
+    def del_quick_cmd(self, cmd: str) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            cmds = [c for c in cfg.get("quickCommands", []) if c != cmd]
+            cfg["quickCommands"] = cmds
+            self._write(cfg)
+
+    def move_to_cmds(self) -> list[str]:
+        return self._read().get("moveToCommands", [])
+
+    def add_move_to_cmd(self, cmd: str) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            cmds = cfg.get("moveToCommands", [])
+            if cmd not in cmds:
+                cmds.append(cmd)
+                cfg["moveToCommands"] = cmds
+                self._write(cfg)
+
+    def del_move_to_cmd(self, cmd: str) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            cmds = [c for c in cfg.get("moveToCommands", []) if c != cmd]
+            cfg["moveToCommands"] = cmds
+            self._write(cfg)
+
+    def set_two_emojis(self, enabled: bool) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            cfg["twoEmojisEnabled"] = enabled
+            self._write(cfg)
+
+    def set_quick_habits(self, enabled: bool) -> None:
+        with self._user_lock():
+            cfg = self._read()
+            cfg["quickHabitsEnabled"] = enabled
+            self._write(cfg)
+
     def _read(self) -> dict:
         exists, _ = self.user_fs.exists(DIR_USER_ROOT, self.filename)
         if not exists:
