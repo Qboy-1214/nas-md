@@ -1,0 +1,30 @@
+services:
+  nas-md:
+    build: .
+    image: nas-md
+    ports:
+      - "80:8080"
+      # - "443:443"
+    volumes:
+      - storage:/app/storage
+      - tokens:/app/tokens
+      # Mount additional read-only directories (optional)
+      # - /path/to/notes:/mnt/notes:ro
+      # - /path/to/docs:/mnt/docs:ro
+      # - /path/to/wiki:/mnt/wiki:ro
+    environment:
+      APP_URL: http://localhost
+      STORAGE_DIR: /app/storage
+      TOKENS_DIR: /app/tokens
+      WEB_ROOT: /app/web
+      WEB_PORT: "8080"
+      # MountDirs: colon-separated list of absolute paths inside the container
+      # that will be served as browseable directories.
+      # Example with the volume mounts above:
+      # MOUNT_DIRS: /mnt/notes:/mnt/docs:/mnt/wiki
+      MOUNT_DIRS: ""
+    restart: unless-stopped
+
+volumes:
+  storage:
+  tokens:

@@ -40,12 +40,15 @@ def cmd_web() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
 
-    from nas_md.webserver import serve
-    from nas_md.config import server_cfg
+    from nas_md.config import load_bot_config, server_cfg
+
+    load_bot_config()
 
     mount_dirs = server_cfg.mount_dir_list()
     web_root = server_cfg.web_root()
     port = server_cfg.web_port()
+
+    from nas_md.webserver import serve
 
     serve(mount_dirs=mount_dirs, web_root=web_root, port=port)
 

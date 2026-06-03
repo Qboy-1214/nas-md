@@ -2,15 +2,82 @@
 
 from __future__ import annotations
 
+import contextlib
+import gzip
 import json
 import logging
 import mimetypes
 import os
+import shutil
 import stat
+import traceback
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from io import BytesIO
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger("webserver")
+
+# --- Content-Type overrides for text files (add charset=utf-8) ---
+
+_TEXT_EXTENSIONS = {
+    ".md": "text/plain; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".yaml": "text/plain; charset=utf-8",
+    ".yml": "text/plain; charset=utf-8",
+    ".toml": "text/plain; charset=utf-8",
+    ".ini": "text/plain; charset=utf-8",
+    ".cfg": "text/plain; charset=utf-8",
+    ".conf": "text/plain; charset=utf-8",
+    ".sh": "text/plain; charset=utf-8",
+    ".bash": "text/plain; charset=utf-8",
+    ".py": "text/plain; charset=utf-8",
+    ".go": "text/plain; charset=utf-8",
+    ".rs": "text/plain; charset=utf-8",
+    ".java": "text/plain; charset=utf-8",
+    ".c": "text/plain; charset=utf-8",
+    ".cpp": "text/plain; charset=utf-8",
+    ".h": "text/plain; charset=utf-8",
+    ".hpp": "text/plain; charset=utf-8",
+    ".ts": "text/plain; charset=utf-8",
+    ".tsx": "text/plain; charset=utf-8",
+    ".jsx": "text/plain; charset=utf-8",
+    ".vue": "text/plain; charset=utf-8",
+    ".svelte": "text/plain; charset=utf-8",
+    ".php": "text/plain; charset=utf-8",
+    ".rb": "text/plain; charset=utf-8",
+    ".pl": "text/plain; charset=utf-8",
+    ".lua": "text/plain; charset=utf-8",
+    ".sql": "text/plain; charset=utf-8",
+    ".graphql": "text/plain; charset=utf-8",
+    ".proto": "text/plain; charset=utf-8",
+    ".dockerignore": "text/plain; charset=utf-8",
+    ".gitignore": "text/plain; charset=utf-8",
+    ".makefile": "text/plain; charset=utf-8",
+    ".cmake": "text/plain; charset=utf-8",
+    ".env": "text/plain; charset=utf-8",
+    ".log": "text/plain; charset=utf-8",
+}
+
+
+def _content_type(path: str) -> str:
+    """Detect content type with proper charset for text files."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _TEXT_EXTENSIONS:
+        return _TEXT_EXTENSIONS[ext]
+    ct, _ = mimetypes.guess_type(path)
+    if ct is None:
+        return "application/octet-stream"
+    # Ensure text/* types have charset
+    if ct.startswith("text/") and "charset" not in ct:
+        return ct + "; charset=utf-8"
+    return ct
 
 
 # --- Mount Manager ---
@@ -143,6 +210,30 @@ class MountManager:
         return entry
 
 
+# --- Gzip support ---
+
+
+class _GzipWriter:
+    """Wrapper that gzip-compresses the response."""
+
+    def __init__(self, handler: MountHTTPHandler):
+        self.handler = handler
+        self.buffer = BytesIO()
+        self.gz = gzip.GzipFile(fileobj=self.buffer, mode="wb")
+
+    def write(self, data: bytes):
+        self.gz.write(data)
+
+    def close(self):
+        self.gz.close()
+        self.handler.wfile.write(self.buffer.getvalue())
+
+
+def _accepts_gzip(handler: MountHTTPHandler) -> bool:
+    ae = handler.headers.get("Accept-Encoding", "")
+    return "gzip" in ae
+
+
 # --- Request Handler ---
 
 
@@ -172,6 +263,20 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         return self.rfile.read(content_length)
 
+    def _wrap_gzip(self) -> bool:
+        """If client accepts gzip, wrap wfile for transparent compression."""
+        if _accepts_gzip(self):
+            self._gzip_writer = _GzipWriter(self)
+            self.wfile = self._gzip_writer  # type: ignore[assignment]
+            self.send_header("Content-Encoding", "gzip")
+            return True
+        return False
+
+    def _finish_gzip(self):
+        """Flush gzip writer if active."""
+        if hasattr(self, "_gzip_writer"):
+            self._gzip_writer.close()
+
     # --- CORS preflight ---
     def do_OPTIONS(self):
         self.send_response(200)
@@ -182,94 +287,114 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     # --- GET ---
     def do_GET(self):
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
-        qs = parse_qs(parsed.query)
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            qs = parse_qs(parsed.query)
 
-        # Mount API routes
-        if path == "/api/mounts":
-            if self.mount_manager and not self.mount_manager.is_empty():
-                self._send_json([m.to_dict() for m in self.mount_manager.mounts])
-            else:
-                self._send_json([])
-            return
+            # Mount API routes
+            if path == "/api/mounts":
+                if self.mount_manager and not self.mount_manager.is_empty():
+                    self._send_json([m.to_dict() for m in self.mount_manager.mounts])
+                else:
+                    self._send_json([])
+                return
 
-        # /api/mounts/{id}/tree
-        if "/api/mounts/" in path and path.endswith("/tree"):
-            mount_id = path.split("/api/mounts/")[1].split("/tree")[0]
-            self._handle_tree(mount_id, qs)
-            return
+            # /api/mounts/{id}/tree
+            if "/api/mounts/" in path and path.endswith("/tree"):
+                mount_id = path.split("/api/mounts/")[1].split("/tree")[0]
+                self._handle_tree(mount_id, qs)
+                return
 
-        # /api/mounts/{id}/tree-recursive
-        if "/api/mounts/" in path and path.endswith("/tree-recursive"):
-            mount_id = path.split("/api/mounts/")[1].split("/tree-recursive")[0]
-            self._handle_recursive_tree(mount_id, qs)
-            return
+            # /api/mounts/{id}/tree-recursive
+            if "/api/mounts/" in path and path.endswith("/tree-recursive"):
+                mount_id = path.split("/api/mounts/")[1].split("/tree-recursive")[0]
+                self._handle_recursive_tree(mount_id, qs)
+                return
 
-        # /api/mounts/{id}/file
-        if "/api/mounts/" in path and path.endswith("/file"):
-            mount_id = path.split("/api/mounts/")[1].split("/file")[0]
-            self._handle_file(mount_id, qs)
-            return
+            # /api/mounts/{id}/file
+            if "/api/mounts/" in path and path.endswith("/file"):
+                mount_id = path.split("/api/mounts/")[1].split("/file")[0]
+                self._handle_file(mount_id, qs)
+                return
 
-        # Static files
-        self._serve_static(path)
+            # Static files
+            self._serve_static(path)
+        except Exception:
+            logger.error("GET handler error: %s", traceback.format_exc())
+            with contextlib.suppress(Exception):
+                self._send_error("Internal server error", 500)
 
     # --- PUT ---
     def do_PUT(self):
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or ""
-        qs = parse_qs(parsed.query)
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or ""
+            qs = parse_qs(parsed.query)
 
-        # /api/mounts/{id}/file
-        if "/api/mounts/" in path and path.endswith("/file"):
-            mount_id = path.split("/api/mounts/")[1].split("/file")[0]
-            self._handle_write_file(mount_id, qs)
-            return
+            # /api/mounts/{id}/file
+            if "/api/mounts/" in path and path.endswith("/file"):
+                mount_id = path.split("/api/mounts/")[1].split("/file")[0]
+                self._handle_write_file(mount_id, qs)
+                return
 
-        # /api/mounts/{id}/rename
-        if "/api/mounts/" in path and path.endswith("/rename"):
-            mount_id = path.split("/api/mounts/")[1].split("/rename")[0]
-            self._handle_rename(mount_id, qs)
-            return
+            # /api/mounts/{id}/rename
+            if "/api/mounts/" in path and path.endswith("/rename"):
+                mount_id = path.split("/api/mounts/")[1].split("/rename")[0]
+                self._handle_rename(mount_id, qs)
+                return
 
-        # /api/mounts/{id}/mkdir
-        if "/api/mounts/" in path and path.endswith("/mkdir"):
-            mount_id = path.split("/api/mounts/")[1].split("/mkdir")[0]
-            self._handle_mkdir(mount_id, qs)
-            return
+            # /api/mounts/{id}/mkdir
+            if "/api/mounts/" in path and path.endswith("/mkdir"):
+                mount_id = path.split("/api/mounts/")[1].split("/mkdir")[0]
+                self._handle_mkdir(mount_id, qs)
+                return
 
-        self.send_error(405, "Method not allowed")
+            self.send_error(405, "Method not allowed")
+        except Exception:
+            logger.error("PUT handler error: %s", traceback.format_exc())
+            with contextlib.suppress(Exception):
+                self._send_error("Internal server error", 500)
 
     # --- DELETE ---
     def do_DELETE(self):
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or ""
-        qs = parse_qs(parsed.query)
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or ""
+            qs = parse_qs(parsed.query)
 
-        if "/api/mounts/" in path and path.endswith("/file"):
-            mount_id = path.split("/api/mounts/")[1].split("/file")[0]
-            self._handle_delete(mount_id, qs)
-            return
+            if "/api/mounts/" in path and path.endswith("/file"):
+                mount_id = path.split("/api/mounts/")[1].split("/file")[0]
+                self._handle_delete(mount_id, qs)
+                return
 
-        self.send_error(405, "Method not allowed")
+            self.send_error(405, "Method not allowed")
+        except Exception:
+            logger.error("DELETE handler error: %s", traceback.format_exc())
+            with contextlib.suppress(Exception):
+                self._send_error("Internal server error", 500)
 
     # --- POST ---
     def do_POST(self):
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or ""
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or ""
 
-        # /syncFilenames
-        if path == "/syncFilenames":
-            self._handle_sync_filenames()
-            return
+            # /syncFilenames
+            if path == "/syncFilenames":
+                self._handle_sync_filenames()
+                return
 
-        # /syncFile
-        if path == "/syncFile":
-            self._handle_sync_file()
-            return
+            # /syncFile
+            if path == "/syncFile":
+                self._handle_sync_file()
+                return
 
-        self.send_error(405, "Method not allowed")
+            self.send_error(405, "Method not allowed")
+        except Exception:
+            logger.error("POST handler error: %s", traceback.format_exc())
+            with contextlib.suppress(Exception):
+                self._send_error("Internal server error", 500)
 
     # --- Mount API handlers ---
 
@@ -309,10 +434,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("Path escapes mount root", 403)
         if not os.path.isfile(abs_path):
             return self._send_error("File not found", 404)
-        # Detect content type
-        ct, _ = mimetypes.guess_type(abs_path)
-        if ct is None:
-            ct = "application/octet-stream"
+        ct = _content_type(abs_path)
         try:
             with open(abs_path, "rb") as f:
                 data = f.read()
@@ -390,7 +512,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if abs_path is None:
             return self._send_error("Path escapes mount root", 403)
         if os.path.isdir(abs_path):
-            os.rmdir(abs_path)
+            shutil.rmtree(abs_path)
         else:
             os.remove(abs_path)
         self._send_json({"status": "ok"})
@@ -428,9 +550,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if not os.path.isfile(full_path):
             return self.send_error(404, "Not found")
 
-        ct, _ = mimetypes.guess_type(full_path)
-        if ct is None:
-            ct = "application/octet-stream"
+        ct = _content_type(full_path)
 
         try:
             with open(full_path, "rb") as f:
