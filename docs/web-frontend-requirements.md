@@ -233,6 +233,7 @@ web/
 - [x] 后端：游客挂载自动设为 `public=true`
 - [x] 后端：公开挂载点的 tree/file 读取无需认证
 - [x] 后端：`DirEntry.hasMd` 字段（递归树标记是否含 md 文件）
+- [x] 后端：修复公开挂载点 GET 文件时 `path.endswith('/file')` 因 query string 导致返回 401 的 bug
 - [x] 前端：欢迎页
 - [x] 前端：登录 Modal
 - [x] 前端：主界面（侧边栏 + 文件树 + 编辑器）
@@ -240,7 +241,12 @@ web/
 - [x] 前端：游客/登录态切换逻辑
 - [x] 前端：递归树渲染 + 目录按 hasMd 过滤
 - [x] 前端：目录展开/折叠（递归树数据）
+- [x] 前端：Vditor CDN 资源本地化（lute、i18n、图标、主题 vendored 到 `web/lib/vditor-cdn/`，防 Edge Tracking Prevention 拦截）
+- [x] 前端：编辑器模式即时切换（destroy + reinit，Vditor 3.x 无 `setMode()`）
+- [x] 前端：模式切换时滚动位置/光标保存恢复
+- [x] 前端：搜索模块
 - [x] 配置：Token 配置方式
+- [x] 配置：`.gitignore` 更新，前端文件纳入版本控制
 - [x] 测试：E2E 测试覆盖（21/21 通过）
 
 ### Phase 2（待开始）
