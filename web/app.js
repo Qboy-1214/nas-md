@@ -30,6 +30,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   updateAuthUI();
   await loadMounts();
+  // Re-mount directories from localStorage (survives page refresh)
+  await restoreSavedMounts();
   await loadRecentFiles();
   // Auto-open welcome.md if builtin mount exists
   const builtin = state.mounts.find(m => m.id === 'builtin-storage');
@@ -150,7 +152,10 @@ function logout() {
 }
 
 // === 挂载目录 ===
+let _loadMountsBusy = false;
 async function loadMounts() {
+  if (_loadMountsBusy) return;
+  _loadMountsBusy = true;
   try {
     if (state.token) {
       state.mounts = await API.getMounts();
@@ -160,6 +165,41 @@ async function loadMounts() {
     renderSidebar();
   } catch (e) {
     showToast('加载挂载点失败');
+  } finally {
+    _loadMountsBusy = false;
+  }
+}
+
+// Save mount paths to localStorage so they survive page refresh
+function saveMountsToStorage() {
+  const paths = state.mounts
+    .filter(m => m.id !== 'builtin-storage')
+    .map(m => ({ path: m.path, name: m.name }));
+  localStorage.setItem('nasmd_mounts', JSON.stringify(paths));
+}
+
+// Re-mount directories saved in localStorage (call after loadMounts)
+async function restoreSavedMounts() {
+  const saved = localStorage.getItem('nasmd_mounts');
+  if (!saved) return;
+  try {
+    const paths = JSON.parse(saved);
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    for (const { path, name } of paths) {
+      // Skip if already mounted (path match)
+      if (state.mounts.some(m => m.path === path)) continue;
+      try {
+        const resp = await API.addMount(path, name);
+        if (resp && resp.id) {
+          state.mounts.push(resp);
+        }
+      } catch (e) {
+        console.warn('Failed to re-mount:', path, e);
+      }
+    }
+    renderSidebar();
+  } catch (e) {
+    console.warn('Failed to restore saved mounts:', e);
   }
 }
 
@@ -240,6 +280,7 @@ async function openDirectory() {
       $('new-dir-name').value = '';
       $('new-dir-path').placeholder = '输入目录路径，或点击浏览选择';
       await loadMounts();
+      saveMountsToStorage();
     } else {
       const errMsg = resp?.error || '';
       if (errMsg.includes('Not a valid directory')) {
@@ -334,6 +375,7 @@ async function removeMount(mountId) {
       showPage('welcome');
     }
     renderSidebar();
+    saveMountsToStorage();
     showToast('已卸载');
   } catch (e) {
     // Network error: still clean up frontend
