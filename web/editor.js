@@ -11,6 +11,14 @@ let _editorMode = 'ir';  // ir | sv | wysiwyg
 // Expose for app.js
 window._getVditor = () => _vditor;
 
+// Reinitialize editor with a new mode (Vditor doesn't support runtime mode switch)
+window._reinitEditor = (mode) => {
+  if (!_vditor) return;
+  const content = _vditor.getValue();
+  _vditor.destroy();
+  initEditor(content, mode, false);
+};
+
 function initEditor(content, mode, readonly) {
   _editorMode = mode || 'ir';
   _originalContent = content || '';

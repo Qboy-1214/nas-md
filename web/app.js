@@ -615,10 +615,11 @@ async function doSearch() {
 
 // === 编辑器模式 ===
 function setEditorMode(mode) {
+  if (state.editorMode === mode) return;
   state.editorMode = mode;
-  const vditor = window._getVditor();
-  if (vditor) {
-    vditor.setMode(mode);
+
+  if (window._reinitEditor) {
+    window._reinitEditor(mode);
   }
 }
 
