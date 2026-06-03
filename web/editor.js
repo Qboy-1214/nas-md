@@ -48,6 +48,7 @@ window._reinitEditor = (mode) => {
     }
   } catch (_) {}
 
+  teardownSVSync();
   _vditor.destroy();
   _cursorRestoreOffset = cursorOffset;
   initEditor(content, mode, false, cursorOffset);
@@ -63,6 +64,11 @@ window._reinitEditor = (mode) => {
     } else if (mode === 'wysiwyg') {
       nd.wysiwyg.element.parentElement.scrollTop = scrollTop;
     }
+    // Restore focus after scroll is set
+    setTimeout(() => {
+      const el = getActiveEditorEl();
+      if (el) el.focus();
+    }, 30);
   });
 };
 
@@ -117,10 +123,23 @@ function initEditor(content, mode, readonly, cursorOffset) {
       linkToImgUrl: '',
     },
     after: () => {
-      // Restore cursor position
+      // SV mode: wire up reverse scroll sync (preview → editor)
+      // and cursor tracking (editor cursor → preview scroll)
+      if (_editorMode === 'sv') {
+        setupSVSync();
+      }
+      // Restore cursor/focus after a delay to ensure DOM is fully ready
       if (_cursorRestoreOffset > 0) {
-        restoreCursorPosition(_cursorRestoreOffset);
-        _cursorRestoreOffset = 0;
+        setTimeout(() => {
+          restoreCursorPosition(_cursorRestoreOffset);
+          _cursorRestoreOffset = 0;
+        }, 50);
+      } else {
+        // Even without cursor offset, restore focus to the editor
+        setTimeout(() => {
+          const el = getActiveEditorEl();
+          if (el) el.focus();
+        }, 50);
       }
       // 只读模式：禁用编辑区，隐藏工具栏
       if (readonly) {
@@ -134,6 +153,75 @@ function initEditor(content, mode, readonly, cursorOffset) {
       }
     },
   });
+}
+
+function getActiveEditorEl() {
+  if (!_vditor) return null;
+  const mode = _vditor.getCurrentMode();
+  if (mode === 'sv') return _vditor.vditor.sv.element;
+  if (mode === 'ir') return _vditor.vditor.ir.element;
+  if (mode === 'wysiwyg') return _vditor.vditor.wysiwyg.element;
+  return null;
+}
+
+// SV mode: reverse scroll sync + cursor tracking
+let _svSyncHandler = null;
+let _svScrollSyncHandler = null;
+let _svCursorSyncHandler = null;
+
+function setupSVSync() {
+  // Remove old handlers if any
+  teardownSVSync();
+
+  const svEl = _vditor.vditor.sv.element;
+  const previewEl = _vditor.vditor.preview.element;
+
+  // 1. Preview scroll → Editor scroll (reverse sync)
+  _svScrollSyncHandler = () => {
+    if (svEl.style.display === 'none') return;
+    const previewScrollTop = previewEl.scrollTop;
+    const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
+    const editorScrollHeight = svEl.scrollHeight - svEl.clientHeight;
+    if (previewScrollHeight <= 0 || editorScrollHeight <= 0) return;
+    // Map proportionally
+    svEl.scrollTop = previewScrollTop * editorScrollHeight / previewScrollHeight;
+  };
+  previewEl.addEventListener('scroll', _svScrollSyncHandler);
+
+  // 2. Cursor/selection change → scroll preview to match position
+  _svCursorSyncHandler = () => {
+    const textarea = svEl;
+    if (!textarea) return;
+    const pos = textarea.selectionStart;
+    const text = textarea.value;
+    // Calculate which line the cursor is on
+    const textBefore = text.substring(0, pos);
+    const lines = textBefore.split('\n');
+    const lineNumber = lines.length - 1;
+    const totalLines = text.split('\n').length;
+    if (totalLines <= 1) return;
+    // Scroll preview proportionally
+    const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
+    const ratio = lineNumber / (totalLines - 1);
+    previewEl.scrollTop = ratio * previewScrollHeight;
+  };
+  document.addEventListener('selectionchange', _svCursorSyncHandler);
+
+  // 3. Scroll preview to match initial cursor position
+  setTimeout(() => _svCursorSyncHandler(), 100);
+}
+
+function teardownSVSync() {
+  if (_svScrollSyncHandler && _vditor) {
+    try {
+      _vditor.vditor.preview.element.removeEventListener('scroll', _svScrollSyncHandler);
+    } catch (_) {}
+  }
+  if (_svCursorSyncHandler) {
+    document.removeEventListener('selectionchange', _svCursorSyncHandler);
+  }
+  _svScrollSyncHandler = null;
+  _svCursorSyncHandler = null;
 }
 
 function restoreCursorPosition(offset) {
