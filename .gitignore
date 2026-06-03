@@ -7,4 +7,5 @@ __pycache__/
 storage/
 *.log
 .DS_Store
-web/
+web/lib/vditor/index.min.js
+web/lib/vditor/index.css

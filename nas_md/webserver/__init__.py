@@ -423,14 +423,17 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 return
 
             # Public mount tree/file access (no auth needed)
-            if ("/api/mounts/" in path and (path.endswith("/file") or path.endswith("/tree") or path.endswith("/tree-recursive"))
-                    and "/" not in path.split("/api/mounts/")[1].split("/")[0]):
+            # Use regex-like check: path contains /mounts/{id}/file, /tree, or /tree-recursive
+            mount_file_match = path.split("?")[0]  # Strip query string for matching
+            if ("/api/mounts/" in mount_file_match and 
+                    (mount_file_match.endswith("/file") or mount_file_match.endswith("/tree") or mount_file_match.endswith("/tree-recursive"))
+                    and "/" not in mount_file_match.split("/api/mounts/")[1].split("/")[0]):
                 mount_id = path.split("/api/mounts/")[1].split("/")[0]
                 if mount_id and self._is_public_mount(mount_id):
                     qs = parse_qs(parsed.query)
-                    if path.endswith("/file"):
+                    if mount_file_match.endswith("/file"):
                         self._handle_file(mount_id, qs)
-                    elif path.endswith("/tree-recursive"):
+                    elif mount_file_match.endswith("/tree-recursive"):
                         self._handle_recursive_tree(mount_id, qs)
                     else:
                         self._handle_tree(mount_id, qs)

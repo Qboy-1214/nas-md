@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>nas-md</title>
+  <link rel="stylesheet" href="lib/vditor/index.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="layout">
+
+<!-- 侧边栏 -->
+<aside id="sidebar" class="sidebar">
+  <div class="sidebar-header">
+    <h2 class="logo" onclick="navigateHome()">nas-md</h2>
+    <button class="collapse-btn" onclick="toggleSidebar()">☰</button>
+  </div>
+
+  <!-- 搜索框 -->
+  <div class="search-box">
+    <input type="text" id="search-input" placeholder="搜索笔记..." oninput="doSearch()" class="search-input">
+    <div id="search-results" class="search-results"></div>
+  </div>
+
+  <!-- 文件树 -->
+  <nav id="file-tree" class="file-tree"></nav>
+
+  <!-- 底部按钮 -->
+  <div class="sidebar-footer">
+    <button class="nav-btn" onclick="navigateHome()">🏠 首页</button>
+    <button class="nav-btn" id="btn-settings" onclick="showSettings()">⚙️ 设置</button>
+    <button class="nav-btn" id="btn-login" onclick="showLogin()">登录</button>
+    <button class="nav-btn" id="btn-logout" onclick="logout()" style="display:none">退出</button>
+  </div>
+</aside>
+
+<!-- 主内容区 -->
+<main class="main">
+  <!-- 顶部栏 -->
+  <header class="topbar">
+    <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+    <span class="breadcrumb" id="breadcrumb"></span>
+    <div class="topbar-actions">
+      <div class="editor-modes" id="editor-modes" style="display:none">
+        <button onclick="setEditorMode('ir')">即时渲染</button>
+        <button onclick="setEditorMode('sv')">分屏预览</button>
+        <button onclick="setEditorMode('wysiwyg')">所见即所得</button>
+      </div>
+      <button class="save-btn" id="btn-save" onclick="saveFile()" style="display:none">保存</button>
+    </div>
+  </header>
+
+  <!-- 编辑器区域 -->
+  <div class="editor-area">
+    <!-- 欢迎页 -->
+    <div id="welcome-page" class="welcome-page">
+      <div class="welcome-hero">
+        <h1 class="welcome-logo">nas-md</h1>
+        <p class="welcome-subtitle">个人知识管理系统</p>
+        <p class="welcome-desc">轻量、快速的 Markdown 笔记管理器。输入目录路径即可浏览、搜索和编辑你的笔记。</p>
+      </div>
+
+      <!-- 打开目录 -->
+      <div class="open-dir-section">
+        <label class="section-label">打开目录</label>
+        <div class="open-dir-input-group">
+          <input type="text" id="new-dir-path" placeholder="输入目录路径，或点击浏览选择" class="open-dir-input" onclick="chooseDirectory()">
+          <input type="text" id="new-dir-name" placeholder="显示名称（可选）" class="open-dir-name-input">
+          <button class="browse-btn" onclick="chooseDirectory()">浏览…</button>
+          <button class="primary-btn" onclick="openDirectory()">打开</button>
+          <!-- 隐藏的文件选择器，用于选择文件夹 -->
+          <input type="file" id="dir-picker" webkitdirectory style="display:none" onchange="onDirPicked(event)">
+        </div>
+        <p class="open-dir-hint" id="guest-hint" style="display:none">游客最多挂载 1 个目录，请先登录</p>
+      </div>
+
+      <!-- 已挂载的目录 -->
+      <div class="mounted-dirs" id="mounted-dirs"></div>
+
+      <!-- 最近修改 -->
+      <div class="recent-files" id="recent-files"></div>
+    </div>
+
+    <!-- 编辑器 -->
+    <div class="editor-container" id="editor-container" style="display:none">
+      <div id="vditor"></div>
+    </div>
+
+    <!-- 设置页 -->
+    <div class="settings-page" id="settings-page" style="display:none">
+      <h1>设置</h1>
+      <div class="setting-item">
+        <label>API 地址</label>
+        <span class="setting-value" id="setting-api"></span>
+      </div>
+      <div class="setting-item">
+        <label>挂载点</label>
+        <div id="setting-mounts"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- 登录 Modal -->
+<div class="modal-overlay" id="login-modal" style="display:none">
+  <div class="modal login-modal">
+    <div class="login-modal-header">
+      <h3>登录</h3>
+      <button class="modal-close" onclick="hideLogin()">✕</button>
+    </div>
+    <p class="login-modal-desc">输入 Token 以解锁更多功能</p>
+    <input type="password" id="login-token" placeholder="请输入访问 Token" class="modal-input" autofocus>
+    <p class="login-error" id="login-error" style="display:none"></p>
+    <div class="modal-actions">
+      <button onclick="hideLogin()">取消</button>
+      <button class="primary-btn" onclick="login()">登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建文件对话框 -->
+<div class="modal-overlay" id="new-file-modal" style="display:none">
+  <div class="modal">
+    <div class="modal-header-row">
+      <h3>新建笔记</h3>
+      <button class="modal-close" onclick="hideNewFile()">✕</button>
+    </div>
+    <input type="text" id="new-file-name" placeholder="文件名（如 My Note.md）" class="modal-input">
+    <div class="modal-actions">
+      <button onclick="hideNewFile()">取消</button>
+      <button class="primary-btn" onclick="confirmNewFile()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 消息提示 -->
+<div class="toast" id="toast" style="display:none"></div>
+
+<script src="lib/vditor/index.min.js"></script>
+<script src="files.js"></script>
+<script src="editor.js"></script>
+<script src="app.js"></script>
+</div>
+</body>
+</html>
