@@ -16,6 +16,18 @@ window._getVditor = () => _vditor;
 window._reinitEditor = (mode) => {
   if (!_vditor) return;
   const content = _vditor.getValue();
+
+  // Save scroll position from the active panel
+  let scrollTop = 0;
+  const oldMode = _vditor.getCurrentMode();
+  if (oldMode === 'sv') {
+    scrollTop = _vditor.vditor.sv.element.scrollTop;
+  } else if (oldMode === 'ir') {
+    scrollTop = _vditor.vditor.ir.element.scrollTop;
+  } else if (oldMode === 'wysiwyg') {
+    scrollTop = _vditor.vditor.wysiwyg.element.parentElement.scrollTop;
+  }
+
   // Save cursor position as text offset
   let cursorOffset = 0;
   try {
@@ -24,26 +36,34 @@ window._reinitEditor = (mode) => {
     if (sel.rangeCount > 0) {
       const range = sel.getRangeAt(0);
       const preRange = range.cloneRange();
-      // Determine which element to measure offset against based on current mode
-      const currentMode = _vditor.getCurrentMode();
-      let el;
-      if (currentMode === 'sv') {
-        // For SV mode, measure from the textarea value
+      if (oldMode === 'sv') {
         const textarea = _vditor.vditor.sv.element;
-        if (textarea) {
-          cursorOffset = textarea.selectionStart;
-        }
+        if (textarea) cursorOffset = textarea.selectionStart;
       } else {
-        // For IR/WYSIWYG, use the contenteditable element
-        el = currentMode === 'wysiwyg' ? _vditor.vditor.wysiwyg.element : _vditor.vditor.ir.element;
+        const el = oldMode === 'wysiwyg' ? _vditor.vditor.wysiwyg.element : _vditor.vditor.ir.element;
         preRange.selectNodeContents(el);
         preRange.setEnd(range.startContainer, range.startOffset);
         cursorOffset = preRange.toString().length;
       }
     }
   } catch (_) {}
+
   _vditor.destroy();
+  _cursorRestoreOffset = cursorOffset;
   initEditor(content, mode, false, cursorOffset);
+
+  // Restore scroll position after the new editor renders
+  requestAnimationFrame(() => {
+    if (!_vditor) return;
+    const nd = _vditor.vditor;
+    if (mode === 'sv') {
+      nd.sv.element.scrollTop = scrollTop;
+    } else if (mode === 'ir') {
+      nd.ir.element.scrollTop = scrollTop;
+    } else if (mode === 'wysiwyg') {
+      nd.wysiwyg.element.parentElement.scrollTop = scrollTop;
+    }
+  });
 };
 
 function initEditor(content, mode, readonly, cursorOffset) {
@@ -163,13 +183,6 @@ function restoreCursorPosition(offset) {
 function getEditorContent() {
   if (!_vditor) return '';
   return _vditor.getValue();
-}
-
-function setEditorMode(mode) {
-  _editorMode = mode;
-  if (_vditor) {
-    _vditor.setMode(mode);
-  }
 }
 
 function isDirty() {
