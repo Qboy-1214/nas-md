@@ -60,4 +60,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "ARG001", "F401", "RUF059"]
-"server/__init__.py" = ["F401"]
+"nas_md/server/__init__.py" = ["F401"]
+
+[tool.ruff.lint.flake8-type-checking]
+strict = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
