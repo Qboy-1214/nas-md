@@ -1,119 +1,124 @@
 # nas-md
 
-Private, quiet space for thinking. A simple app for your `.md` files.
+一个私密的、安静的个人思考空间。一个管理 `.md` 文件的简单应用。
 
-A personal knowledge management system — notes, journal, habits, checklists, and more. All in plain `.md` files, local-first. LLM-friendly. **Private - your data stays on your device.**
+个人知识管理系统 —— 笔记、日记、习惯、清单，全部以纯 `.md` 文件存储，本地优先，对 LLM 友好。**隐私优先 —— 你的数据只留在你的设备上。**
 
-> Own your data as plain local files.
-> Own the software that opens those files.
-> Grow your knowledge with files and your own brain.
-> **Plain files and self-owned software can last through the ages**.
+> 以纯本地文件的形式拥有自己的数据。
+> 拥有打开这些文件的软件。
+> 用文件和自己的大脑积累知识。
+> **纯文件和自主可控的软件，才能穿越时间。**
 
-## Features
+## 功能特性
 
-- **Notes** — plain Markdown files, one idea per note
-- **Journal** — daily records in `journal/YYYY.MM Month.md`
-- **Habits** — track daily habits with heatmap visualization
-- **Checklists** — `Read.md`, `Watch.md`, `Shop.md`, etc.
-- **Tasks** — quick capture with `Later.md`
-- **Telegram Bot** — on-the-go access to your files
-- **PWA Frontend** — works offline, installable in browser
-- **Mount Points** — browse any directory on the server (read-write)
-- **Docker Support** — deploy with Docker Compose
-- **Cross-Platform** — Windows, Linux, macOS
+- **笔记** —— 纯 Markdown 文件，一个想法一条笔记
+- **日记** —— 按日记录，存储在 `journal/YYYY.MM Month.md`
+- **习惯** —— 用热力图可视化追踪每日习惯
+- **清单** —— `Read.md`、`Watch.md`、`Shop.md` 等
+- **任务** —— 快速收集到 `Later.md`
+- **Telegram Bot** —— 随时随地访问你的文件
+- **Web 前端** —— 原生 JS + Vditor 编辑器，零框架，零构建，打开即用
+  - 多目录挂载（游客限 1 个，登录用户不限）
+  - 目录树智能过滤（只显示包含 md 文件的目录）
+  - 访客模式（无需登录即可浏览公开目录）
+  - 三种编辑模式（即时渲染 / 分屏预览 / 所见即所得）
+  - Edge/Firefox 路径自动定位（后端搜索常见位置）
+- **挂载点** —— 浏览服务器上的任意目录（读写）
+- **Docker 支持** —— 使用 Docker Compose 部署
+- **跨平台** —— Windows / Linux / macOS
 
-## Quick Start
+## 快速开始
 
-### Option 1: One-Click Start (No Docker)
+### 方式一：一键启动（无需 Docker）
 
-Requires **Python 3.11+**. No other dependencies — the project uses only the Python standard library.
+需要 **Python 3.11+**，无其他依赖 —— 项目仅使用 Python 标准库。
 
 ```bash
-# Clone the repository
+# 克隆仓库
 git clone https://github.com/Qboy-1214/nas-md.git
 cd nas-md
 
-# Start the server
+# 启动服务
 python3 start.py
 ```
 
-The server will be available at `http://127.0.0.1:8080`. A browser window will open automatically.
+服务将在 `http://127.0.0.1:8080` 上运行，浏览器会自动打开。
 
-#### Custom Configuration
+#### 自定义配置
 
 ```bash
-# Custom port
+# 自定义端口
 WEB_PORT=9000 python3 start.py
 
-# Mount additional directories (semicolon-separated)
+# 挂载额外目录（分号分隔）
 WEB_PORT=9000 MOUNT_DIRS="/home/user/notes;/home/user/docs" python3 start.py
 
 # Windows
 set WEB_PORT=9000 && python start.py
 ```
 
-#### Environment Variables
+#### 环境变量
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WEB_PORT` | `8080` | HTTP server port |
-| `WEB_HOST` | `127.0.0.1` | HTTP server bind address |
-| `WEB_ROOT` | `./web` | PWA frontend directory |
-| `STORAGE_DIR` | `./storage` | File storage directory |
-| `TOKENS_DIR` | `./tokens` | Auth tokens directory |
-| `MOUNT_DIRS` | *(empty)* | Semicolon-separated list of absolute paths to serve as browseable mount points |
-| `BOT_API_TOKEN` | *(empty)* | Telegram Bot API token (optional) |
-| `APP_URL` | *(empty)* | Public URL of the web app |
-| `API_URL` | *(empty)* | Public URL of the sync API |
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `WEB_PORT` | `8080` | HTTP 服务端口 |
+| `WEB_HOST` | `127.0.0.1` | HTTP 服务绑定地址 |
+| `WEB_ROOT` | `./web` | PWA 前端目录 |
+| `STORAGE_DIR` | `./storage` | 文件存储目录 |
+| `TOKENS_DIR` | `./tokens` | 认证令牌目录 |
+| `MOUNT_DIRS` | *(空)* | 分号分隔的绝对路径列表，作为可浏览的挂载点 |
+| `BOT_API_TOKEN` | *(空)* | Telegram Bot API 令牌（可选） |
+| `APP_URL` | *(空)* | Web 应用的公开 URL |
+| `API_URL` | *(空)* | 同步 API 的公开 URL |
 
-### Option 2: Docker Compose
+### 方式二：Docker Compose
 
-Requires [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/).
+需要 [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)。
 
 ```bash
-# Start the server
+# 启动服务
 docker compose up -d
 
-# View logs
+# 查看日志
 docker compose logs -f
 
-# Stop
+# 停止
 docker compose down
 ```
 
-The server will be available at `http://localhost`. Data is persisted in Docker named volumes (`storage` and `tokens`).
+服务将在 `http://localhost` 上运行。数据持久化在 Docker 命名卷（`storage` 和 `tokens`）中。
 
-#### Docker Compose with Mount Points
+#### Docker Compose 挂载目录
 
-Edit `compose.yaml` to mount additional host directories:
+编辑 `compose.yaml` 挂载额外的主机目录：
 
 ```yaml
 services:
   nas-md:
-    # ... existing config ...
+    # ... 现有配置 ...
     volumes:
       - storage:/app/storage
       - tokens:/app/tokens
-      - /path/to/notes:/mnt/notes     # Mount host directory
-      - /path/to/docs:/mnt/docs       # Mount host directory
+      - /path/to/notes:/mnt/notes     # 挂载主机目录
+      - /path/to/docs:/mnt/docs       # 挂载主机目录
     environment:
-      # ... existing env vars ...
+      # ... 现有环境变量 ...
       MOUNT_DIRS: /mnt/notes;/mnt/docs
 ```
 
-Then start:
+然后启动：
 
 ```bash
 docker compose up -d
 ```
 
-#### Manual Docker Build & Run
+#### 手动构建 Docker 镜像并运行
 
 ```bash
-# Build the image
+# 构建镜像
 docker build -t nas-md .
 
-# Run the container
+# 运行容器
 docker run --rm -it -p 80:8080 \
   -v nas-md-storage:/app/storage \
   -v nas-md-tokens:/app/tokens \
@@ -121,138 +126,146 @@ docker run --rm -it -p 80:8080 \
   nas-md
 ```
 
-## Mount Points (Browse Server Directories)
+## 挂载点（浏览服务器目录）
 
-Mount points allow you to browse directories on the server through the web UI. Each mounted directory appears as a separate entry in the sidebar selector.
+挂载点允许你通过 Web UI 浏览服务器上的目录。每个挂载的目录在侧边栏选择器中显示为独立条目。
 
-**Features:**
-- Browse nested directory trees
-- View and edit Markdown files
-- Preview media files (images, audio, video)
-- Create, rename, and delete files and directories
-- Path traversal protection (cannot escape mount root)
+**功能：**
+- 浏览嵌套的目录树
+- 查看和编辑 Markdown 文件
+- 预览媒体文件（图片、音频、视频）
+- 创建、重命名、删除文件和目录
+- 路径穿越保护（无法逃逸出挂载根目录）
 
-**API Endpoints:**
+**API 接口：**
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/mounts` | List all mount points |
-| `GET` | `/api/mounts/{id}/tree?path=/` | List directory contents |
-| `GET` | `/api/mounts/{id}/tree-recursive?path=/` | Recursive directory tree (up to 10 levels) |
-| `GET` | `/api/mounts/{id}/file?path=/file.md` | Download/read a file |
-| `PUT` | `/api/mounts/{id}/file?path=/file.md` | Write/create a file |
-| `PUT` | `/api/mounts/{id}/rename?oldPath=/a.md&newPath=/b.md` | Rename/move a file or directory |
-| `PUT` | `/api/mounts/{id}/mkdir?path=/newdir` | Create a directory |
-| `DELETE` | `/api/mounts/{id}/file?path=/file.md` | Delete a file or directory |
+| 方法 | 接口 | 说明 |
+|------|------|------|
+| `GET` | `/api/mounts` | 列出所有挂载点（需认证） |
+| `GET` | `/api/mounts/public` | 公开挂载点（无需认证） |
+| `POST` | `/api/mounts` | 添加挂载点 |
+| `DELETE` | `/api/mounts/{id}` | 删除挂载点 |
+| `PUT` | `/api/mounts/{id}` | 更新挂载点（名称/公开） |
+| `GET` | `/api/mounts/{id}/tree?path=/` | 列出目录内容（单层） |
+| `GET` | `/api/mounts/{id}/tree-recursive?path=/` | 递归目录树（含 `hasMd` 标记） |
+| `GET` | `/api/mounts/{id}/file?path=/file.md` | 读取文件 |
+| `PUT` | `/api/mounts/{id}/file?path=/file.md` | 写入/创建文件 |
+| `PUT` | `/api/mounts/{id}/rename?oldPath=/a.md&newPath=/b.md` | 重命名/移动文件或目录 |
+| `PUT` | `/api/mounts/{id}/mkdir?path=/newdir` | 创建目录 |
+| `DELETE` | `/api/mounts/{id}/file?path=/file.md` | 删除文件或目录 |
+| `GET` | `/api/find-path?name=xxx` | 搜索目录完整路径（无需认证） |
+| `GET` | `/api/search?q=关键词` | 全文搜索（UI 就绪，后端待实现） |
 
-## Files Structure
+## 文件结构
 
-You don't have to think about the structure — it is predefined. Although, you're free to use whatever structure you want.
+你不需要操心结构 —— 它是预定义的。当然，你也可以使用任何你喜欢的结构。
 
-- Chat: `Chat.md`
-- Notes: `brain/Note.md`, `<category>/*.md`
-- Projects: `Project.md`, `*.md`
-- Checklists: `Read.md`, `Watch.md`, `Shop.md`
-- Journal: `journal/2024.08 August.md`
-- Tasks: `Later.md`
-- Habits: `habits/Ate consciously.md`, `habits/*.md`
-- Images: `media/*` (png, jpg, webp, gif)
-- Archive: `archive/*.md`
-- Config: `config.json`
+- 聊天：`Chat.md`
+- 笔记：`brain/Note.md`、`<category>/*.md`
+- 项目：`Project.md`、`*.md`
+- 清单：`Read.md`、`Watch.md`、`Shop.md`
+- 日记：`journal/2024.08 August.md`
+- 任务：`Later.md`
+- 习惯：`habits/Ate consciously.md`、`habits/*.md`
+- 图片：`media/*`（png、jpg、webp、gif）
+- 归档：`archive/*.md`
+- 配置：`config.json`
 
-## Hotkeys
+## 快捷键
 
-| Hotkey | Action |
-|--------|--------|
-| `[` | Insert a link to a file |
-| `Cmd+K` / `Ctrl+K` | Open file search modal |
-| `Cmd+N` / `Ctrl+N` | New file |
-| `Cmd+M` / `Ctrl+M` | Move file |
-| `Cmd+D` / `Ctrl+D` | Delete file |
-| `Cmd+Enter` / `Ctrl+Enter` | Open chat |
-| `Cmd+Shift+Enter` / `Ctrl+Shift+Enter` | Toggle chat dialog |
-| `Cmd+[` / `Ctrl+[` | Go to previous file |
-| `Cmd+]` / `Ctrl+]` | Go to next file |
-| `Cmd+~` / `Ctrl+~` | Toggle sidebar |
-| `T` | Toggle theme (auto/light/dark) |
-| `L` | Toggle layout (auto/landscape/portrait) |
-| `Cmd+B` / `Ctrl+B` | Toggle **bold** |
-| `Cmd+I` / `Ctrl+I` | Toggle *italic* |
-| `Cmd+Y` / `Ctrl+Y` | Insert checkbox |
-| `Cmd/Ctrl` + `Click` | Copy inline text / open link |
+| 快捷键 | 操作 |
+|--------|------|
+| `[` | 插入文件链接 |
+| `Cmd+K` / `Ctrl+K` | 打开文件搜索弹窗 |
+| `Cmd+N` / `Ctrl+N` | 新建文件 |
+| `Cmd+M` / `Ctrl+M` | 移动文件 |
+| `Cmd+D` / `Ctrl+D` | 删除文件 |
+| `Cmd+Enter` / `Ctrl+Enter` | 打开聊天 |
+| `Cmd+Shift+Enter` / `Ctrl+Shift+Enter` | 切换聊天对话框 |
+| `Cmd+[` / `Ctrl+[` | 切换到上一个文件 |
+| `Cmd+]` / `Ctrl+]` | 切换到下一个文件 |
+| `Cmd+~` / `Ctrl+~` | 切换侧边栏 |
+| `T` | 切换主题（自动/亮色/暗色） |
+| `L` | 切换布局（自动/横屏/竖屏） |
+| `Cmd+B` / `Ctrl+B` | 切换**粗体** |
+| `Cmd+I` / `Ctrl+I` | 切换*斜体* |
+| `Cmd+Y` / `Ctrl+Y` | 插入复选框 |
+| `Cmd/Ctrl` + `Click` | 复制内联文本 / 打开链接 |
 
-## Documentation
+## 文档
 
-- [Deploy on your own server](docs/your-own-server.md)
-- [Mount API Reference](docs/mount-api.md)
+- [部署到自己的服务器](docs/your-own-server.md)
+- [挂载 API 参考](docs/mount-api.md)
+- [项目架构梳理](docs/architecture.md)
+- [项目规划](docs/planning.md) — 分阶段实施计划
+- [Web 前端需求](docs/web-frontend-requirements.md) — 前端组件规格
 
-## Repository Structure
+## 仓库结构
 
 ```
 nas-md/
-├── start.py              # One-click launcher (cross-platform)
-├── compose.yaml          # Docker Compose configuration
-├── Dockerfile            # Docker image definition
-├── pyproject.toml        # Python project config (black, ruff, pytest)
-├── nas_md/               # Python package
-│   ├── cli/              # CLI entry points
-│   │   ├── __init__.py   # Command implementations
-│   │   └── __main__.py   # python3 -m nas_md.cli support
-│   ├── config/           # Configuration (env vars)
-│   ├── webserver/        # HTTP server + mount API
-│   ├── server/           # Telegram bot server
-│   ├── sync/             # Sync API
-│   ├── fs/               # File system utilities
-│   ├── db/               # Database (SQLite)
-│   ├── habits/           # Habit tracking
-│   ├── journal/          # Journal management
-│   ├── stats/            # Statistics
-│   ├── worker/           # Scheduled tasks
-│   ├── plugins/          # Plugin system
-│   ├── i18n/             # Internationalization
-│   ├── userconfig/       # User configuration
-│   └── pkg/              # Shared packages
-│       └── txt/          # Text processing (hash, timestamps, etc.)
-├── web/                  # PWA frontend
-│   ├── index.html        # Entry point
-│   ├── app.js            # Main app logic
-│   ├── files.js          # File browser
-│   ├── mount-manager.js  # Mount point UI
-│   ├── editor.js         # Markdown editor
-│   ├── chat.js           # Chat interface
-│   ├── layout.css        # Layout styles
-│   ├── app.css           # App styles
-│   └── lib/              # Frontend libraries
-├── tests/                # Test suite (272 tests)
-└── docs/                 # Documentation
+├── start.py              # 一键启动脚本（跨平台）
+├── compose.yaml          # Docker Compose 配置
+├── Dockerfile            # Docker 镜像定义
+├── pyproject.toml        # Python 项目配置（black、ruff、pytest）
+├── nas_md/               # Python 包
+│   ├── cli/              # CLI 入口
+│   │   ├── __init__.py   # 命令实现
+│   │   └── __main__.py   # python3 -m nas_md.cli 支持
+│   ├── config/           # 配置（环境变量）
+│   ├── webserver/        # HTTP 服务器 + 挂载 API
+│   ├── server/           # Telegram Bot 服务器
+│   ├── sync/             # 同步 API
+│   ├── fs/               # 文件系统工具
+│   ├── db/               # 数据库（SQLite）
+│   ├── habits/           # 习惯追踪
+│   ├── journal/          # 日记管理
+│   ├── stats/            # 统计
+│   ├── worker/           # 定时任务
+│   ├── plugins/          # 插件系统
+│   ├── i18n/             # 国际化
+│   ├── userconfig/       # 用户配置
+│   └── pkg/              # 共享工具包
+│       └── txt/          # 文本处理（哈希、时间戳等）
+├── web/                  # Web 前端
+│   ├── index.html        # 入口
+│   ├── app.js            # 主应用逻辑（状态管理、路由、DOM）
+│   ├── files.js          # 文件浏览器 + API 封装
+│   ├── editor.js         # Vditor 编辑器封装
+│   ├── app.css           # 应用样式（布局 + 组件 + 主题）
+│   └── lib/
+│       └── vditor/       # Vditor Markdown 编辑器（vendored）
+├── tests/                # 测试套件（272 个测试）
+└── docs/                 # 文档
 ```
 
-## Running Tests
+## 运行测试
 
 ```bash
-# Run all tests
+# 运行全部测试
 PYTHONPATH=. python3 -m pytest tests/ -v
 
-# Run with coverage
+# 带覆盖率运行
 PYTHONPATH=. python3 -m pytest tests/ -v --cov=nas_md --cov-report=term-missing
 ```
 
-## Backend Guidelines
+## 后端开发规范
 
-- We write **tests**
-- No panics, errors are part of business logic
-- If we are ignoring an error — we leave a WHY comment
-- We wrap errors all the time, adding method's context
-- We prefer real implementations or at least fakes over mocks and stubs
-- **With portability in mind, everything is stored in plain `.md` files**
-- The codebase is designed to be LLM-friendly — one person or an LLM can fit the whole project in head
+- 编写**测试**
+- 禁止 panic，错误是业务逻辑的一部分
+- 如果要忽略错误，必须留下注释说明原因
+- 始终包装错误，附加上下文信息
+- 优先使用真实实现或 Fake，而非 Mock 和 Stub
+- **一切以可移植性为前提，全部存储在纯 `.md` 文件中**
+- 代码库设计为对 LLM 友好 —— 一个人或一个 LLM 能装下整个项目
 
-## Frontend Guidelines
+## 前端开发规范
 
-- No build systems — in 10 years we will open `/web/index.html` and it should just work
-- All frontend libraries are vendored in `web/lib/`
-- Avoid flaky tests — race conditions are the most common source of bugs
+- 不使用构建系统 —— 10 年后打开 `/web/index.html` 应该直接能用
+- 所有前端库都 vendored 在 `web/lib/` 中
+- 前端使用原生 JavaScript，无框架依赖
+- 避免脆弱的测试 —— 竞态条件是最常见的 bug 来源
 
-## License
+## 许可证
 
-See [LICENSE](LICENSE) for details.
+详见 [LICENSE](LICENSE)。

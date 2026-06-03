@@ -14,7 +14,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")
-MOUNT_DIRS = os.environ.get("MOUNT_DIRS", "")  # 分号分隔（跨平台安全，避免 Windows 盘符冲突）
+MOUNT_DIRS = os.environ.get("MOUNT_DIRS", "")  # 留空，由用户通过前端打开目录
 OPEN_BROWSER_DELAY = 2  # 秒
 
 
@@ -48,6 +48,12 @@ def setup_env():
         if key not in os.environ and value:
             os.environ[key] = value
 
+    # Token must be set via environment variable or config file
+    # No random generation — operator must configure it explicitly
+    if not os.environ.get("WEB_AUTH_TOKEN"):
+        print("⚠️  未设置 WEB_AUTH_TOKEN，Web 端将无认证保护")
+        print("   设置方式: export WEB_AUTH_TOKEN=your-token")
+
 
 def print_banner():
     """打印启动横幅"""
@@ -56,8 +62,13 @@ def print_banner():
     print("=" * 50)
     print(f"  访问地址: http://{WEB_HOST}:{WEB_PORT}")
     print(f"  静态文件: {os.environ.get('WEB_ROOT', '(none)')}")
-    print(f"  挂载目录: {os.environ.get('MOUNT_DIRS') or '(none)'}")
+
+    mount_dirs = os.environ.get("MOUNT_DIRS", "")
+    print(f"  挂载目录: {mount_dirs or '(none)'}")
     print(f"  存储目录: {os.environ.get('STORAGE_DIR', '(none)')}")
+
+    auth_status = "已启用" if os.environ.get("WEB_AUTH_TOKEN") else "已禁用（未设置 WEB_AUTH_TOKEN）"
+    print(f"  认证: {auth_status}")
     print("=" * 50)
     print("  按 Ctrl+C 停止服务")
     print()

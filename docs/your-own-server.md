@@ -1,48 +1,48 @@
-# Deploy on Your Own Server
+# 部署到自己的服务器
 
-## Quick Start with start.py (Recommended for Testing)
+## 使用 start.py 快速启动（推荐用于测试）
 
-The easiest way to run the server locally:
+最简单的本地运行方式：
 
 ```bash
 python3 start.py
 ```
 
-This will start the server at `http://127.0.0.1:8080` with sensible defaults. See the main [README](../README.md) for configuration options.
+服务将在 `http://127.0.0.1:8080` 上运行，使用合理的默认配置。配置选项详见主 [README](../README.md)。
 
-## Containerized Deployment (Docker/Podman)
+## 容器化部署（Docker/Podman）
 
-### Docker Compose (Recommended for Production)
+### Docker Compose（推荐用于生产）
 
 ```bash
-# Start in foreground
+# 前台启动
 docker compose up
 
-# Start in background
+# 后台启动
 docker compose up -d
 
-# View logs
+# 查看日志
 docker compose logs -f
 
-# Stop
+# 停止
 docker compose down
 ```
 
-The server will be available at `http://localhost`. Data is persisted in Docker named volumes (`storage` and `tokens`).
+服务将在 `http://localhost` 上运行。数据持久化在 Docker 命名卷（`storage` 和 `tokens`）中。
 
-### Enable HTTPS
+### 启用 HTTPS
 
-In `compose.yaml`: set `CERT_DIR` to a persistent path, uncomment the `"443:443"` port.
+在 `compose.yaml` 中：将 `CERT_DIR` 设置为持久化路径，取消 `"443:443"` 端口的注释。
 
-### Using Podman
+### 使用 Podman
 
-All Docker commands work with Podman as a drop-in replacement:
+所有 Docker 命令都可以用 Podman 直接替代：
 
 ```bash
-# Build
+# 构建
 podman build -t nas-md .
 
-# Run
+# 运行
 podman run --rm -it -p 80:8080 \
   -v nas-md-storage:/app/storage \
   -e APP_URL=http://localhost \
@@ -52,26 +52,26 @@ podman run --rm -it -p 80:8080 \
 podman-compose up -d
 ```
 
-## Deploy on Your Own Server (Manual)
+## 手动部署到自己的服务器
 
-### Prerequisites
+### 前置条件
 
-- **Python 3.11+** (no other dependencies required)
-- A Linux server (Debian/Ubuntu recommended)
+- **Python 3.11+**（不需要其他依赖）
+- Linux 服务器（推荐 Debian/Ubuntu）
 
-### Step 1: Clone and Start
+### 第一步：克隆并启动
 
 ```bash
 git clone https://github.com/Qboy-1214/nas-md.git
 cd nas-md
 
-# Start directly
+# 直接启动
 python3 start.py
 ```
 
-### Step 2: Configure Environment
+### 第二步：配置环境变量
 
-Create a `.env` file in the project root:
+在项目根目录创建 `.env` 文件：
 
 ```env
 WEB_PORT=8080
@@ -81,25 +81,25 @@ TOKENS_DIR=/home/user/nas-md-tokens
 WEB_ROOT=/home/user/nas-md/web
 APP_URL=https://yourdomain.com
 API_URL=https://api.yourdomain.com
-BOT_API_TOKEN=your-telegram-bot-token
+BOT_API_TOKEN=你的-telegram-bot-令牌
 MOUNT_DIRS=/mnt/notes;/mnt/docs
 ```
 
-### Step 3: Run as a Systemd Service (Linux)
+### 第三步：配置为 Systemd 服务（Linux）
 
-Create `/etc/systemd/system/nas-md.service`:
+创建 `/etc/systemd/system/nas-md.service`：
 
 ```ini
 [Unit]
-Description=nas-md personal knowledge management
+Description=nas-md 个人知识管理系统
 After=network.target
 
 [Service]
 Type=simple
-User=your-user
-WorkingDirectory=/home/your-user/nas-md
-Environment=PYTHONPATH=/home/your-user/nas-md
-ExecStart=/usr/bin/python3 /home/your-user/nas-md/start.py
+User=你的用户名
+WorkingDirectory=/home/你的用户名/nas-md
+Environment=PYTHONPATH=/home/你的用户名/nas-md
+ExecStart=/usr/bin/python3 /home/你的用户名/nas-md/start.py
 Restart=on-failure
 RestartSec=5
 
@@ -107,89 +107,89 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Enable and start:
+启用并启动：
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable nas-md
 sudo systemctl start nas-md
 
-# Check status
+# 查看状态
 sudo systemctl status nas-md
 
-# View logs
+# 查看日志
 sudo journalctl -u nas-md -f
 ```
 
-## Run Your Own Telegram Bot
+## 运行你自己的 Telegram Bot
 
-1. Register a new Telegram bot via [@BotFather](https://t.me/BotFather)
-2. Add `BOT_API_TOKEN=<YOUR_TELEGRAM_API_TOKEN>` to your `.env` file
-3. Restart the server
+1. 通过 [@BotFather](https://t.me/BotFather) 注册一个新的 Telegram Bot
+2. 在 `.env` 文件中添加 `BOT_API_TOKEN=<你的 Telegram API 令牌>`
+3. 重启服务
 
-Bot artifacts can be seen in `./storage/<USER_ID>` folder.
+Bot 的数据可以在 `./storage/<用户ID>` 目录中查看。
 
-## Linking a New Device
+## 关联新设备
 
-1. Open the Telegram bot
-2. Open `/app`
-3. Open the link in your browser
-4. Device is now linked
+1. 打开 Telegram Bot
+2. 发送 `/app`
+3. 在浏览器中打开链接
+4. 设备已关联
 
-## Hosting the Bot on Your Local Computer
+## 在本地电脑上运行 Bot
 
-You can host the bot locally. It doesn't expose any ports to the outside world (if you don't use habits functionality). It communicates with Telegram using a polling API.
+你可以在本地电脑上运行 Bot。它不会向外部暴露任何端口（除非你使用习惯功能）。它通过轮询 API 与 Telegram 通信。
 
-Create a symlink to your local folder with `.md` files for convenience:
-
-```bash
-ln -s <YOUR_EXISTING_DIR_WITH_MD_FILES> storage/<USER_ID>
-```
-
-## Transfer Files to Another Server
-
-1. Backup your data (`storage/` directory)
-2. Ensure all client apps are fully synced with the server
-3. Stop the bot on the old server
-4. Compress: `tar -czvf storage.tar.gz storage`
-5. Transfer to new server: `scp storage.tar.gz user@newserver:/path/to/nas-md/`
-6. Extract on new server: `tar -xzvf storage.tar.gz`
-7. Transfer `BOT_API_TOKEN` to the new server's `.env`
-8. Launch the server on the new server
-9. In your PWA app, update the API host: `localStorage.setItem('ApiHost', 'YOUR_NEW_API_HOST');`
-
-## Maintenance Notes
-
-### Daily Git Backups
-
-Add this to your crontab (`crontab -e`):
-
-```
-0 0 * * * cd /app/storage/<YOUR_TELEGRAM_ID> && git add . && git commit -m "$(date +\%d.\%m.\%Y)"
-```
-
-Initialize git in your storage folder first:
+为了方便，可以创建一个指向你现有 `.md` 文件目录的软链接：
 
 ```bash
-cd storage/<YOUR_TELEGRAM_ID>
+ln -s <你现有的包含 MD 文件的目录> storage/<用户ID>
+```
+
+## 迁移文件到另一台服务器
+
+1. 备份数据（`storage/` 目录）
+2. 确保所有客户端应用已与服务器完全同步
+3. 在旧服务器上停止 Bot
+4. 压缩：`tar -czvf storage.tar.gz storage`
+5. 传输到新服务器：`scp storage.tar.gz user@newserver:/path/to/nas-md/`
+6. 在新服务器上解压：`tar -xzvf storage.tar.gz`
+7. 将 `BOT_API_TOKEN` 传输到新服务器的 `.env` 文件
+8. 在新服务器上启动服务
+9. 在 PWA 应用中更新 API 地址：`localStorage.setItem('ApiHost', '你的新 API 地址');`
+
+## 维护笔记
+
+### 每日 Git 备份
+
+在 crontab 中添加（`crontab -e`）：
+
+```
+0 0 * * * cd /app/storage/<你的Telegram ID> && git add . && git commit -m "$(date +\%d.\%m.\%Y)"
+```
+
+先在存储目录中初始化 git：
+
+```bash
+cd storage/<你的Telegram ID>
 git init
 ```
 
-### Non-ASCII Characters in Filenames
+### 文件名中的非 ASCII 字符
 
-If you have non-ASCII characters in filenames, disable quoting:
+如果文件名包含非 ASCII 字符，关闭路径引用：
 
 ```bash
 git config --global core.quotePath false
 ```
 
-### Find Forbidden Characters in Filenames
+### 查找文件名中的非法字符
 
 ```bash
 find . -name '*[<>:\"|\\?*]*'
 ```
 
-### Remove Forbidden Filename Characters
+### 清除文件名中的非法字符
 
 ```bash
 find . -type f -name '*[<>:\"|\\?*]*' -print0 | while IFS= read -r -d '' f; do

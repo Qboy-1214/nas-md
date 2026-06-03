@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 
-from nas_md.config import load_bot_config
-
 
 def cmd_server() -> None:
     """Run the Telegram bot server."""
-    load_bot_config()
+    import nas_md.config as cfg_mod
+    cfg_mod.load_bot_config()
     print("files.md server starting...")
     # In a real implementation, this would start the Telegram bot polling loop
 
@@ -40,17 +39,17 @@ def cmd_web() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
 
-    from nas_md.config import load_bot_config, server_cfg
+    import nas_md.config as cfg_mod
+    cfg_mod.load_bot_config()
 
-    load_bot_config()
-
-    mount_dirs = server_cfg.mount_dir_list()
-    web_root = server_cfg.web_root
-    port = server_cfg.web_port
+    mount_dirs = cfg_mod.server_cfg.mount_dir_list()
+    web_root = cfg_mod.server_cfg.web_root
+    port = cfg_mod.server_cfg.web_port
+    storage_dir = cfg_mod.server_cfg.storage_dir
 
     from nas_md.webserver import serve
 
-    serve(mount_dirs=mount_dirs, web_root=web_root, port=port)
+    serve(mount_dirs=mount_dirs, web_root=web_root, port=port, web_auth_token=cfg_mod.server_cfg.web_auth_token, storage_dir=storage_dir)
 
 
 def main() -> None:

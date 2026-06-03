@@ -27,6 +27,7 @@ class Config:
     mount_dirs: str = ""
     web_root: str = ""
     web_port: int = 8080
+    web_auth_token: str = ""
 
     def api_host(self) -> str:
         return _host_of(self.api_url)
@@ -38,10 +39,18 @@ class Config:
         if not self.mount_dirs:
             return []
         dirs = []
-        # Use semicolon as separator to avoid conflict with Windows drive letters (C:\...)
-        # On all platforms, semicolon is safe. Fallback to colon for backward compat.
-        sep = ";" if ";" in self.mount_dirs else ":"
-        for p in self.mount_dirs.split(sep):
+        # Semicolon is the primary separator (safe on all platforms, avoids
+        # conflict with Windows drive letters and "name:path" format).
+        # Fall back to comma if semicolon is not present and the string
+        # doesn't look like a single "name:path" entry.
+        raw = self.mount_dirs.strip()
+        if ";" in raw:
+            parts = raw.split(";")
+        elif "," in raw:
+            parts = raw.split(",")
+        else:
+            parts = [raw]
+        for p in parts:
             p = p.strip()
             if not p:
                 continue
@@ -88,6 +97,7 @@ def load_bot_config() -> None:
     cfg.mount_dirs = os.environ.get("MOUNT_DIRS", cfg.mount_dirs)
     cfg.web_root = os.environ.get("WEB_ROOT", cfg.web_root)
     cfg.web_port = int(os.environ.get("WEB_PORT", cfg.web_port))
+    cfg.web_auth_token = os.environ.get("WEB_AUTH_TOKEN", cfg.web_auth_token)
 
     cfg.working_dir = os.getcwd()
     # Only resolve storage_dir if it's explicitly set via env var
