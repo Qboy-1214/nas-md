@@ -45,8 +45,8 @@ def cmd_web() -> None:
     load_bot_config()
 
     mount_dirs = server_cfg.mount_dir_list()
-    web_root = server_cfg.web_root()
-    port = server_cfg.web_port()
+    web_root = server_cfg.web_root
+    port = server_cfg.web_port
 
     from nas_md.webserver import serve
 

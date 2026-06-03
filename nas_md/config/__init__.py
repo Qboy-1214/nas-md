@@ -38,7 +38,10 @@ class Config:
         if not self.mount_dirs:
             return []
         dirs = []
-        for p in self.mount_dirs.split(":"):
+        # Use semicolon as separator to avoid conflict with Windows drive letters (C:\...)
+        # On all platforms, semicolon is safe. Fallback to colon for backward compat.
+        sep = ";" if ";" in self.mount_dirs else ":"
+        for p in self.mount_dirs.split(sep):
             p = p.strip()
             if not p:
                 continue
