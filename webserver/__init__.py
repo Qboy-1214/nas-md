@@ -8,8 +8,6 @@ import mimetypes
 import os
 import stat
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-from pathlib import Path
-from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger("webserver")
@@ -17,8 +15,10 @@ logger = logging.getLogger("webserver")
 
 # --- Mount Manager ---
 
+
 class MountEntry:
     """A single mounted directory."""
+
     def __init__(self, id: str, name: str, path: str):
         self.id = id
         self.name = name
@@ -30,6 +30,7 @@ class MountEntry:
 
 class DirEntry:
     """A file or directory entry in a mount point tree."""
+
     def __init__(self, name: str, path: str, is_dir: bool, size: int = 0, mod_time: int = 0):
         self.name = name
         self.path = path
@@ -39,8 +40,13 @@ class DirEntry:
         self.children: list[DirEntry] = []
 
     def to_dict(self) -> dict:
-        d = {"name": self.name, "path": self.path, "isDir": self.is_dir,
-             "size": self.size, "modTime": self.mod_time}
+        d = {
+            "name": self.name,
+            "path": self.path,
+            "isDir": self.is_dir,
+            "size": self.size,
+            "modTime": self.mod_time,
+        }
         if self.children:
             d["children"] = [c.to_dict() for c in self.children]
         return d
@@ -61,13 +67,13 @@ class MountManager:
     def is_empty(self) -> bool:
         return len(self.mounts) == 0
 
-    def find_mount(self, mount_id: str) -> Optional[MountEntry]:
+    def find_mount(self, mount_id: str) -> MountEntry | None:
         for m in self.mounts:
             if m.id == mount_id:
                 return m
         return None
 
-    def _safe_path(self, mount: MountEntry, rel_path: str) -> Optional[str]:
+    def _safe_path(self, mount: MountEntry, rel_path: str) -> str | None:
         """Resolve rel_path within mount, or None if it escapes the mount root."""
         clean = os.path.normpath(rel_path).replace("\\", "/")
         if clean in (".", ""):
@@ -98,18 +104,22 @@ class MountManager:
                     continue
                 entry_rel = f"{rel_path.rstrip('/')}/{name}" if rel_path != "/" else f"/{name}"
                 is_dir = stat.S_ISDIR(st.st_mode)
-                entries.append(DirEntry(
-                    name=name,
-                    path=entry_rel,
-                    is_dir=is_dir,
-                    size=st.st_size,
-                    mod_time=int(st.st_mtime * 1000),
-                ))
+                entries.append(
+                    DirEntry(
+                        name=name,
+                        path=entry_rel,
+                        is_dir=is_dir,
+                        size=st.st_size,
+                        mod_time=int(st.st_mtime * 1000),
+                    )
+                )
             return entries
         except OSError:
             return []
 
-    def build_tree(self, mount: MountEntry, rel_path: str, depth: int = 0, max_depth: int = 10) -> Optional[DirEntry]:
+    def build_tree(
+        self, mount: MountEntry, rel_path: str, depth: int = 0, max_depth: int = 10
+    ) -> DirEntry | None:
         abs_path = self._safe_path(mount, rel_path)
         if abs_path is None:
             return None
@@ -135,11 +145,12 @@ class MountManager:
 
 # --- Request Handler ---
 
+
 class MountHTTPHandler(SimpleHTTPRequestHandler):
     """HTTP handler that serves mount API + static PWA files."""
 
     # Class-level mount manager and web root (set by server)
-    mount_manager: Optional[MountManager] = None
+    mount_manager: MountManager | None = None
     web_root: str = ""
 
     def log_message(self, format, *args):
@@ -435,6 +446,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
 # --- Server runner ---
 
+
 def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str = "0.0.0.0"):
     """Start the HTTP server with mount points and optional static file serving."""
     mgr = MountManager(mount_dirs)
@@ -444,20 +456,22 @@ def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str
 
     server = HTTPServer((host, port), MountHTTPHandler)
 
-    mounts_str = ", ".join(f"{m.name}={m.path}" for m in mgr.mounts) if not mgr.is_empty() else "(none)"
+    mounts_str = (
+        ", ".join(f"{m.name}={m.path}" for m in mgr.mounts) if not mgr.is_empty() else "(none)"
+    )
     web_str = web_root if web_root else "(none)"
     logger.info(f"Starting HTTP server on {host}:{port}")
     logger.info(f"  Mount points: {mounts_str}")
     logger.info(f"  Web root: {web_str}")
-    logger.info(f"  API endpoints:")
-    logger.info(f"    GET  /api/mounts")
-    logger.info(f"    GET  /api/mounts/{{id}}/tree?path=/")
-    logger.info(f"    GET  /api/mounts/{{id}}/tree-recursive?path=/")
-    logger.info(f"    GET  /api/mounts/{{id}}/file?path=/file.md")
-    logger.info(f"    PUT  /api/mounts/{{id}}/file?path=/file.md")
-    logger.info(f"    PUT  /api/mounts/{{id}}/rename?oldPath=/a.md&newPath=/b.md")
-    logger.info(f"    PUT  /api/mounts/{{id}}/mkdir?path=/newdir")
-    logger.info(f"    DELETE /api/mounts/{{id}}/file?path=/file.md")
+    logger.info("  API endpoints:")
+    logger.info("    GET  /api/mounts")
+    logger.info("    GET  /api/mounts/{id}/tree?path=/")
+    logger.info("    GET  /api/mounts/{id}/tree-recursive?path=/")
+    logger.info("    GET  /api/mounts/{id}/file?path=/file.md")
+    logger.info("    PUT  /api/mounts/{id}/file?path=/file.md")
+    logger.info("    PUT  /api/mounts/{id}/rename?oldPath=/a.md&newPath=/b.md")
+    logger.info("    PUT  /api/mounts/{id}/mkdir?path=/newdir")
+    logger.info("    DELETE /api/mounts/{id}/file?path=/file.md")
     logger.info(f"  Static files: http://localhost:{port}/")
 
     try:

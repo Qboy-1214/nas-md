@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
 import re
 import time
 from typing import Optional
@@ -11,14 +9,36 @@ from typing import Optional
 from nas_md.config import server_cfg
 from nas_md.db import DB, FakeDB
 from nas_md.fs import (
-    FS, DIR_USER_ROOT, DIR_ARCHIVE, DIR_JOURNAL, DIR_HABITS,
-    CHAT_FILENAME, LATER_FILENAME, DONE_FILENAME, SHOP_FILENAME,
-    WATCH_FILENAME, READ_FILENAME, MD_EXT, POMODORO_TASK,
-    display_name, hash_filename, short_hash, filename_from_header,
-    only_files, only_dirs, only_note_dirs, only_checklists,
-    only_user_md_files, only_filenames, sort_by_ctime_desc,
-    new_user_fs, new_fs, new_file, sanitize_filename,
-    log_rename, log_delete,
+    FS,
+    DIR_USER_ROOT,
+    DIR_ARCHIVE,
+    DIR_JOURNAL,
+    DIR_HABITS,
+    CHAT_FILENAME,
+    LATER_FILENAME,
+    DONE_FILENAME,
+    SHOP_FILENAME,
+    WATCH_FILENAME,
+    READ_FILENAME,
+    MD_EXT,
+    POMODORO_TASK,
+    display_name,
+    hash_filename,
+    short_hash,
+    filename_from_header,
+    only_files,
+    only_dirs,
+    only_note_dirs,
+    only_checklists,
+    only_user_md_files,
+    only_filenames,
+    sort_by_ctime_desc,
+    new_user_fs,
+    new_fs,
+    new_file,
+    sanitize_filename,
+    log_rename,
+    log_delete,
 )
 from nas_md.i18n import add_emoji, emoji
 from nas_md.journal import add_record, add_emoji as add_journal_emoji
@@ -26,20 +46,38 @@ from nas_md.habits import habits, last_week_habits, write as write_habits, emoji
 from nas_md.stats import today_report
 from nas_md.sync import merge
 from nas_md.pkg.tg.types import (
-    Cmd, Btn, Keyboard, Row,
-    new_cmd, new_btn, new_row, new_keyboard,
-    CMD_TYPE_CALLBACK, CMD_TYPE_URL,
+    Cmd,
+    Btn,
+    Keyboard,
+    Row,
+    new_cmd,
+    new_btn,
+    new_row,
+    new_keyboard,
+    CMD_TYPE_CALLBACK,
+    CMD_TYPE_URL,
 )
 from nas_md.pkg.tg.fake import FakeTG, FakeMessage
 from nas_md.pkg.txt.str import (
-    norm_new_lines, ucfirst, substr, emoji as str_emoji,
-    split_text_into_chunks, first_word, escape_html,
+    norm_new_lines,
+    ucfirst,
+    substr,
+    emoji as str_emoji,
+    split_text_into_chunks,
+    first_word,
+    escape_html,
 )
 from nas_md.pkg.txt.md import (
-    markdown_to_html, add_header_and_text, incomplete_checklist_items,
-    checklist_items, add_checklist_item, complete_checklist_item,
-    remove_checklist_item, remove_completed_checklist_items,
-    checklist_item as md_checklist_item, strip_chat_timestamp,
+    markdown_to_html,
+    add_header_and_text,
+    incomplete_checklist_items,
+    checklist_items,
+    add_checklist_item,
+    complete_checklist_item,
+    remove_checklist_item,
+    remove_completed_checklist_items,
+    checklist_item as md_checklist_item,
+    strip_chat_timestamp,
 )
 from nas_md.pkg.txt.tgtxt import telegram_entities_to_markdown, extract_text_imgs_links, has_image
 from nas_md.pkg.txt.similarity import similar
@@ -257,14 +295,14 @@ class Server:
     def handle(self, upd) -> None:
         """Main entry point for handling an update."""
         # Try world clock plugin first
-        msg_text = upd.msg_text() if hasattr(upd, 'msg_text') else ""
+        msg_text = upd.msg_text() if hasattr(upd, "msg_text") else ""
         if self.world_clock.can_handle(msg_text):
             result, _ = self.world_clock.handle(msg_text)
             if result:
                 self.tg.send(self.user_id, result, None, "HTML")
                 return
 
-        cmd = upd.cmd() if hasattr(upd, 'cmd') else None
+        cmd = upd.cmd() if hasattr(upd, "cmd") else None
         if cmd and cmd.name:
             self._handle_command(upd, cmd)
         else:
@@ -340,12 +378,14 @@ class Server:
 
     def _handle_message(self, upd) -> None:
         """Handle a plain text message (not a command)."""
-        msg_text = upd.msg_text() if hasattr(upd, 'msg_text') else ""
+        msg_text = upd.msg_text() if hasattr(upd, "msg_text") else ""
         if not msg_text:
             return
 
         # Check for input expectation
-        expected_cmd = self.db.input_expectation() if hasattr(self.db, 'input_expectation') else None
+        expected_cmd = (
+            self.db.input_expectation() if hasattr(self.db, "input_expectation") else None
+        )
         if expected_cmd:
             self._handle_input_expectation(upd, msg_text, expected_cmd)
             return
@@ -460,24 +500,32 @@ class Server:
         kb = new_keyboard()
         # Directory buttons
         for d in dirs:
-            kb.add_row(new_row(
-                new_btn(f"📁 {d.display_name}", new_cmd(CMD_FILE, [d.name, d.hash])),
-            ))
+            kb.add_row(
+                new_row(
+                    new_btn(f"📁 {d.display_name}", new_cmd(CMD_FILE, [d.name, d.hash])),
+                )
+            )
         # Note buttons
         for f in notes:
-            kb.add_row(new_row(
-                new_btn(f"📄 {f.display_name}", new_cmd(CMD_FILE, [f.name, f.hash])),
-            ))
+            kb.add_row(
+                new_row(
+                    new_btn(f"📄 {f.display_name}", new_cmd(CMD_FILE, [f.name, f.hash])),
+                )
+            )
         # Action buttons
-        kb.add_row(new_row(
-            new_btn(STR_NEW, new_cmd(CMD_NEW)),
-            new_btn(STR_SEARCH, new_cmd(CMD_SEARCH_NOTES)),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_HABITS, new_cmd(CMD_HABITS)),
-            new_btn(STR_STATS, new_cmd(CMD_STATS)),
-            new_btn(STR_SETTINGS, new_cmd(CMD_SETTINGS)),
-        ))
+        kb.add_row(
+            new_row(
+                new_btn(STR_NEW, new_cmd(CMD_NEW)),
+                new_btn(STR_SEARCH, new_cmd(CMD_SEARCH_NOTES)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_HABITS, new_cmd(CMD_HABITS)),
+                new_btn(STR_STATS, new_cmd(CMD_STATS)),
+                new_btn(STR_SETTINGS, new_cmd(CMD_SETTINGS)),
+            )
+        )
         return kb
 
     def _cmd_back(self, upd, cmd: Cmd) -> None:
@@ -500,9 +548,11 @@ class Server:
 
         done_text = f"✅ {display_name(filename)}"
         kb = new_keyboard()
-        kb.add_row(new_row(
-            new_btn("↩️ Undo", new_cmd(CMD_REPEAT, [filename_hash])),
-        ))
+        kb.add_row(
+            new_row(
+                new_btn("↩️ Undo", new_cmd(CMD_REPEAT, [filename_hash])),
+            )
+        )
         self.tg.send(self.user_id, done_text, kb, "HTML")
 
     def _cmd_del(self, upd, cmd: Cmd) -> None:
@@ -609,7 +659,7 @@ class Server:
         """Remove - [ ] / - [x] marker and optional HH:MM timestamp."""
         return re.sub(r"^- \[[ xX]\] (?:\`\d{2}:\d{2}\` )?", "", block, count=1)
 
-    def _read_chat_msg_by_hash(self, filename_hash: str) -> Optional[str]:
+    def _read_chat_msg_by_hash(self, filename_hash: str) -> str | None:
         """Read the content of a chat message by its hash."""
         chat_content, _ = self.user_fs.read(DIR_USER_ROOT, CHAT_FILENAME)
         if not chat_content:
@@ -682,17 +732,15 @@ class Server:
         for bi in resolved_indices:
             block = blocks[bi]
             # Find closest header above
-            header_date = ""
             for j in range(bi - 1, -1, -1):
                 if blocks[j].startswith("#### "):
-                    header_date = blocks[j]
+                    blocks[j]
                     break
             record_content = re.sub(r"^- \[[ xX]\] ", "", block, count=1)
-            time_str = "00:00"
             ts_match = re.match(r"^`(\d{2}:\d{2})` ", record_content)
             if ts_match:
-                time_str = ts_match.group(1)
-                record_content = record_content[len(ts_match[0]):]
+                ts_match.group(1)
+                record_content = record_content[len(ts_match[0]) :]
             msgs.append({"content": record_content, "index": bi})
         if collapse:
             combined = "\n".join(m["content"] for m in msgs)
@@ -706,7 +754,7 @@ class Server:
         new_content = "\n".join(new_blocks).strip()
         self.user_fs.write(DIR_USER_ROOT, CHAT_FILENAME, new_content)
 
-    def _add_to_checklist(self, checklist_hash: str, msg_hash: str) -> Optional[str]:
+    def _add_to_checklist(self, checklist_hash: str, msg_hash: str) -> str | None:
         """Add a chat message to a checklist file. Returns the item text."""
         supported = [CHAT_FILENAME, LATER_FILENAME, READ_FILENAME, WATCH_FILENAME, SHOP_FILENAME]
         checklist, err = self.user_fs.unhash(DIR_USER_ROOT, checklist_hash)
@@ -742,15 +790,26 @@ class Server:
                 label = f"✅ {item_text}"
             else:
                 label = f"⬜ {item_text}"
-            kb.add_row(new_row(
-                new_btn(label, new_cmd(CMD_COMPLETE_CHECKLIST, [hash_filename(checklist_name), item_hash])),
-            ))
-        kb.add_row(new_row(
-            new_btn("➕ Add item", new_cmd(CMD_ADD_CHECKLIST_ITEM, [hash_filename(checklist_name)])),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_BACK, new_cmd(CMD_BACK)),
-        ))
+            kb.add_row(
+                new_row(
+                    new_btn(
+                        label,
+                        new_cmd(CMD_COMPLETE_CHECKLIST, [hash_filename(checklist_name), item_hash]),
+                    ),
+                )
+            )
+        kb.add_row(
+            new_row(
+                new_btn(
+                    "➕ Add item", new_cmd(CMD_ADD_CHECKLIST_ITEM, [hash_filename(checklist_name)])
+                ),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_BACK, new_cmd(CMD_BACK)),
+            )
+        )
         display = display_name(checklist_name)
         self.tg.send(self.user_id, f"☑️ {display}", kb, "HTML")
 
@@ -820,27 +879,39 @@ class Server:
             (STR_WEDNESDAY, "0 0 * * 3"),
             (STR_THURSDAY, "0 0 * * 4"),
         ]
-        kb.add_row(new_row(*[
-            new_btn(name, new_cmd(CMD_ADD_TO_SCHEDULE, [filename_hash, cron]))
-            for name, cron in weekdays
-        ]))
-        kb.add_row(new_row(*[
-            new_btn(name, new_cmd(CMD_ADD_TO_SCHEDULE, [filename_hash, cron]))
-            for name, cron in [
-                (STR_FRIDAY, "0 0 * * 5"),
-                (STR_SATURDAY, "0 0 * * 6"),
-                (STR_SUNDAY, "0 0 * * 0"),
-            ]
-        ]))
+        kb.add_row(
+            new_row(
+                *[
+                    new_btn(name, new_cmd(CMD_ADD_TO_SCHEDULE, [filename_hash, cron]))
+                    for name, cron in weekdays
+                ]
+            )
+        )
+        kb.add_row(
+            new_row(
+                *[
+                    new_btn(name, new_cmd(CMD_ADD_TO_SCHEDULE, [filename_hash, cron]))
+                    for name, cron in [
+                        (STR_FRIDAY, "0 0 * * 5"),
+                        (STR_SATURDAY, "0 0 * * 6"),
+                        (STR_SUNDAY, "0 0 * * 0"),
+                    ]
+                ]
+            )
+        )
         for start, end in [(1, 8), (9, 16), (17, 24), (25, 31)]:
-            row = new_row(*[
-                new_btn(str(d), new_cmd(CMD_ADD_TO_SCHEDULE, [filename_hash, f"0 0 {d} * *"]))
-                for d in range(start, end + 1)
-            ])
+            row = new_row(
+                *[
+                    new_btn(str(d), new_cmd(CMD_ADD_TO_SCHEDULE, [filename_hash, f"0 0 {d} * *"]))
+                    for d in range(start, end + 1)
+                ]
+            )
             kb.add_row(row)
-        kb.add_row(new_row(
-            new_btn(STR_BACK, new_cmd(CMD_BACK)),
-        ))
+        kb.add_row(
+            new_row(
+                new_btn(STR_BACK, new_cmd(CMD_BACK)),
+            )
+        )
         self.tg.send(self.user_id, "📆 Choose a day:", kb, "HTML")
 
     def _cmd_checklist(self, upd, cmd: Cmd) -> None:
@@ -852,12 +923,16 @@ class Server:
         dirs = only_checklists(only_dirs(files))
         kb = new_keyboard()
         for d in dirs:
-            kb.add_row(new_row(
-                new_btn(d.display_name, new_cmd(CMD_ADD_CHECKLIST, [filename_hash, d.name])),
-            ))
-        kb.add_row(new_row(
-            new_btn(STR_BACK, new_cmd(CMD_BACK)),
-        ))
+            kb.add_row(
+                new_row(
+                    new_btn(d.display_name, new_cmd(CMD_ADD_CHECKLIST, [filename_hash, d.name])),
+                )
+            )
+        kb.add_row(
+            new_row(
+                new_btn(STR_BACK, new_cmd(CMD_BACK)),
+            )
+        )
         self.tg.send(self.user_id, "☑️ Choose a checklist:", kb, "HTML")
 
     def _cmd_file(self, upd, cmd: Cmd) -> None:
@@ -885,31 +960,43 @@ class Server:
     def _build_file_keyboard(self, filename: str, file_hash: str) -> Keyboard:
         """Build keyboard for a file view."""
         kb = new_keyboard()
-        kb.add_row(new_row(
-            new_btn(STR_COMPLETE, new_cmd(CMD_DONE, [file_hash])),
-            new_btn("🗑 Delete", new_cmd(CMD_DEL, [file_hash])),
-        ))
-        kb.add_row(new_row(
-            new_btn("✏️ Rename", new_cmd(CMD_RENAME, [file_hash])),
-            new_btn("➡️ Move", new_cmd(CMD_MOVE, [file_hash])),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_TO_JOURNAL, new_cmd(CMD_JOURNAL, [file_hash])),
-            new_btn(STR_TO_CHECKLIST, new_cmd(CMD_CHECKLIST, [file_hash])),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_TO_READ, new_cmd(CMD_READ, [file_hash])),
-            new_btn(STR_TO_SHOP, new_cmd(CMD_SHOP, [file_hash])),
-            new_btn(STR_TO_WATCH, new_cmd(CMD_WATCH, [file_hash])),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_TO_TOMORROW, new_cmd(CMD_TOMORROW, [file_hash])),
-            new_btn(STR_TO_LATER, new_cmd(CMD_LATER, [file_hash])),
-            new_btn(STR_TO_A_DAY, new_cmd(CMD_DAY, [file_hash])),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_BACK, new_cmd(CMD_BACK)),
-        ))
+        kb.add_row(
+            new_row(
+                new_btn(STR_COMPLETE, new_cmd(CMD_DONE, [file_hash])),
+                new_btn("🗑 Delete", new_cmd(CMD_DEL, [file_hash])),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn("✏️ Rename", new_cmd(CMD_RENAME, [file_hash])),
+                new_btn("➡️ Move", new_cmd(CMD_MOVE, [file_hash])),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_TO_JOURNAL, new_cmd(CMD_JOURNAL, [file_hash])),
+                new_btn(STR_TO_CHECKLIST, new_cmd(CMD_CHECKLIST, [file_hash])),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_TO_READ, new_cmd(CMD_READ, [file_hash])),
+                new_btn(STR_TO_SHOP, new_cmd(CMD_SHOP, [file_hash])),
+                new_btn(STR_TO_WATCH, new_cmd(CMD_WATCH, [file_hash])),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_TO_TOMORROW, new_cmd(CMD_TOMORROW, [file_hash])),
+                new_btn(STR_TO_LATER, new_cmd(CMD_LATER, [file_hash])),
+                new_btn(STR_TO_A_DAY, new_cmd(CMD_DAY, [file_hash])),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_BACK, new_cmd(CMD_BACK)),
+            )
+        )
         return kb
 
     def _cmd_journal(self, upd, cmd: Cmd) -> None:
@@ -977,15 +1064,21 @@ class Server:
         quick_cmds = self.user_config.quick_cmds()
         kb = new_keyboard()
         for qc in quick_cmds:
-            kb.add_row(new_row(
-                new_btn(qc, new_cmd(CMD_DEL_FROM_SCHEDULE, [qc])),
-            ))
-        kb.add_row(new_row(
-            new_btn("➕ Add", new_cmd(CMD_SETTINGS_QUICK_ADD)),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_BACK, new_cmd(CMD_SETTINGS)),
-        ))
+            kb.add_row(
+                new_row(
+                    new_btn(qc, new_cmd(CMD_DEL_FROM_SCHEDULE, [qc])),
+                )
+            )
+        kb.add_row(
+            new_row(
+                new_btn("➕ Add", new_cmd(CMD_SETTINGS_QUICK_ADD)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_BACK, new_cmd(CMD_SETTINGS)),
+            )
+        )
         self.tg.send(self.user_id, "⚡️ Quick buttons:", kb, "HTML")
 
     def _cmd_move_to(self, upd, cmd: Cmd) -> None:
@@ -993,15 +1086,21 @@ class Server:
         move_cmds = self.user_config.move_to_cmds()
         kb = new_keyboard()
         for mc in move_cmds:
-            kb.add_row(new_row(
-                new_btn(mc, new_cmd(CMD_DEL_FROM_SCHEDULE, [mc])),
-            ))
-        kb.add_row(new_row(
-            new_btn("➕ Add", new_cmd(CMD_SETTINGS_MOVE_TO)),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_BACK, new_cmd(CMD_SETTINGS)),
-        ))
+            kb.add_row(
+                new_row(
+                    new_btn(mc, new_cmd(CMD_DEL_FROM_SCHEDULE, [mc])),
+                )
+            )
+        kb.add_row(
+            new_row(
+                new_btn("➕ Add", new_cmd(CMD_SETTINGS_MOVE_TO)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_BACK, new_cmd(CMD_SETTINGS)),
+            )
+        )
         self.tg.send(self.user_id, "➡️ Move to buttons:", kb, "HTML")
 
     def _cmd_pomodoro(self, upd, cmd: Cmd) -> None:
@@ -1017,7 +1116,9 @@ class Server:
             tz_offset = 0
         habits_data, _ = last_week_habits(self.user_fs, tz_offset)
         if not habits_data:
-            self.tg.send(self.user_id, "No habits yet. Add a habit with #habit <name>", None, "HTML")
+            self.tg.send(
+                self.user_id, "No habits yet. Add a habit with #habit <name>", None, "HTML"
+            )
             return
         parts = ["📊 Habits (last 7 days):"]
         for name, days in habits_data.items():
@@ -1033,33 +1134,50 @@ class Server:
     def _cmd_settings(self, upd, cmd: Cmd) -> None:
         """Show settings view."""
         kb = new_keyboard()
-        kb.add_row(new_row(
-            new_btn(emoji("brain") + " Full mode", new_cmd(CMD_SETTINGS_MODE_FULL)),
-            new_btn(emoji("notes") + " Notes mode", new_cmd(CMD_SETTINGS_MODE_NOTES)),
-        ))
-        kb.add_row(new_row(
-            new_btn(emoji("tasks") + " Tasks mode", new_cmd(CMD_SETTINGS_MODE_TASKS)),
-            new_btn(emoji("journal") + " Chat mode", new_cmd(CMD_SETTINGS_MODE_CHAT)),
-        ))
-        kb.add_row(new_row(
-            new_btn("−", new_cmd(CMD_BACK)),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_QUICK_BTNS, new_cmd(CMD_SETTINGS_QUICK)),
-            new_btn(STR_MOVE_TO_BTNS, new_cmd(CMD_SETTINGS_MOVE_TO)),
-        ))
-        kb.add_row(new_row(
-            new_btn(emoji("world") + " Timezone", new_cmd(CMD_SETTINGS_TIMEZONE)),
-            new_btn("🔄 Two emojis", new_cmd(CMD_SETTINGS_TWO_EMOJIS)),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_HOME, new_cmd(CMD_HOME)),
-        ))
+        kb.add_row(
+            new_row(
+                new_btn(emoji("brain") + " Full mode", new_cmd(CMD_SETTINGS_MODE_FULL)),
+                new_btn(emoji("notes") + " Notes mode", new_cmd(CMD_SETTINGS_MODE_NOTES)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(emoji("tasks") + " Tasks mode", new_cmd(CMD_SETTINGS_MODE_TASKS)),
+                new_btn(emoji("journal") + " Chat mode", new_cmd(CMD_SETTINGS_MODE_CHAT)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn("−", new_cmd(CMD_BACK)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_QUICK_BTNS, new_cmd(CMD_SETTINGS_QUICK)),
+                new_btn(STR_MOVE_TO_BTNS, new_cmd(CMD_SETTINGS_MOVE_TO)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(emoji("world") + " Timezone", new_cmd(CMD_SETTINGS_TIMEZONE)),
+                new_btn("🔄 Two emojis", new_cmd(CMD_SETTINGS_TWO_EMOJIS)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_HOME, new_cmd(CMD_HOME)),
+            )
+        )
         self.tg.send(self.user_id, "⚙️ Settings:", kb, "HTML")
 
     def _cmd_help(self, upd, cmd: Cmd) -> None:
         """Show help."""
-        self.tg.send(self.user_id, "Help: Send me a message to create a note, or use the buttons below.", None, "HTML")
+        self.tg.send(
+            self.user_id,
+            "Help: Send me a message to create a note, or use the buttons below.",
+            None,
+            "HTML",
+        )
 
     def _cmd_cancel(self, upd, cmd: Cmd) -> None:
         """Cancel current operation."""
@@ -1187,7 +1305,7 @@ class Server:
             return
         items = checklist_items(content)
         parts = ["📦 Archive:"]
-        for item_text, item_hash, is_done in items[:20]:
+        for item_text, _item_hash, is_done in items[:20]:
             if is_done:
                 parts.append(f"✅ {item_text}")
         self.tg.send(self.user_id, "\n".join(parts), None, "HTML")
@@ -1196,7 +1314,20 @@ class Server:
         """Show media files."""
         files, _ = self.user_fs.files_and_dirs(DIR_USER_ROOT)
         notes = only_files(files)
-        media_exts = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.mov', '.mp3', '.wav', '.ogg', '.pdf'}
+        media_exts = {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".webp",
+            ".mp4",
+            ".webm",
+            ".mov",
+            ".mp3",
+            ".wav",
+            ".ogg",
+            ".pdf",
+        }
         media_files = [f for f in notes if any(f.name.lower().endswith(ext) for ext in media_exts)]
         if not media_files:
             self.tg.send(self.user_id, "No media files found.", None, "HTML")
@@ -1296,15 +1427,21 @@ class Server:
         channels = self.user_config.channels()
         kb = new_keyboard()
         for ch in channels:
-            kb.add_row(new_row(
-                new_btn(f"📢 {ch}", new_cmd(CMD_SETTINGS_CHANNEL_DEL, [str(ch)])),
-            ))
-        kb.add_row(new_row(
-            new_btn("➕ Add channel", new_cmd(CMD_SETTINGS_CHANNEL_ADD)),
-        ))
-        kb.add_row(new_row(
-            new_btn(STR_BACK, new_cmd(CMD_SETTINGS)),
-        ))
+            kb.add_row(
+                new_row(
+                    new_btn(f"📢 {ch}", new_cmd(CMD_SETTINGS_CHANNEL_DEL, [str(ch)])),
+                )
+            )
+        kb.add_row(
+            new_row(
+                new_btn("➕ Add channel", new_cmd(CMD_SETTINGS_CHANNEL_ADD)),
+            )
+        )
+        kb.add_row(
+            new_row(
+                new_btn(STR_BACK, new_cmd(CMD_SETTINGS)),
+            )
+        )
         self.tg.send(self.user_id, "📢 Channels:", kb, "HTML")
 
     def _cmd_add_checklist_item(self, upd, cmd: Cmd) -> None:

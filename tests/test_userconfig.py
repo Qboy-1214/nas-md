@@ -4,8 +4,11 @@ import pytest
 
 from nas_md.fs import FS, DIR_USER_ROOT
 from nas_md.userconfig import (
-    UserConfig, DEFAULT_CONFIG,
-    MODE_CHAT, MODE_FULL, MODE_TASKS, MODE_NOTES, MODE_JOURNAL,
+    UserConfig,
+    MODE_CHAT,
+    MODE_TASKS,
+    MODE_NOTES,
+    MODE_JOURNAL,
 )
 
 

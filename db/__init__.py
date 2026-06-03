@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+import contextlib
 
-from nas_md.pkg.tg.types import Cmd
+if TYPE_CHECKING:
+    from nas_md.pkg.tg.types import Cmd
 
 
 # In-memory stores
@@ -38,10 +40,8 @@ class DB:
 
     def del_last_keyboard_msg_id(self) -> None:
         path = _tmp_file_path(self.user_id, "msgid")
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.remove(path)
-        except FileNotFoundError:
-            pass
 
     def input_expectation(self) -> Cmd | None:
         key = _input_expectation_key(self.user_id)
@@ -146,7 +146,10 @@ class FakeDB:
         self.recent_cmd = cmd
 
     def recent_command_params(self) -> tuple[list[str], bool]:
-        return self.recent_cmd_params, self.recent_cmd_params is not None and len(self.recent_cmd_params) > 0
+        return (
+            self.recent_cmd_params,
+            self.recent_cmd_params is not None and len(self.recent_cmd_params) > 0,
+        )
 
     def set_recent_command_params(self, params: list[str]) -> None:
         self.recent_cmd_params = params

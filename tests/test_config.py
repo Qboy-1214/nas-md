@@ -3,9 +3,8 @@
 import os
 from unittest.mock import patch
 
-import pytest
 
-from nas_md.config import Config, load_bot_config, server_cfg
+from nas_md.config import Config
 
 
 class TestConfig:
@@ -48,25 +47,29 @@ class TestConfig:
 
 
 class TestLoadBotConfig:
-    @patch.dict(os.environ, {
-        "STORAGE_DIR": "/tmp/storage",
-        "BOT_API_TOKEN": "test-token",
-        "API_URL": "https://api.telegram.org",
-        "APP_URL": "https://app.example.com",
-        "CONFIG_FILENAME": "myconfig.json",
-        "CERT_DIR": "/certs",
-        "TOKENS_DIR": "/tokens",
-        "TOKENS_SALT": "salt",
-        "LOG_FILE": "/var/log/app.log",
-        "STORAGE_QUOTA_KB": "2048",
-        "UNLIMITED_QUOTA_IDS": "123,456",
-        "MOUNT_DIRS": "/a:/b",
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "STORAGE_DIR": "/tmp/storage",
+            "BOT_API_TOKEN": "test-token",
+            "API_URL": "https://api.telegram.org",
+            "APP_URL": "https://app.example.com",
+            "CONFIG_FILENAME": "myconfig.json",
+            "CERT_DIR": "/certs",
+            "TOKENS_DIR": "/tokens",
+            "TOKENS_SALT": "salt",
+            "LOG_FILE": "/var/log/app.log",
+            "STORAGE_QUOTA_KB": "2048",
+            "UNLIMITED_QUOTA_IDS": "123,456",
+            "MOUNT_DIRS": "/a:/b",
+        },
+    )
     def test_load_all_env_vars(self):
         import importlib
         import nas_md.config as cfg_mod
+
         importlib.reload(cfg_mod)
-        cfg = cfg_mod.load_bot_config()
+        cfg_mod.load_bot_config()
         # After reload, server_cfg is the old one; load_bot_config updates the module's global
         # We need to check the module's server_cfg
         assert cfg_mod.server_cfg.bot_api_token == "test-token"
@@ -85,6 +88,7 @@ class TestLoadBotConfig:
     def test_load_defaults(self):
         import importlib
         import nas_md.config as cfg_mod
+
         importlib.reload(cfg_mod)
         cfg_mod.load_bot_config()
         assert cfg_mod.server_cfg.storage_dir == "./storage"

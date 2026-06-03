@@ -5,20 +5,23 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import stat
-import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from nas_md.config import server_cfg
 from nas_md.pkg.txt.md import _hash as md_hash
 from nas_md.pkg.txt.str import ucfirst, similar
 
+
 # Callbacks for tracking
-log_rename: Callable[[int, str, str], None] = lambda ts, old, new: None
-log_delete: Callable[[int, str], None] = lambda ts, path: None
+def log_rename(ts: int, old: str, new: str) -> None:
+    return None
+
+
+def log_delete(ts: int, path: str) -> None:
+    return None
+
 
 # Errors
 ERR_QUOTA_EXCEEDED = "storage quota exceeded"
@@ -63,6 +66,7 @@ FORBIDDEN_CHARS = {
 @dataclass
 class File:
     """Represents a file or directory."""
+
     name: str = ""
     hash: str = ""
     display_name: str = ""
@@ -153,7 +157,7 @@ class FS:
             for k in self._mem:
                 k_str = k.decode()
                 if k_str.startswith(prefix):
-                    rest = k_str[len(prefix):]
+                    rest = k_str[len(prefix) :]
                     if "/" not in rest:
                         results.add(rest)
             return sorted(results)
@@ -168,7 +172,7 @@ class FS:
             for k in self._mem:
                 k_str = k.decode()
                 if k_str.startswith(prefix) and k_str != path:
-                    rest = k_str[len(prefix):]
+                    rest = k_str[len(prefix) :]
                     parts = rest.split("/", 1)
                     if len(parts) == 2:
                         dirs.add(parts[0])
@@ -251,7 +255,9 @@ class FS:
         for f in files_and_dirs:
             if f.name.startswith(filename_hash):
                 return f.name, None
-        return "", ValueError(f"cannot unhash '{filename_hash}' in '{dir_name}': {ERR_CANNOT_UNHASH}")
+        return "", ValueError(
+            f"cannot unhash '{filename_hash}' in '{dir_name}': {ERR_CANNOT_UNHASH}"
+        )
 
     def files_and_dirs(self, dir_name: str) -> tuple[list[File], None]:
         user_path, err = self.safe_path(dir_name, "")
@@ -271,7 +277,7 @@ class FS:
             is_dir = self._is_dir(full_path)
             try:
                 st = self._stat(full_path)
-                ctime = int(st.st_ctime * 1000) if hasattr(st, 'st_ctime') else 0
+                ctime = int(st.st_ctime * 1000) if hasattr(st, "st_ctime") else 0
             except Exception:
                 ctime = 0
             size = 0
@@ -281,15 +287,17 @@ class FS:
                     size = len(data)
             except Exception:
                 pass
-            files.append(File(
-                name=entry,
-                hash=md_hash(entry),
-                display_name=display_name(entry),
-                ctime=ctime,
-                is_multiline=size > 0,
-                is_dir=is_dir,
-                parent_dir=dir_name,
-            ))
+            files.append(
+                File(
+                    name=entry,
+                    hash=md_hash(entry),
+                    display_name=display_name(entry),
+                    ctime=ctime,
+                    is_multiline=size > 0,
+                    is_dir=is_dir,
+                    parent_dir=dir_name,
+                )
+            )
         return files, None
 
     def dirs(self) -> tuple[list[File], None]:
@@ -374,22 +382,24 @@ class FS:
                     rel_dir = DIR_USER_ROOT
                 try:
                     st = self._stat(full_path)
-                    ctime = int(st.st_ctime * 1000) if hasattr(st, 'st_ctime') else 0
+                    ctime = int(st.st_ctime * 1000) if hasattr(st, "st_ctime") else 0
                 except Exception:
                     ctime = 0
                 try:
                     size = len(self._read(full_path))
                 except Exception:
                     size = 0
-                notes.append(File(
-                    name=entry,
-                    hash=md_hash(entry),
-                    display_name=display_name(entry),
-                    ctime=ctime,
-                    is_multiline=size > 0,
-                    is_dir=False,
-                    parent_dir=rel_dir,
-                ))
+                notes.append(
+                    File(
+                        name=entry,
+                        hash=md_hash(entry),
+                        display_name=display_name(entry),
+                        ctime=ctime,
+                        is_multiline=size > 0,
+                        is_dir=False,
+                        parent_dir=rel_dir,
+                    )
+                )
 
     def touch(self, dir_name: str, filename: str) -> None:
         file_path, err = self.safe_path(dir_name, filename)
@@ -428,7 +438,7 @@ class FS:
         if err:
             return {}, ValueError(err)
         result: dict[str, int] = {}
-        for dirpath, dirnames, filenames in self._walk(root_path):
+        for dirpath, _dirnames, filenames in self._walk(root_path):
             for fn in filenames:
                 if fn.startswith("."):
                     continue
@@ -507,7 +517,7 @@ def filename_from_header(header: str) -> str:
 
 
 def is_checklist_item(filename: str) -> bool:
-    return bool(re.match(r'^-.*?-(.+)', filename))
+    return bool(re.match(r"^-.*?-(.+)", filename))
 
 
 def exclude_checklists(dirs: list[File]) -> list[File]:
@@ -520,7 +530,11 @@ def exclude_system_dirs(dirs: list[File]) -> list[File]:
 
 
 def exclude_config(files: list[File]) -> list[File]:
-    return [f for f in files if not (f.name == server_cfg.config_filename and f.parent_dir == DIR_USER_ROOT)]
+    return [
+        f
+        for f in files
+        if not (f.name == server_cfg.config_filename and f.parent_dir == DIR_USER_ROOT)
+    ]
 
 
 def only_note_dirs(dirs: list[File]) -> list[File]:
@@ -540,8 +554,19 @@ def only_checklists(dirs: list[File]) -> list[File]:
 
 
 def only_user_md_files(entries: list[File]) -> list[File]:
-    system_files = {CHAT_FILENAME, LATER_FILENAME, DONE_FILENAME, SHOP_FILENAME, WATCH_FILENAME, READ_FILENAME}
-    return [f for f in entries if not f.is_dir and f.name.endswith(MD_EXT) and f.name not in system_files]
+    system_files = {
+        CHAT_FILENAME,
+        LATER_FILENAME,
+        DONE_FILENAME,
+        SHOP_FILENAME,
+        WATCH_FILENAME,
+        READ_FILENAME,
+    }
+    return [
+        f
+        for f in entries
+        if not f.is_dir and f.name.endswith(MD_EXT) and f.name not in system_files
+    ]
 
 
 def only_files(entries: list[File]) -> list[File]:
@@ -586,10 +611,24 @@ def new_fs(abs_root_path: str, backend: str = "os", quota_kb: int = 0) -> FS:
     return FS(abs_root_path, backend=backend, quota_kb=quota_kb)
 
 
-def new_file(name: str, hash_val: str, display_name: str, ctime: int,
-             is_multiline: bool, is_dir: bool, parent_dir: str) -> File:
-    return File(name=name, hash=hash_val, display_name=display_name,
-                ctime=ctime, is_multiline=is_multiline, is_dir=is_dir, parent_dir=parent_dir)
+def new_file(
+    name: str,
+    hash_val: str,
+    display_name: str,
+    ctime: int,
+    is_multiline: bool,
+    is_dir: bool,
+    parent_dir: str,
+) -> File:
+    return File(
+        name=name,
+        hash=hash_val,
+        display_name=display_name,
+        ctime=ctime,
+        is_multiline=is_multiline,
+        is_dir=is_dir,
+        parent_dir=parent_dir,
+    )
 
 
 def _is_unlimited_quota(user_id: int, unlimited_ids: str) -> bool:

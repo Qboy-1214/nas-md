@@ -2,13 +2,19 @@
 
 import json
 
-import pytest
 
 from nas_md.pkg.tg.types import (
-    Cmd, Btn, Keyboard, Row,
-    new_cmd, new_btn, new_row, new_keyboard, new_url_cmd, new_custom_cmd,
+    Cmd,
+    new_cmd,
+    new_btn,
+    new_row,
+    new_keyboard,
+    new_url_cmd,
+    new_custom_cmd,
     cmd_from_json,
-    CMD_TYPE_CALLBACK, CMD_TYPE_URL, CMD_TYPE_INLINE_QUERY_CURRENT_CHAT, CMD_TYPE_WEB_APP,
+    CMD_TYPE_CALLBACK,
+    CMD_TYPE_URL,
+    CMD_TYPE_INLINE_QUERY_CURRENT_CHAT,
 )
 
 

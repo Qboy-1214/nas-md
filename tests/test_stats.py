@@ -1,11 +1,8 @@
 """Tests for stats module."""
 
-import time
-from unittest.mock import patch
-
 import pytest
 
-from nas_md.fs import FS, DIR_ARCHIVE, DIR_USER_ROOT
+from nas_md.fs import FS, DIR_ARCHIVE
 from nas_md.stats import today_report, done_today
 
 

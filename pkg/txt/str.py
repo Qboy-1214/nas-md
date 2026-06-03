@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 
 
 def i64(i: int) -> str:
@@ -30,7 +29,7 @@ def substr(input_str: str, start: int, length: int) -> str:
         return ""
     if start + length > len(as_runes):
         length = len(as_runes) - start
-    return "".join(as_runes[start:start + length])
+    return "".join(as_runes[start : start + length])
 
 
 def emoji(emoji_str: str, s: str) -> str:
@@ -39,7 +38,7 @@ def emoji(emoji_str: str, s: str) -> str:
     # Custom prefixes to strip
     for prefix in ("WRK ", "UA ", "US ", "CY ", "HOB ", "SRB ", "PL "):
         if s.startswith(prefix):
-            s = s[len(prefix):]
+            s = s[len(prefix) :]
             break
     return f"{emoji_str} {s}"
 
@@ -89,7 +88,7 @@ def split_text_into_chunks(text: str, max_len: int) -> list[str]:
 def first_word(s: str) -> str:
     s = s.strip()
     # Match word characters (including Unicode) - equivalent to [^\s\p{P}]+
-    m = re.match(r'[^\s!-/:-@\[-`{-~]+', s)
+    m = re.match(r"[^\s!-/:-@\[-`{-~]+", s)
     if m:
         return m.group()
     return ""
@@ -100,10 +99,12 @@ def escape_html(s: str) -> str:
 
 
 def strip_html_tags(s: str) -> str:
-    return re.sub(r'<[^>]*>', '', s)
+    return re.sub(r"<[^>]*>", "", s)
 
 
-def replace_with_placeholders(text: str, regex: str, placeholder: str) -> tuple[str, dict[str, str]]:
+def replace_with_placeholders(
+    text: str, regex: str, placeholder: str
+) -> tuple[str, dict[str, str]]:
     placeholders: dict[str, str] = {}
     counter = 0
 
@@ -152,5 +153,5 @@ def similar_char(str1: list[str], str2: list[str]) -> int:
         if pos1 > 0 and pos2 > 0:
             total += similar_char(str1[:pos1], str2[:pos2])
         if pos1 + max_len < len(str1) and pos2 + max_len < len(str2):
-            total += similar_char(str1[pos1 + max_len:], str2[pos2 + max_len:])
+            total += similar_char(str1[pos1 + max_len :], str2[pos2 + max_len :])
     return total

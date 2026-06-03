@@ -6,7 +6,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-
 CMD_TYPE_CALLBACK = "cmd"
 CMD_TYPE_INLINE_QUERY_CURRENT_CHAT = "iq"
 CMD_TYPE_WEB_APP = "web"
@@ -16,6 +15,7 @@ CMD_TYPE_URL = "url"
 @dataclass
 class Cmd:
     """Represents a callback command."""
+
     name: str = ""
     params: list[str] = field(default_factory=list)
     type: str = CMD_TYPE_CALLBACK
@@ -28,18 +28,21 @@ class Cmd:
 @dataclass
 class Btn:
     """A keyboard button."""
+
     name: str = ""
     cmd: Cmd = field(default_factory=Cmd)
 
 
 class Row:
     """Marker interface for keyboard rows."""
+
     pass
 
 
 @dataclass
 class Keyboard:
     """Telegram inline keyboard."""
+
     btns: list[Any] = field(default_factory=list)
 
     def add_row(self, row: Any) -> None:

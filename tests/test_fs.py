@@ -1,18 +1,30 @@
 """Tests for fs module - filesystem abstraction."""
 
-import os
 import tempfile
 
 import pytest
 
 from nas_md.fs import (
-    FS, File, DIR_USER_ROOT, DIR_ARCHIVE, DIR_JOURNAL, DIR_HABITS,
-    CHAT_FILENAME, LATER_FILENAME, MD_EXT, POMODORO_TASK,
-    display_name, hash_filename, short_hash, filename_from_header,
-    sanitize_filename, unsanitize_filename,
-    only_files, only_dirs, only_note_dirs, only_checklists,
-    only_user_md_files, only_filenames, sort_by_ctime_desc,
-    new_fs, new_file, _is_local,
+    FS,
+    File,
+    DIR_USER_ROOT,
+    DIR_ARCHIVE,
+    DIR_JOURNAL,
+    CHAT_FILENAME,
+    display_name,
+    hash_filename,
+    short_hash,
+    filename_from_header,
+    sanitize_filename,
+    unsanitize_filename,
+    only_files,
+    only_dirs,
+    only_note_dirs,
+    only_user_md_files,
+    only_filenames,
+    sort_by_ctime_desc,
+    new_file,
+    _is_local,
 )
 
 
@@ -31,6 +43,7 @@ def os_fs():
     yield fs
     # Cleanup
     import shutil
+
     shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -89,7 +102,7 @@ class TestMemFS:
         assert name == "test.md"
 
     def test_safe_path_traversal(self, mem_fs):
-        path, err = mem_fs.safe_path("../../../etc/passwd", "")
+        _path, err = mem_fs.safe_path("../../../etc/passwd", "")
         assert err  # Should return error for path traversal
 
     def test_safe_path_normal(self, mem_fs):

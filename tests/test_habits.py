@@ -4,9 +4,11 @@ import pytest
 
 from nas_md.fs import FS, DIR_HABITS, DIR_INSIGHTS
 from nas_md.habits import (
-    habits, last_week_habits, write as write_habits,
-    emoji_for_habit, HABIT_SKIPPED, HABIT_COMPLETED,
-    HABIT_COMPLETED_AT_WEEKEND, MOOD_HABIT, MOOD_EMOJIS,
+    habits,
+    last_week_habits,
+    write as write_habits,
+    emoji_for_habit,
+    MOOD_HABIT,
 )
 
 

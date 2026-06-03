@@ -1,9 +1,5 @@
 """Tests for plugins module."""
 
-import time
-
-import pytest
-
 from nas_md.plugins import WorldClockPlugin
 
 

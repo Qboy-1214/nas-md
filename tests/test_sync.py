@@ -1,7 +1,5 @@
 """Tests for sync module - LCS merge."""
 
-import pytest
-
 from nas_md.sync import merge, _unique_graphemes, _group_consecutive_headers
 
 
@@ -42,7 +40,6 @@ class TestMerge:
 
     def test_three_way_merge(self):
         """Test merging with common base."""
-        base = "line1\nline2\nline3"
         branch1 = "line1\nline2\nline3\nadded1"
         branch2 = "line1\nline2\nline3\nadded2"
         result = merge(branch1, branch2)
@@ -91,23 +88,27 @@ class TestGroupConsecutiveHeaders:
         assert result[0] == ["text"]
 
     def test_consecutive_headers(self):
-        result = _group_consecutive_headers([
-            "## 23 May, Friday",
-            "## 24 May, Saturday",
-            "Some text",
-        ])
+        result = _group_consecutive_headers(
+            [
+                "## 23 May, Friday",
+                "## 24 May, Saturday",
+                "Some text",
+            ]
+        )
         assert len(result) == 2
         assert len(result[0]) == 2  # Two headers grouped
         assert result[1] == ["Some text"]
 
     def test_mixed(self):
-        result = _group_consecutive_headers([
-            "## 1 January, Monday",
-            "text",
-            "## 2 January, Tuesday",
-            "## 3 January, Wednesday",
-            "more text",
-        ])
+        result = _group_consecutive_headers(
+            [
+                "## 1 January, Monday",
+                "text",
+                "## 2 January, Tuesday",
+                "## 3 January, Wednesday",
+                "more text",
+            ]
+        )
         assert len(result) == 4
         assert result[0] == ["## 1 January, Monday"]
         assert result[1] == ["text"]

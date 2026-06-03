@@ -5,17 +5,20 @@ from __future__ import annotations
 import os
 import re
 import time
-from typing import Optional
 
 from nas_md.config import server_cfg
 from nas_md.fs import (
-    FS, DIR_USER_ROOT, DIR_ARCHIVE, DIR_JABITS,
-    CHAT_FILENAME, LATER_FILENAME, DONE_FILENAME,
+    DIR_USER_ROOT,
+    DIR_ARCHIVE,
+    CHAT_FILENAME,
+    LATER_FILENAME,
+    DONE_FILENAME,
     new_user_fs,
 )
 from nas_md.journal import add_record
 from nas_md.pkg.txt.md import (
-    checklist_items, remove_completed_checklist_items,
+    checklist_items,
+    remove_completed_checklist_items,
     add_header_and_text,
 )
 from nas_md.pkg.txt.str import strip_chat_timestamp
@@ -27,6 +30,7 @@ _now = time.time
 def beginning_of_the_day(t: float) -> float:
     """Return the beginning of the day for a given timestamp."""
     import datetime
+
     dt = datetime.datetime.utcfromtimestamp(t)
     beginning = dt.replace(hour=0, minute=0, second=0, microsecond=0)
     return beginning.timestamp()
@@ -35,6 +39,7 @@ def beginning_of_the_day(t: float) -> float:
 def tomorrow() -> int:
     """Return tomorrow's beginning of day as unix timestamp."""
     import datetime
+
     t = datetime.datetime.utcnow() + datetime.timedelta(days=1)
     beginning = t.replace(hour=0, minute=0, second=0, microsecond=0)
     return int(beginning.timestamp())
@@ -43,6 +48,7 @@ def tomorrow() -> int:
 def format_task_date(scheduled_at: int) -> str:
     """Format a scheduled date for display."""
     import datetime
+
     today = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     task_date = datetime.datetime.utcfromtimestamp(scheduled_at).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -64,6 +70,7 @@ def format_task_date(scheduled_at: int) -> str:
 def schedule_report(schedules: list) -> str:
     """Format scheduled tasks into a report."""
     from collections import OrderedDict
+
     schedule = OrderedDict()
     order = []
 
@@ -123,26 +130,25 @@ def move_due_tasks(storage_path: str, config_filename: str, tg) -> None:
             if done_content:
                 # Simple removal of the filename from done
                 done_lines = done_content.split("\n")
-                done_lines = [l for l in done_lines if filename not in l]
+                done_lines = [ln for ln in done_lines if filename not in ln]
                 user_fs.write(DIR_ARCHIVE, DONE_FILENAME, "\n".join(done_lines))
 
             # Remove from Later.md if present
             later_content, _ = user_fs.read(DIR_USER_ROOT, LATER_FILENAME)
             if later_content:
                 later_lines = later_content.split("\n")
-                later_lines = [l for l in later_lines if filename not in l]
+                later_lines = [ln for ln in later_lines if filename not in ln]
                 user_fs.write(DIR_USER_ROOT, LATER_FILENAME, "\n".join(later_lines))
 
             if cron:
                 # Reschedule for next occurrence
-                import datetime
                 next_time = int(_now()) + 86400  # Simplified: next day
                 user_config.add_to_schedule(filename, next_time, cron)
             else:
                 user_config.del_from_schedule(filename)
 
 
-def remove_completed_checklist_items(storage_path: str, config_filename: str) -> None:
+def worker_remove_completed_checklist_items(storage_path: str, config_filename: str) -> None:
     """Remove completed checklist items from Chat.md and Later.md, archive to Done.md."""
     import datetime
 
@@ -157,7 +163,8 @@ def remove_completed_checklist_items(storage_path: str, config_filename: str) ->
 
         user_path = os.path.join(storage_path, str(user_id))
         user_fs = new_user_fs(user_path)
-        user_config = UserConfig(user_fs, user_id, config_filename)
+        # Ensure user config exists
+        _ = UserConfig(user_fs, user_id, config_filename)
 
         # Process Chat.md and Later.md
         for filename in [CHAT_FILENAME, LATER_FILENAME]:
@@ -181,7 +188,7 @@ def remove_completed_checklist_items(storage_path: str, config_filename: str) ->
 
             # Add to journal
             items = checklist_items(removed)
-            for item_text, item_hash, is_done in items:
+            for item_text, _item_hash, _is_done in items:
                 clean_text = strip_chat_timestamp(item_text)
                 add_record(user_fs, f"✅ {clean_text}")
 
@@ -192,7 +199,6 @@ def _remove_completed_items(md: str) -> tuple:
     """
     lines = md.split("\n")
     done_re = re.compile(r"^- \[[xX]\] ")
-    ts_re = re.compile(r"^- \[[ xX]\] (?:\`\d{2}:\d{2}\` )?")
 
     kept = []
     removed_lines = []
@@ -269,6 +275,7 @@ class Worker:
     def _cleanup_done(self) -> None:
         """Clean up old completed tasks."""
         import datetime
+
         # Only run near end of day (23:50+)
         now = datetime.datetime.utcnow()
         if now.hour != 23 or now.minute < 50:

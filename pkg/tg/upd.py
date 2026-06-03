@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nas_md.pkg.tg.types import Cmd
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nas_md.pkg.tg.types import Cmd
 
 
 @dataclass
 class Upd:
     """Fake update for testing."""
+
     user_id: int = 0
     _cmd: Cmd | None = None
     msg: str = ""
@@ -25,7 +29,7 @@ class Upd:
     def msg_text(self) -> str:
         return self.msg
 
-    def user_id(self) -> int:
+    def get_user_id(self) -> int:
         return self.user_id
 
     def cmd(self) -> Cmd | None:
@@ -84,6 +88,7 @@ class Upd:
 @dataclass
 class Message:
     """Represents a sent/received message."""
+
     text: str = ""
     buttons: list = None
 

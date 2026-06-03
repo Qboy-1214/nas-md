@@ -3,9 +3,9 @@
 import os
 import tempfile
 
-import pytest
 
-from nas_md.db import DB, FakeDB, _hash_or_path_by_msg_id, _input_expectations, _recent_commands
+from nas_md.db import DB, FakeDB
+import contextlib
 
 
 class TestFakeDB:
@@ -34,6 +34,7 @@ class TestFakeDB:
 
     def test_set_input_expectation(self):
         from nas_md.pkg.tg.types import Cmd
+
         cmd = Cmd(name="test", params=["a", "b"])
         self.db.set_input_expectation(cmd)
         result = self.db.input_expectation()
@@ -42,6 +43,7 @@ class TestFakeDB:
 
     def test_del_input_expectation(self):
         from nas_md.pkg.tg.types import Cmd
+
         self.db.set_input_expectation(Cmd(name="test"))
         self.db.del_input_expectation()
         assert self.db.input_expectation() is None
@@ -69,7 +71,7 @@ class TestFakeDB:
         assert cmd == "done"
 
     def test_recent_command_params_default(self):
-        params, found = self.db.recent_command_params()
+        _params, found = self.db.recent_command_params()
         assert not found
 
     def test_set_recent_command_params(self):
@@ -79,13 +81,13 @@ class TestFakeDB:
         assert params == ["a", "b"]
 
     def test_img_msg_id_default(self):
-        ids, found = self.db.img_msg_id()
+        _ids, found = self.db.img_msg_id()
         assert not found
 
     def test_add_img_msg_id(self):
         self.db.add_img_msg_id(1)
         # FakeDB.add_img_msg_id is a no-op
-        ids, found = self.db.img_msg_id()
+        _ids, found = self.db.img_msg_id()
         assert not found
 
     def test_del_img_msg_id(self):
@@ -103,10 +105,8 @@ class TestDB:
         # Clean up temp files
         for name in ["msgid"]:
             path = os.path.join(tempfile.gettempdir(), f"{self.user_id}.{name}")
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.remove(path)
-            except FileNotFoundError:
-                pass
 
     def test_last_keyboard_msg_id_file(self):
         self.db.set_last_keyboard_msg_id(100)

@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import json
-import os
-import time
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from threading import Lock
-from typing import Any
 
 from nas_md.fs import FS, DIR_USER_ROOT
 
@@ -119,7 +115,9 @@ class UserConfig:
                     found = True
                     break
             if not found:
-                schedules.append({"filename": filename, "scheduledAt": schedule_at, "cron": cron, "cmd": ""})
+                schedules.append(
+                    {"filename": filename, "scheduledAt": schedule_at, "cron": cron, "cmd": ""}
+                )
             cfg["schedules"] = schedules
             self._write(cfg)
 

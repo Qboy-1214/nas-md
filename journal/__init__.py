@@ -37,7 +37,7 @@ def add_record(user_fs: FS, record: str, timezone_offset: int = 0) -> None:
         if today_header not in md:
             md += today_header + "\n"
 
-        tz = _tz_from_offset(timezone_offset)
+        _tz_from_offset(timezone_offset)
         timestamp = time.strftime("`%H:%M`", time.gmtime(_now() + timezone_offset))
 
         if has_image(record):

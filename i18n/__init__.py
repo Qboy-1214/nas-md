@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
 
 _emojis_by_keyword: dict[str, str] = {}
 _loaded = False
@@ -19,7 +18,7 @@ def load_emoji_file(filepath: str = "") -> None:
         filepath = os.path.join(dir_path, "emojis.json")
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             emojis = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         _emojis_by_keyword = {}

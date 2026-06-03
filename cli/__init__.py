@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 from nas_md.config import load_bot_config
 
@@ -38,6 +37,7 @@ def cmd_whoop() -> None:
 def cmd_web() -> None:
     """Start the web server with mount points and PWA frontend."""
     import logging
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
 
     from nas_md.webserver import serve

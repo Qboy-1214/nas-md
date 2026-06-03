@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 TIME_FORMAT = "%d.%m.%Y %H:%M:%S"
 DATE_FORMAT = "%d.%m.%Y"
@@ -29,11 +28,13 @@ class WorldClockPlugin:
     """Plugin that converts dates/timestamps to multiple timezones."""
 
     def can_handle(self, msg_text: str) -> bool:
-        return self.parse_date(msg_text) is not None or \
-               self.parse_time(msg_text) is not None or \
-               self.parse_timestamp(msg_text) is not None
+        return (
+            self.parse_date(msg_text) is not None
+            or self.parse_time(msg_text) is not None
+            or self.parse_timestamp(msg_text) is not None
+        )
 
-    def handle(self, msg_text: str) -> tuple[Optional[str], None]:
+    def handle(self, msg_text: str) -> tuple[str | None, None]:
         t = self.parse_date(msg_text)
         if t is not None:
             return self._build_message(t, self._fmt_timestamp), None
@@ -48,7 +49,7 @@ class WorldClockPlugin:
 
         return "", None
 
-    def parse_timestamp(self, message: str) -> Optional[float]:
+    def parse_timestamp(self, message: str) -> float | None:
         try:
             ts = int(message)
         except (ValueError, TypeError):
@@ -61,14 +62,14 @@ class WorldClockPlugin:
             return ts / 1000  # milliseconds
         return float(ts)  # seconds
 
-    def parse_time(self, message: str) -> Optional[float]:
+    def parse_time(self, message: str) -> float | None:
         try:
             t = time.strptime(message.strip(), TIME_FORMAT)
             return time.mktime(t)
         except (ValueError, TypeError):
             return None
 
-    def parse_date(self, message: str) -> Optional[float]:
+    def parse_date(self, message: str) -> float | None:
         try:
             t = time.strptime(message.strip(), DATE_FORMAT)
             return time.mktime(t)

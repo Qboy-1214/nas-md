@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from nas_md.pkg.tg.types import Keyboard
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nas_md.pkg.tg.types import Keyboard
 
 
 @dataclass
@@ -61,7 +64,9 @@ class FakeTG:
     def answer_callback_query(self, query_id: str, text: str) -> None:
         pass
 
-    def answer_inline_query(self, query_id: str, results: list, cache_time: int, offset: str) -> None:
+    def answer_inline_query(
+        self, query_id: str, results: list, cache_time: int, offset: str
+    ) -> None:
         self.inline_query_results = results
 
     def download_file(self, file_id: str, writer) -> tuple[str, None]:

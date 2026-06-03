@@ -1,12 +1,17 @@
 """Tests for pkg/txt/md module."""
 
-import pytest
-
 from nas_md.pkg.txt.md import (
-    strip_chat_timestamp, add_header_and_text, incomplete_checklist_items,
-    checklist_items, add_checklist_item, complete_checklist_item,
-    remove_checklist_item, remove_completed_checklist_items,
-    checklist_item, markdown_to_html, _hash,
+    strip_chat_timestamp,
+    add_header_and_text,
+    incomplete_checklist_items,
+    checklist_items,
+    add_checklist_item,
+    complete_checklist_item,
+    remove_checklist_item,
+    remove_completed_checklist_items,
+    checklist_item,
+    markdown_to_html,
+    _hash,
 )
 
 
@@ -104,7 +109,7 @@ class TestCompleteChecklistItem:
 
     def test_not_found(self):
         md = "- [ ] Task"
-        result, item = complete_checklist_item(md, "nonexistent")
+        _result, item = complete_checklist_item(md, "nonexistent")
         assert item == ""
 
 
@@ -119,7 +124,7 @@ class TestRemoveChecklistItem:
     def test_remove_by_hash(self):
         md = "- [ ] Task"
         item_hash = _hash("Task")
-        result, removed = remove_checklist_item(md, item_hash)
+        _result, removed = remove_checklist_item(md, item_hash)
         assert removed == "Task"
 
 

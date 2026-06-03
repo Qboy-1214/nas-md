@@ -1,8 +1,5 @@
 """Tests for journal module."""
 
-import time
-from unittest.mock import patch
-
 import pytest
 
 from nas_md.fs import FS, DIR_JOURNAL
@@ -40,7 +37,7 @@ class TestAddRecord:
 
     def test_empty_record(self, mem_fs):
         add_record(mem_fs, "")
-        files, _ = mem_fs.files_and_dirs(DIR_JOURNAL)
+        _files, _ = mem_fs.files_and_dirs(DIR_JOURNAL)
         # Empty record should not create a file
         # (depends on implementation - may or may not create)
 
@@ -77,5 +74,5 @@ class TestAddEmoji:
 
     def test_empty_emoji(self, mem_fs):
         add_emoji(mem_fs, "")
-        files, _ = mem_fs.files_and_dirs(DIR_JOURNAL)
+        _files, _ = mem_fs.files_and_dirs(DIR_JOURNAL)
         # Empty emoji should not create a file

@@ -1,11 +1,18 @@
 """Tests for pkg/txt/str module."""
 
-import pytest
-
 from nas_md.pkg.txt.str import (
-    i64, ucfirst, lcfirst, substr, emoji, norm_new_lines,
-    is_multiline, split_text_into_chunks, first_word, escape_html,
-    strip_html_tags, similar, similar_str, similar_char,
+    i64,
+    ucfirst,
+    lcfirst,
+    substr,
+    emoji,
+    norm_new_lines,
+    is_multiline,
+    split_text_into_chunks,
+    first_word,
+    escape_html,
+    strip_html_tags,
+    similar,
 )
 
 

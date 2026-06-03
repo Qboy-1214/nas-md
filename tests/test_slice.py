@@ -1,7 +1,5 @@
 """Tests for pkg/slice module."""
 
-import pytest
-
 from nas_md.pkg.slice import chunk
 
 

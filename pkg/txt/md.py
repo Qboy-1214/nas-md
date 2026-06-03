@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from nas_md.pkg.txt.str import norm_new_lines, replace_with_placeholders, restore_from_placeholders
+from nas_md.pkg.txt.str import norm_new_lines
 
 MD_EXT = ".md"
 
@@ -53,7 +53,7 @@ def add_header_and_text(existing_content: str, header: str, new_content: str) ->
             break
         insert_index = i + 1
 
-    new_lines = lines[:insert_index] + [new_content]
+    new_lines = [*lines[:insert_index], new_content]
     if insert_index < len(lines) and lines[insert_index].strip():
         new_lines.append("")
     new_lines.extend(lines[insert_index:])
@@ -165,40 +165,40 @@ def markdown_to_html(md: str) -> str:
     """Convert markdown to Telegram-supported HTML subset."""
     # Escape HTML first
     result = escape_html(md)
-    
+
     # Protect code blocks and inline code with placeholders
     code_blocks = {}
     inline_codes = {}
-    
+
     # Extract code blocks
-    for i, m in enumerate(re.finditer(r'```(.*?)```', result, re.DOTALL)):
+    for i, m in enumerate(re.finditer(r"```(.*?)```", result, re.DOTALL)):
         placeholder = f"§CODEBLOCK{i}§"
         code_blocks[placeholder] = "<pre>" + m.group(1).strip() + "</pre>"
         result = result.replace(m.group(), placeholder)
-    
+
     # Extract inline code
-    for i, m in enumerate(re.finditer(r'`([^`]+)`', result)):
+    for i, m in enumerate(re.finditer(r"`([^`]+)`", result)):
         placeholder = f"§INLINE{i}§"
         inline_codes[placeholder] = "<code>" + m.group(1) + "</code>"
         result = result.replace(m.group(), placeholder)
-    
+
     # Convert headers (# -> <b>)
-    result = re.sub(r'^#+\s*(.+)$', r'<b>\1</b>', result, flags=re.MULTILINE)
-    
+    result = re.sub(r"^#+\s*(.+)$", r"<b>\1</b>", result, flags=re.MULTILINE)
+
     # Convert bold (**text** or __text__)
-    result = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', result)
-    result = re.sub(r'__(.+?)__', r'<b>\1</b>', result)
-    
+    result = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", result)
+    result = re.sub(r"__(.+?)__", r"<b>\1</b>", result)
+
     # Convert italic (*text* or _text_)
-    result = re.sub(r'\*(.+?)\*', r'<i>\1</i>', result)
-    result = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'<i>\1</i>', result)
-    
+    result = re.sub(r"\*(.+?)\*", r"<i>\1</i>", result)
+    result = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"<i>\1</i>", result)
+
     # Restore code blocks and inline code
     for placeholder, code in code_blocks.items():
         result = result.replace(placeholder, code)
     for placeholder, code in inline_codes.items():
         result = result.replace(placeholder, code)
-    
+
     return result
 
 
@@ -224,16 +224,18 @@ def _markdown_parser():
 def _open(t: str):
     def parser(input_str: str) -> list[dict]:
         if input_str.startswith(t):
-            return [{"consumed": OPEN_TAGS[t], "left": input_str[len(t):]}]
+            return [{"consumed": OPEN_TAGS[t], "left": input_str[len(t) :]}]
         return []
+
     return parser
 
 
 def _close(t: str):
     def parser(input_str: str) -> list[dict]:
         if input_str.startswith(t):
-            return [{"consumed": CLOSE_TAGS[t], "left": input_str[len(t):]}]
+            return [{"consumed": CLOSE_TAGS[t], "left": input_str[len(t) :]}]
         return []
+
     return parser
 
 
@@ -243,6 +245,7 @@ def _or(*parsers):
         for p in parsers:
             results.extend(p(input_str))
         return results
+
     return combined
 
 
@@ -254,17 +257,21 @@ def _and(*parsers, some: bool = False):
             for r in results:
                 for parsed in p(r["left"]):
                     if parsed["consumed"]:
-                        new_results.append({"consumed": r["consumed"] + parsed["consumed"], "left": parsed["left"]})
+                        new_results.append(
+                            {"consumed": r["consumed"] + parsed["consumed"], "left": parsed["left"]}
+                        )
             if not new_results:
                 return []
             results = new_results
         return results
+
     return combined
 
 
 def _some(parser):
     def combined(input_str: str) -> list[dict]:
         return _recursive(input_str, parser, 0)
+
     return combined
 
 
@@ -276,7 +283,9 @@ def _recursive(input_str: str, parser, depth: int) -> list[dict]:
             continue
         empty = False
         for child in _recursive(item["left"], parser, depth + 1):
-            results.append({"consumed": item["consumed"] + child["consumed"], "left": child["left"]})
+            results.append(
+                {"consumed": item["consumed"] + child["consumed"], "left": child["left"]}
+            )
     if empty and depth != 0:
         results.append({"consumed": "", "left": input_str})
     return results
@@ -285,11 +294,12 @@ def _recursive(input_str: str, parser, depth: int) -> list[dict]:
 def _not_markdown():
     def parser(input_str: str) -> list[dict]:
         for i, ch in enumerate(input_str):
-            if ch == '*' or ch == '_':
+            if ch == "*" or ch == "_":
                 return [{"consumed": input_str[:i], "left": input_str[i:]}]
         if input_str:
             return [{"consumed": input_str, "left": ""}]
         return []
+
     return parser
 
 

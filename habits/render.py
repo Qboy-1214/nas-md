@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-import os
-import time
-from typing import Optional
 
 from nas_md.config import server_cfg
-from nas_md.fs import FS, DIR_HABITS
 from nas_md.habits import (
-    last_week_habits, MOOD_HABIT, MOOD_EMOJIS,
-    emoji_for_habit, Year,
+    last_week_habits,
+    MOOD_HABIT,
+    MOOD_EMOJIS,
+    emoji_for_habit,
 )
 from nas_md.userconfig import UserConfig
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nas_md.fs import FS
 
 
 def render(user_fs: FS, user_id: int) -> str:
@@ -37,6 +39,7 @@ def render(user_fs: FS, user_id: int) -> str:
 
     # Get current day of year (1-based, matching Go)
     import datetime
+
     current_day = datetime.datetime.utcnow().timetuple().tm_yday
 
     # Build HTML
@@ -51,21 +54,23 @@ def render(user_fs: FS, user_id: int) -> str:
         total = len(days)
         pct = int((streak / max(total, 1)) * 100)
         em = emoji_for_habit(user_fs, name)
-        parts.append(f'<div class="habit">')
+        parts.append('<div class="habit">')
         parts.append(f'  <span class="habit-name">{em} {name}</span>')
         parts.append(f'  <span class="habit-streak">{streak}/7 ({pct}%)</span>')
-        parts.append(f'</div>')
+        parts.append("</div>")
 
     # Render mood habit
     if moods:
         parts.append('<div class="moods">')
-        parts.append('  <h3>Mood</h3>')
+        parts.append("  <h3>Mood</h3>")
         for day_num, power in sorted(moods.items()):
             if 0 <= power < len(MOOD_EMOJIS):
                 mood_emoji = MOOD_EMOJIS[power]
                 is_today = " today" if day_num == current_day else ""
-                parts.append(f'  <span class="mood-day{is_today}" data-day="{day_num}">{mood_emoji}</span>')
-        parts.append('</div>')
+                parts.append(
+                    f'  <span class="mood-day{is_today}" data-day="{day_num}">{mood_emoji}</span>'
+                )
+        parts.append("</div>")
 
-    parts.append('</div>')
+    parts.append("</div>")
     return "\n".join(parts)

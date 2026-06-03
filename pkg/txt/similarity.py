@@ -31,5 +31,5 @@ def _similar_char(str1: list[str], str2: list[str]) -> int:
         if pos1 > 0 and pos2 > 0:
             total += _similar_char(str1[:pos1], str2[:pos2])
         if pos1 + max_len < len(str1) and pos2 + max_len < len(str2):
-            total += _similar_char(str1[pos1 + max_len:], str2[pos2 + max_len:])
+            total += _similar_char(str1[pos1 + max_len :], str2[pos2 + max_len :])
     return total

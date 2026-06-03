@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 
-import pytest
 
 from nas_md.i18n import add_emoji, emoji, load_emoji_file
 

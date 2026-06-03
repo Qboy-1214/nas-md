@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from nas_md.fs import FS, DIR_ARCHIVE, DIR_USER_ROOT, display_name, is_checklist_item
+from nas_md.fs import FS, DIR_ARCHIVE, display_name, is_checklist_item
 
 _now = time.time
 
@@ -48,4 +48,7 @@ def done_today(user_fs: FS, user_id: int) -> tuple[list[str], None]:
 def _beginning_of_day() -> int:
     t = time.gmtime(_now())
     # Return milliseconds to match File.ctime
-    return int(time.mktime(time.struct_time((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, 0)))) * 1000
+    return (
+        int(time.mktime(time.struct_time((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, 0))))
+        * 1000
+    )

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 from nas_md.fs import FS, DIR_HABITS, DIR_INSIGHTS, MD_EXT, display_name
 from nas_md.pkg.txt.str import first_word, ucfirst
@@ -101,7 +100,7 @@ def last_week_habits(user_fs: FS, tz_offset: int = 0) -> tuple[dict[str, Year], 
     existing_habits, err = user_fs.files_and_dirs(DIR_HABITS)
     if err:
         return {}, err
-    existing_habits.append(type('F', (), {'name': MOOD_HABIT})())
+    existing_habits.append(type("F", (), {"name": MOOD_HABIT})())
 
     result: dict[str, Year] = {}
     for h in existing_habits:
@@ -199,8 +198,8 @@ def _grapheme_clusters(s: str) -> list[str]:
         ch = s[i]
         # Check for variation selectors and ZWJ sequences
         j = i + 1
-        while j < len(s) and (0xFE00 <= ord(s[j]) <= 0xFE0F or s[j] == '\u200d'):
-            if s[j] == '\u200d' and j + 1 < len(s):
+        while j < len(s) and (0xFE00 <= ord(s[j]) <= 0xFE0F or s[j] == "\u200d"):
+            if s[j] == "\u200d" and j + 1 < len(s):
                 ch += s[j] + s[j + 1]
                 j += 2
             else:

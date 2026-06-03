@@ -6,7 +6,7 @@ import re
 
 from nas_md.pkg.txt.str import norm_new_lines
 
-IMG_PATTERN = r'!\[.*?\]\(.*?\)'
+IMG_PATTERN = r"!\[.*?\]\(.*?\)"
 
 
 def telegram_entities_to_markdown(text: str, message_entities: list) -> str:
@@ -36,7 +36,7 @@ def telegram_entities_to_markdown(text: str, message_entities: list) -> str:
             before, after = "`", "`"
             stop_escape(e)
         elif e.type == "pre":
-            lang = getattr(e, 'language', '') or ""
+            lang = getattr(e, "language", "") or ""
             before, after = f"```{lang}\n", "\n```"
             eat_newlines = True
             stop_escape(e)
@@ -50,7 +50,7 @@ def telegram_entities_to_markdown(text: str, message_entities: list) -> str:
 
         is_open = False
         spaces_to_eat = 0
-        entity_runes = input_runes[e.offset:e.offset + e.length]
+        entity_runes = input_runes[e.offset : e.offset + e.length]
         for offset, c in enumerate(entity_runes):
             if c == "\n" and not eat_newlines and is_open:
                 pos = (e.offset + offset) - spaces_to_eat
@@ -90,9 +90,9 @@ def extract_text_imgs_links(text: str) -> tuple[str, list[str], dict[str, str]]:
     """Extract images and links from text, returning clean text, image IDs, and links."""
     links: dict[str, str] = {}
 
-    img_regexp = re.compile(r'!\[.*?\]\(.*?tg_([^.]+)\..*?\)')
-    link_regexp = re.compile(r'\[.*?\]\((.+?)\)')
-    wiki_link_regexp = re.compile(r'\[\[(.+?)\]\]')
+    img_regexp = re.compile(r"!\[.*?\]\(.*?tg_([^.]+)\..*?\)")
+    link_regexp = re.compile(r"\[.*?\]\((.+?)\)")
+    wiki_link_regexp = re.compile(r"\[\[(.+?)\]\]")
 
     # Eat links from lines containing only links
     text = norm_new_lines(text)
@@ -110,7 +110,9 @@ def extract_text_imgs_links(text: str) -> tuple[str, list[str], dict[str, str]]:
                 if link_label.endswith(".md"):
                     link_label = link_label[:-3]
                 links[link_label] = link_path
-        elif wiki_link_regexp.match(trimmed) and wiki_link_regexp.match(trimmed).group(0) == trimmed:
+        elif (
+            wiki_link_regexp.match(trimmed) and wiki_link_regexp.match(trimmed).group(0) == trimmed
+        ):
             m = wiki_link_regexp.search(line)
             if m:
                 content = m.group(1)
@@ -126,9 +128,11 @@ def extract_text_imgs_links(text: str) -> tuple[str, list[str], dict[str, str]]:
 
     # Process images
     images: list[str] = []
+
     def img_replacer(m):
         images.append(m.group(1))
         return "🖼"
+
     text = img_regexp.sub(img_replacer, text)
 
     # Process inline links
@@ -141,6 +145,7 @@ def extract_text_imgs_links(text: str) -> tuple[str, list[str], dict[str, str]]:
             link_label = link_label[:-3]
         links[link_label] = link_path
         return f"`{link_label}`"
+
     text = link_regexp.sub(link_replacer, text)
     text = wiki_link_regexp.sub(link_replacer, text)
 
