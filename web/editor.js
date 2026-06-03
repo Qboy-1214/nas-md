@@ -7,6 +7,7 @@ let _currentMountId = null;
 let _currentRelPath = null;
 let _originalContent = '';
 let _editorMode = 'ir';  // ir | sv | wysiwyg
+let _cursorRestoreOffset = 0;
 
 // Expose for app.js
 window._getVditor = () => _vditor;
@@ -15,13 +16,40 @@ window._getVditor = () => _vditor;
 window._reinitEditor = (mode) => {
   if (!_vditor) return;
   const content = _vditor.getValue();
+  // Save cursor position as text offset
+  let cursorOffset = 0;
+  try {
+    _vditor.focus();
+    const sel = window.getSelection();
+    if (sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      const preRange = range.cloneRange();
+      // Determine which element to measure offset against based on current mode
+      const currentMode = _vditor.getCurrentMode();
+      let el;
+      if (currentMode === 'sv') {
+        // For SV mode, measure from the textarea value
+        const textarea = _vditor.vditor.sv.element;
+        if (textarea) {
+          cursorOffset = textarea.selectionStart;
+        }
+      } else {
+        // For IR/WYSIWYG, use the contenteditable element
+        el = currentMode === 'wysiwyg' ? _vditor.vditor.wysiwyg.element : _vditor.vditor.ir.element;
+        preRange.selectNodeContents(el);
+        preRange.setEnd(range.startContainer, range.startOffset);
+        cursorOffset = preRange.toString().length;
+      }
+    }
+  } catch (_) {}
   _vditor.destroy();
-  initEditor(content, mode, false);
+  initEditor(content, mode, false, cursorOffset);
 };
 
-function initEditor(content, mode, readonly) {
+function initEditor(content, mode, readonly, cursorOffset) {
   _editorMode = mode || 'ir';
   _originalContent = content || '';
+  _cursorRestoreOffset = cursorOffset || 0;
 
   const vditorEl = document.getElementById('vditor');
   vditorEl.innerHTML = '';
@@ -69,6 +97,11 @@ function initEditor(content, mode, readonly) {
       linkToImgUrl: '',
     },
     after: () => {
+      // Restore cursor position
+      if (_cursorRestoreOffset > 0) {
+        restoreCursorPosition(_cursorRestoreOffset);
+        _cursorRestoreOffset = 0;
+      }
       // 只读模式：禁用编辑区，隐藏工具栏
       if (readonly) {
         const toolbar = vditorEl.querySelector('.vditor-toolbar');
@@ -81,6 +114,50 @@ function initEditor(content, mode, readonly) {
       }
     },
   });
+}
+
+function restoreCursorPosition(offset) {
+  if (!_vditor) return;
+  const vditor = _vditor.vditor;
+  const mode = _vditor.getCurrentMode();
+
+  if (mode === 'sv') {
+    // SV mode: textarea
+    const textarea = vditor.sv.element;
+    if (textarea) {
+      textarea.focus();
+      textarea.setSelectionRange(offset, offset);
+    }
+  } else {
+    // IR or WYSIWYG mode: contenteditable div
+    const el = mode === 'wysiwyg' ? vditor.wysiwyg.element : vditor.ir.element;
+    if (!el) return;
+    el.focus();
+    // Walk text nodes to find the node and offset at the target position
+    let charCount = 0;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+    let node;
+    while ((node = walker.nextNode())) {
+      const nodeLen = node.textContent.length;
+      if (charCount + nodeLen >= offset) {
+        const range = document.createRange();
+        const sel = window.getSelection();
+        range.setStart(node, Math.min(offset - charCount, nodeLen));
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return;
+      }
+      charCount += nodeLen;
+    }
+    // If offset is beyond content length, collapse to end
+    const range = document.createRange();
+    const sel = window.getSelection();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
 }
 
 function getEditorContent() {
