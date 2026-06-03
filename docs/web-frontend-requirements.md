@@ -113,7 +113,8 @@ web/
 ├── editor.js               # Vditor 编辑器封装
 ├── app.css                 # 应用样式（布局、侧边栏、编辑器、Modal）
 └── lib/
-    └── vditor/             # Vditor Markdown 编辑器（vendored）
+    ├── vditor/             # Vditor 编辑器核心（vendored）
+    └── vditor-cdn/         # Vditor 外部资源（lute、i18n、图标、主题）vendored
 ```
 
 ### 各文件职责
@@ -141,9 +142,12 @@ web/
 - `API.search(query)` — 全文搜索
 
 **editor.js**：编辑器封装
-- `initEditor(content, mode)` — 初始化 Vditor
-- `getEditorContent()` / `setEditorMode(mode)` — 内容获取/模式切换
+- `initEditor(content, mode, readonly, cursorOffset)` — 初始化 Vditor（内部）
+- `window._getVditor()` — 暴露 Vditor 实例
+- `window._reinitEditor(mode)` — destroy + reinit 切换模式（Vditor 3.x 无 `setMode()`）
+- `getEditorContent()` — 内容获取
 - `isDirty()` / `markSaved()` — 脏检查
+- 模式切换时自动保存/恢复滚动位置和光标
 
 **app.css**：样式
 - CSS 变量（颜色、间距、阴影、圆角）

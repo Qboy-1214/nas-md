@@ -234,7 +234,9 @@ nas-md/
 │   ├── editor.js         # Vditor 编辑器封装
 │   ├── app.css           # 应用样式（布局 + 组件 + 主题）
 │   └── lib/
-│       └── vditor/       # Vditor Markdown 编辑器（vendored）
+│       ├── vditor/       # Vditor 编辑器核心（vendored）
+│       └── vditor-cdn/   # Vditor 外部资源（lute、i18n、图标、主题）
+│                           # vendored 以防止浏览器 Tracking Prevention 拦截 CDN 请求
 ├── tests/                # 测试套件（272 个测试）
 └── docs/                 # 文档
 ```
