@@ -860,9 +860,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             # For now we allow the mount; frontend enforces the limit
             entry = self.mount_manager.add_mount(dir_path, name=display_name)
             if entry:
-                # Auto-set public for visitor mounts (no auth = visible to all)
-                if not _auth_token or not self._check_auth():
-                    entry.public = True
+                entry.public = True
             if entry is None:
                 return self._send_error("Not a valid directory: " + dir_path, 400)
         else:

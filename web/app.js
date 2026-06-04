@@ -359,7 +359,7 @@ function renderSidebar() {
   const builtinEntries = builtin ? state.treeData[builtin.id]?.['/'] : null;
   if (builtinEntries) {
     const items = builtinEntries
-      .filter(e => !e.name.startsWith('.'))
+      .filter(e => !e.name.startsWith('.') && e.name !== 'mounts.json')
       .sort((a, b) => {
         if (a.isDir && !b.isDir) return -1;
         if (!a.isDir && b.isDir) return 1;
