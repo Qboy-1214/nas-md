@@ -31,10 +31,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateAuthUI();
   await loadMounts();
   await loadRecentFiles();
-  // Auto-open welcome.md if builtin mount exists
+  // Restore last opened file, or fall back to welcome.md
+  const lastPath = localStorage.getItem('nasmd_last_path');
+  const lastMountId = localStorage.getItem('nasmd_last_mount');
+  if (lastPath && lastMountId) {
+    const mount = state.mounts.find(m => m.id === lastMountId);
+    if (mount) {
+      await openFile(lastPath);
+      return;
+    }
+  }
+  // Fallback: open welcome.md from builtin mount
   const builtin = state.mounts.find(m => m.id === 'builtin-storage');
   if (builtin) {
-    // Load builtin tree data silently (shown at root level, not as collapsible mount)
     if (!state.treeData[builtin.id]) {
       await loadTree(builtin.id, '/');
     }
@@ -132,6 +141,8 @@ async function login() {
 
 function logout() {
   localStorage.removeItem('nasmd_token');
+  localStorage.removeItem('nasmd_last_path');
+  localStorage.removeItem('nasmd_last_mount');
   state.token = null;
   state.currentPath = null;
   state.currentMountId = null;
@@ -501,6 +512,8 @@ async function openFile(path) {
     state.currentMountId = mount.id;
     state.showSettings = false;
     state.searchResults = [];
+    localStorage.setItem('nasmd_last_path', path);
+    localStorage.setItem('nasmd_last_mount', mount.id);
 
     $('breadcrumb').textContent = path + (mount.readonly ? ' 🔒' : '');
     $('editor-modes').style.display = mount.readonly ? 'none' : (path.endsWith('.md') ? '' : 'none');
@@ -573,6 +586,8 @@ function hideNewFile() {
 
 // === 导航 ===
 function navigateHome() {
+  localStorage.removeItem('nasmd_last_path');
+  localStorage.removeItem('nasmd_last_mount');
   state.currentPath = null;
   state.currentMountId = null;
   state.showSettings = false;
