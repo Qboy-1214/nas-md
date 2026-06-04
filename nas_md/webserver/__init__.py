@@ -435,6 +435,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_search(qs)
                 return
 
+            # Query API (structured object queries)
+            if path == "/api/query":
+                self._handle_query(qs)
+                return
+
             # Public mounts endpoint (no auth: returns public + visitor mounts)
             if path == "/api/mounts/public":
                 self._handle_public_mounts()
@@ -782,6 +787,37 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             logger.error("Search error: %s", e)
             self._send_json({"error": str(e)}, 500)
 
+    def _handle_query(self, qs: dict):
+        """Handle GET /api/query?type=task|tag|heading"""
+        from nas_md.search import init_db, query_tasks, query_tags, query_headings
+
+        query_type = qs.get("type", [""])[0]
+
+        try:
+            init_db()  # Ensure DB exists
+
+            if query_type == "task":
+                status = qs.get("status", [None])[0]
+                tasks = query_tasks(status=status)
+                self._send_json({"tasks": tasks})
+            elif query_type == "tag":
+                name = qs.get("name", [None])[0]
+                if name:
+                    pages = query_tags(name=name)
+                    self._send_json({"pages": pages})
+                else:
+                    tags = query_tags()
+                    self._send_json({"tags": tags})
+            elif query_type == "heading":
+                page = qs.get("page", [None])[0]
+                headings = query_headings(page_path=page)
+                self._send_json({"headings": headings})
+            else:
+                self._send_error("Invalid query type. Use: task, tag, heading", 400)
+        except Exception as e:
+            logger.error("Query error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
     # --- Search index update ---
 
     def _is_public_mount(self, mount_id: str) -> bool:
@@ -1068,6 +1104,7 @@ def serve(
     logger.info("  API endpoints:")
     logger.info("    GET  /api/health")
     logger.info("    GET  /api/search?q=keyword")
+    logger.info("    GET  /api/query?type=task|tag|heading")
     logger.info("    GET  /api/mounts")
     logger.info("    GET  /api/mounts/public")
     logger.info("    PUT  /api/mounts/{id}")

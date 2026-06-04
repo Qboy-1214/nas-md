@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
 import sqlite3
@@ -25,6 +27,7 @@ def get_connection(db_path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -75,6 +78,51 @@ def init_db(db_path: str | None = None) -> None:
                 VALUES (new.id, new.path, new.title, new.content);
             END;
         """)
+
+        # Add frontmatter column (idempotent — skip if already exists)
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE pages ADD COLUMN frontmatter TEXT")
+
+        # Tags table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY,
+                page_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'body',
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tags_page_id ON tags(page_id)")
+
+        # Tasks table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY,
+                page_id INTEGER NOT NULL,
+                line_number INTEGER,
+                content TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_page_id ON tasks(page_id)")
+
+        # Headings table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS headings (
+                id INTEGER PRIMARY KEY,
+                page_id INTEGER NOT NULL,
+                level INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                line_number INTEGER,
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_headings_page_id ON headings(page_id)")
+
         conn.commit()
         logger.info("Search database initialized at %s", db_path or get_db_path())
     finally:
@@ -82,27 +130,76 @@ def init_db(db_path: str | None = None) -> None:
 
 
 def index_file(path: str, content: str) -> None:
-    """Index or re-index a single file."""
+    """Index or re-index a single file with structured objects."""
+    from nas_md.search.extract import (
+        extract_frontmatter,
+        extract_headings,
+        extract_tags,
+        extract_tasks,
+    )
+
     conn = get_connection()
     try:
-        # Extract title from first heading or filename
-        title = _extract_title(content, path)
+        # Extract structured objects
+        fm = extract_frontmatter(content)
+        fm_json = json.dumps(fm, ensure_ascii=False) if fm else None
+
+        # Extract title: frontmatter > first heading > filename
+        title = None
+        if fm and "title" in fm:
+            title = str(fm["title"])
+        if not title:
+            title = _extract_title(content, path)
+
         filename = os.path.basename(path)
         content_hash = str(hash(content))
         now = int(os.path.getmtime(path) * 1000) if os.path.exists(path) else 0
 
+        # UPSERT page
         conn.execute(
             """
-            INSERT INTO pages (path, filename, title, content, content_hash, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO pages (path, filename, title, content, content_hash, updated_at, frontmatter)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 title=excluded.title,
                 content=excluded.content,
                 content_hash=excluded.content_hash,
-                updated_at=excluded.updated_at
+                updated_at=excluded.updated_at,
+                frontmatter=excluded.frontmatter
         """,
-            (path, filename, title, content, content_hash, now),
+            (path, filename, title, content, content_hash, now, fm_json),
         )
+
+        # Get page_id
+        row = conn.execute("SELECT id FROM pages WHERE path = ?", (path,)).fetchone()
+        page_id = row[0]
+
+        # Clear old objects for this page
+        conn.execute("DELETE FROM tags WHERE page_id = ?", (page_id,))
+        conn.execute("DELETE FROM tasks WHERE page_id = ?", (page_id,))
+        conn.execute("DELETE FROM headings WHERE page_id = ?", (page_id,))
+
+        # Insert headings
+        for h in extract_headings(content):
+            conn.execute(
+                "INSERT INTO headings (page_id, level, text, line_number) VALUES (?, ?, ?, ?)",
+                (page_id, h["level"], h["text"], h["line_number"]),
+            )
+
+        # Insert tags
+        for t in extract_tags(content, fm):
+            conn.execute(
+                "INSERT INTO tags (page_id, name, source) VALUES (?, ?, ?)",
+                (page_id, t["name"], t["source"]),
+            )
+
+        # Insert tasks
+        for t in extract_tasks(content):
+            conn.execute(
+                "INSERT INTO tasks (page_id, line_number, content, done) VALUES (?, ?, ?, ?)",
+                (page_id, t["line_number"], t["content"], t["done"]),
+            )
+
         conn.commit()
     finally:
         conn.close()
@@ -159,6 +256,13 @@ def search(query: str, limit: int = 20) -> list[dict]:
 
 def rebuild_index(directories: list[str]) -> int:
     """Rebuild the entire search index from scratch."""
+    from nas_md.search.extract import (
+        extract_frontmatter,
+        extract_headings,
+        extract_tags,
+        extract_tasks,
+    )
+
     conn = get_connection()
     try:
         # Clear existing index
@@ -177,18 +281,52 @@ def rebuild_index(directories: list[str]) -> int:
                 try:
                     content = md_file.read_text(encoding="utf-8", errors="replace")
                     rel_path = str(md_file.relative_to(dir_path))
-                    title = _extract_title(content, rel_path)
                     filename = md_file.name
                     content_hash = str(hash(content))
                     updated_at = int(md_file.stat().st_mtime * 1000)
 
+                    # Extract frontmatter
+                    fm = extract_frontmatter(content)
+                    fm_json = json.dumps(fm, ensure_ascii=False) if fm else None
+
+                    # Extract title
+                    title = None
+                    if fm and "title" in fm:
+                        title = str(fm["title"])
+                    if not title:
+                        title = _extract_title(content, rel_path)
+
                     conn.execute(
                         """
-                        INSERT INTO pages (path, filename, title, content, content_hash, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO pages (path, filename, title, content, content_hash, updated_at, frontmatter)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                        (rel_path, filename, title, content, content_hash, updated_at),
+                        (rel_path, filename, title, content, content_hash, updated_at, fm_json),
                     )
+
+                    # Get page_id
+                    row = conn.execute(
+                        "SELECT id FROM pages WHERE path = ?", (rel_path,)
+                    ).fetchone()
+                    page_id = row[0]
+
+                    # Insert objects
+                    for h in extract_headings(content):
+                        conn.execute(
+                            "INSERT INTO headings (page_id, level, text, line_number) VALUES (?, ?, ?, ?)",
+                            (page_id, h["level"], h["text"], h["line_number"]),
+                        )
+                    for t in extract_tags(content, fm):
+                        conn.execute(
+                            "INSERT INTO tags (page_id, name, source) VALUES (?, ?, ?)",
+                            (page_id, t["name"], t["source"]),
+                        )
+                    for t in extract_tasks(content):
+                        conn.execute(
+                            "INSERT INTO tasks (page_id, line_number, content, done) VALUES (?, ?, ?, ?)",
+                            (page_id, t["line_number"], t["content"], t["done"]),
+                        )
+
                     count += 1
                 except Exception as e:
                     logger.warning("Failed to index %s: %s", md_file, e)
@@ -245,5 +383,93 @@ def get_stats() -> dict:
             "file_count": count,
             "last_rebuild": meta.get("last_rebuild", ""),
         }
+    finally:
+        conn.close()
+
+
+# --- Structured query functions ---
+
+
+def query_tasks(status: str | None = None, limit: int = 100) -> list[dict]:
+    """Query task items. status: 'pending', 'done', or None for all."""
+    conn = get_connection()
+    try:
+        sql = """
+            SELECT t.content, t.done, t.line_number, p.path, p.title
+            FROM tasks t JOIN pages p ON t.page_id = p.id
+        """
+        params: list = []
+        if status == "pending":
+            sql += " WHERE t.done = 0"
+        elif status == "done":
+            sql += " WHERE t.done = 1"
+        sql += " ORDER BY p.path, t.line_number LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(sql, params).fetchall()
+        return [
+            {
+                "content": r[0],
+                "done": bool(r[1]),
+                "line": r[2],
+                "page": r[3],
+                "title": r[4] or r[3],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def query_tags(name: str | None = None) -> list[dict]:
+    """Query tags. If name given, return pages with that tag. Otherwise return all tags with counts."""
+    conn = get_connection()
+    try:
+        if name:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT p.path, p.title
+                FROM tags t JOIN pages p ON t.page_id = p.id
+                WHERE t.name = ?
+                ORDER BY p.path
+            """,
+                (name,),
+            ).fetchall()
+            return [{"path": r[0], "title": r[1] or r[0]} for r in rows]
+        else:
+            rows = conn.execute("""
+                SELECT name, COUNT(DISTINCT page_id) as cnt
+                FROM tags
+                GROUP BY name
+                ORDER BY cnt DESC, name
+            """).fetchall()
+            return [{"name": r[0], "count": r[1]} for r in rows]
+    finally:
+        conn.close()
+
+
+def query_headings(page_path: str | None = None) -> list[dict]:
+    """Query headings. If page_path given, return headings for that page."""
+    conn = get_connection()
+    try:
+        if page_path:
+            rows = conn.execute(
+                """
+                SELECT h.level, h.text, h.line_number
+                FROM headings h JOIN pages p ON h.page_id = p.id
+                WHERE p.path = ?
+                ORDER BY h.line_number
+            """,
+                (page_path,),
+            ).fetchall()
+            return [{"level": r[0], "text": r[1], "line": r[2]} for r in rows]
+        else:
+            rows = conn.execute("""
+                SELECT h.level, h.text, h.line_number, p.path
+                FROM headings h JOIN pages p ON h.page_id = p.id
+                ORDER BY p.path, h.line_number
+                LIMIT 500
+            """).fetchall()
+            return [{"level": r[0], "text": r[1], "line": r[2], "page": r[3]} for r in rows]
     finally:
         conn.close()

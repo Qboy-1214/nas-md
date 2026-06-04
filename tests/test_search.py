@@ -1,17 +1,22 @@
 """Tests for search module - SQLite FTS5 full-text search."""
 
+import json
 import os
 import tempfile
+
 import pytest
 
 from nas_md.search import (
-    init_db,
+    get_connection,
+    get_stats,
     index_file,
+    init_db,
+    query_headings,
+    query_tags,
+    query_tasks,
+    rebuild_index,
     remove_file,
     search,
-    rebuild_index,
-    get_stats,
-    get_connection,
 )
 
 
@@ -59,6 +64,9 @@ class TestSearchInit:
         assert "pages" in table_names
         assert "pages_fts" in table_names
         assert "index_meta" in table_names
+        assert "tags" in table_names
+        assert "tasks" in table_names
+        assert "headings" in table_names
         conn.close()
 
     def test_init_db_idempotent(self, search_db):
@@ -174,3 +182,84 @@ class TestSearchWithChinese:
         index_file("/mixed.md", "# 混合内容\nPython 和 Godot 都是好工具。")
         results = search("Python", limit=5)
         assert len(results) >= 1
+
+
+class TestObjectIndexing:
+    def test_index_file_with_frontmatter(self, search_db):
+        content = "---\ntitle: My Note\ntags: [project, active]\n---\n# My Note\nSome text."
+        index_file("/note.md", content)
+        conn = get_connection(search_db)
+        row = conn.execute("SELECT frontmatter FROM pages WHERE path = '/note.md'").fetchone()
+        conn.close()
+        assert row[0] is not None
+        fm = json.loads(row[0])
+        assert fm["title"] == "My Note"
+
+    def test_index_file_extracts_headings(self, search_db):
+        content = "# Title\n## Section 1\n### Sub\n## Section 2"
+        index_file("/doc.md", content)
+        headings = query_headings("/doc.md")
+        assert len(headings) == 4
+        assert headings[0]["level"] == 1
+        assert headings[0]["text"] == "Title"
+
+    def test_index_file_extracts_tags(self, search_db):
+        content = "---\ntags: [python]\n---\n# Note\nWorking on #project"
+        index_file("/tagged.md", content)
+        tags = query_tags()
+        names = [t["name"] for t in tags]
+        assert "python" in names
+        assert "project" in names
+
+    def test_index_file_extracts_tasks(self, search_db):
+        content = "# Todo\n- [ ] Buy milk\n- [x] Write code\n- [ ] Review PR"
+        index_file("/todo.md", content)
+        tasks = query_tasks()
+        assert len(tasks) == 3
+        pending = query_tasks(status="pending")
+        assert len(pending) == 2
+        done = query_tasks(status="done")
+        assert len(done) == 1
+
+    def test_remove_file_cascades(self, search_db):
+        content = "# Title\n- [ ] Task\n#tag"
+        index_file("/cascade.md", content)
+        remove_file("/cascade.md")
+        assert query_headings("/cascade.md") == []
+        assert query_tasks() == []
+
+    def test_reindex_updates_objects(self, search_db):
+        index_file("/update.md", "# Old Title\n- [ ] Old task")
+        index_file("/update.md", "# New Title\n- [x] New task")
+        headings = query_headings("/update.md")
+        assert len(headings) == 1
+        assert headings[0]["text"] == "New Title"
+        tasks = query_tasks()
+        assert len(tasks) == 1
+        assert tasks[0]["done"] is True
+
+    def test_query_tags_with_name(self, search_db):
+        index_file("/a.md", "# A\n#project content")
+        index_file("/b.md", "# B\n#project other\n#personal")
+        result = query_tags(name="project")
+        assert len(result) == 2
+
+    def test_title_from_frontmatter(self, search_db):
+        content = "---\ntitle: Custom Title\n---\n# Different Heading"
+        index_file("/fmtitle.md", content)
+        results = search("Custom", limit=5)
+        assert len(results) >= 1
+        assert results[0]["title"] == "Custom Title"
+
+    def test_query_headings_all(self, search_db):
+        index_file("/a.md", "# Page A\n## Section")
+        index_file("/b.md", "# Page B")
+        headings = query_headings()
+        assert len(headings) == 3
+
+    def test_query_tags_count(self, search_db):
+        index_file("/a.md", "# A\n#project\n#python")
+        index_file("/b.md", "# B\n#project")
+        tags = query_tags()
+        project_tag = next(t for t in tags if t["name"] == "project")
+        assert project_tag["count"] == 2
