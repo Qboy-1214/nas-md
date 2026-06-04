@@ -946,30 +946,10 @@ window.addEventListener('offline', () => {
   state.syncStatus = 'offline';
   updateSyncIndicator();
 });
-// --- Recent search history ---
-function _getRecentSearches() {
-  try { return JSON.parse(localStorage.getItem('nasmd_recent_searches') || '[]'); } catch { return []; }
-}
-function _saveRecentSearch(query) {
-  const list = _getRecentSearches().filter(q => q !== query);
-  list.unshift(query);
-  localStorage.setItem('nasmd_recent_searches', JSON.stringify(list.slice(0, 5)));
-}
-function _showRecentSearches() {
-  const query = $('search-input').value.trim();
-  if (query) return; // only show when empty
-  const list = _getRecentSearches();
-  const resultsEl = $('search-results');
-  if (list.length === 0) { resultsEl.innerHTML = ''; return; }
-  resultsEl.innerHTML = '<div style="padding:4px 8px;color:var(--col-tx-muted);font-size:12px">最近搜索</div>' +
-    list.map(q => `<div class="search-result-item" onclick="$('search-input').value='${q.replace(/'/g, "\\'")}';doSearch()">${q}</div>`).join('');
-}
-
 async function doSearch() {
   const query = $('search-input').value.trim();
   const resultsEl = $('search-results');
-  if (!query) { _showRecentSearches(); return; }
-  _saveRecentSearch(query);
+  if (!query) { resultsEl.innerHTML = ''; return; }
   try {
     state.searchResults = await API.search(query);
     if (state.searchResults.length === 0) {
