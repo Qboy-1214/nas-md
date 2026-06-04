@@ -355,9 +355,11 @@ async function toggleDir(mountId, dirPath) {
 }
 
 async function loadTree(mountId, path) {
+  if (!state.treeData[mountId]) state.treeData[mountId] = {};
+  // Skip if already loaded
+  if (state.treeData[mountId][path]) return;
   try {
     const tree = await API.getTree(mountId, path);
-    if (!state.treeData[mountId]) state.treeData[mountId] = {};
     // Store the root entry; renderEntries will use .children
     state.treeData[mountId][path] = tree;
   } catch (e) {
@@ -705,8 +707,10 @@ async function loadRecentFiles() {
   const allFiles = [];
   for (const mount of state.mounts) {
     try {
-      const entries = await API.getTree(mount.id, '/');
-      collectFiles(entries, mount.id, allFiles);
+      // Ensure tree data is loaded (may already be cached)
+      await loadTree(mount.id, '/');
+      const root = state.treeData[mount.id]?.['/'];
+      if (root) collectFiles(root, mount.id, allFiles);
     } catch {}
   }
   allFiles.sort((a, b) => b.modTime - a.modTime);
@@ -715,10 +719,15 @@ async function loadRecentFiles() {
 }
 
 function collectFiles(entries, mountId, result) {
-  for (const e of entries) {
+  if (!entries) return;
+  // entries is a single tree root from tree-recursive; walk its children
+  const stack = [...(entries.children || [])];
+  while (stack.length > 0) {
+    const e = stack.pop();
     if (!e.isDir && e.name.endsWith('.md')) {
       result.push({ name: e.name, path: e.path, modTime: e.modTime, mountId });
     }
+    if (e.children) stack.push(...e.children);
   }
 }
 
