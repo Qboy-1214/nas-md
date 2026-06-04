@@ -30,8 +30,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   updateAuthUI();
   await loadMounts();
-  // Re-mount directories from localStorage (survives page refresh)
-  await restoreSavedMounts();
   await loadRecentFiles();
   // Auto-open welcome.md if builtin mount exists
   const builtin = state.mounts.find(m => m.id === 'builtin-storage');
@@ -170,39 +168,6 @@ async function loadMounts() {
   }
 }
 
-// Save mount paths to localStorage so they survive page refresh
-function saveMountsToStorage() {
-  const paths = state.mounts
-    .filter(m => m.id !== 'builtin-storage')
-    .map(m => ({ path: m.path, name: m.name }));
-  localStorage.setItem('nasmd_mounts', JSON.stringify(paths));
-}
-
-// Re-mount directories saved in localStorage (call after loadMounts)
-async function restoreSavedMounts() {
-  const saved = localStorage.getItem('nasmd_mounts');
-  if (!saved) return;
-  try {
-    const paths = JSON.parse(saved);
-    if (!Array.isArray(paths) || paths.length === 0) return;
-    for (const { path, name } of paths) {
-      // Skip if already mounted (path match)
-      if (state.mounts.some(m => m.path === path)) continue;
-      try {
-        const resp = await API.addMount(path, name);
-        if (resp && resp.id) {
-          state.mounts.push(resp);
-        }
-      } catch (e) {
-        console.warn('Failed to re-mount:', path, e);
-      }
-    }
-    renderSidebar();
-  } catch (e) {
-    console.warn('Failed to restore saved mounts:', e);
-  }
-}
-
 // === 目录选择 ===
 
 function chooseDirectory() {
@@ -280,7 +245,6 @@ async function openDirectory() {
       $('new-dir-name').value = '';
       $('new-dir-path').placeholder = '输入目录路径，或点击浏览选择';
       await loadMounts();
-      saveMountsToStorage();
     } else {
       const errMsg = resp?.error || '';
       if (errMsg.includes('Not a valid directory')) {
@@ -375,7 +339,6 @@ async function removeMount(mountId) {
       showPage('welcome');
     }
     renderSidebar();
-    saveMountsToStorage();
     showToast('已卸载');
   } catch (e) {
     // Network error: still clean up frontend

@@ -99,6 +99,10 @@ class MountEntry:
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "path": self.path, "public": self.public, "readonly": self.readonly}
 
+    @staticmethod
+    def from_dict(d: dict) -> "MountEntry":
+        return MountEntry(d["id"], d["name"], d["path"], d.get("public", False), d.get("readonly", False))
+
 
 class DirEntry:
     """A file or directory entry in a mount point tree."""
@@ -124,6 +128,34 @@ class DirEntry:
         if self.children:
             d["children"] = [c.to_dict() for c in self.children]
         return d
+
+
+_MOUNTS_FILE = ""  # Set by serve() to storage_dir/mounts.json
+
+
+def _load_saved_mounts() -> list[dict]:
+    """Load dynamic mount entries from disk."""
+    if not _MOUNTS_FILE or not os.path.isfile(_MOUNTS_FILE):
+        return []
+    try:
+        with open(_MOUNTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_mounts_to_disk(mounts: list[MountEntry]) -> None:
+    """Persist dynamic mount entries to disk (excluding builtin)."""
+    if not _MOUNTS_FILE:
+        return
+    data = [m.to_dict() for m in mounts if m.id != "builtin-storage"]
+    try:
+        tmp = _MOUNTS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _MOUNTS_FILE)
+    except OSError as e:
+        logger.warning(f"Failed to save mounts: {e}")
 
 
 class MountManager:
@@ -162,6 +194,7 @@ class MountManager:
         display_name = name or (os.path.basename(path) or path)
         entry = MountEntry(f"mount-{len(self.mounts)}", display_name, path)
         self.mounts.append(entry)
+        _save_mounts_to_disk(self.mounts)
         return entry
 
     def find_mount(self, mount_id: str) -> MountEntry | None:
@@ -868,6 +901,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if entry is None:
             return self._send_error("Mount not found", 404)
 
+        _save_mounts_to_disk(self.mount_manager.mounts)
         self._send_json(entry.to_dict())
 
     def _handle_delete_mount(self, mount_id: str):
@@ -888,6 +922,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         self.mount_manager.mounts = [
             m for m in self.mount_manager.mounts if m.id != mount_id
         ]
+        _save_mounts_to_disk(self.mount_manager.mounts)
 
         # Remove from search dirs
         if self.search_dirs and mount.path in self.search_dirs:
@@ -956,8 +991,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
 def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str = "0.0.0.0", web_auth_token: str = "", storage_dir: str = ""):
     """Start the HTTP server with mount points and optional static file serving."""
-    global _auth_token
+    global _auth_token, _MOUNTS_FILE
     _auth_token = web_auth_token
+    _MOUNTS_FILE = os.path.join(storage_dir, "mounts.json") if storage_dir else ""
 
     mgr = MountManager(mount_dirs)
 
@@ -966,6 +1002,22 @@ def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str
         builtin = MountEntry("builtin-storage", "nas-md", storage_dir, public=True, readonly=True)
         mgr.mounts.insert(0, builtin)
 
+    # Restore dynamic mounts from disk (survives restart)
+    saved = _load_saved_mounts()
+    if saved:
+        existing_paths = {os.path.normpath(m.path) for m in mgr.mounts}
+        for entry_dict in saved:
+            try:
+                entry = MountEntry.from_dict(entry_dict)
+                if os.path.isdir(entry.path) and os.path.normpath(entry.path) not in existing_paths:
+                    mgr.mounts.append(entry)
+                    existing_paths.add(os.path.normpath(entry.path))
+                    logger.info(f"Restored mount: {entry.name} ({entry.id})={entry.path}")
+                elif not os.path.isdir(entry.path):
+                    logger.warning(f"Skipping restored mount, directory missing: {entry.path}")
+            except (KeyError, TypeError) as e:
+                logger.warning(f"Skipping invalid mount entry: {e}")
+
     MountHTTPHandler.mount_manager = mgr
     MountHTTPHandler.web_root = web_root
 
@@ -973,6 +1025,10 @@ def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str
     all_dirs = list(mount_dirs)
     if storage_dir and os.path.isdir(storage_dir) and storage_dir not in all_dirs:
         all_dirs.insert(0, storage_dir)
+    # Also add restored mount paths to search dirs
+    for m in mgr.mounts:
+        if m.id != "builtin-storage" and os.path.isdir(m.path) and m.path not in all_dirs:
+            all_dirs.append(m.path)
     MountHTTPHandler.search_dirs = all_dirs
 
     # Initialize search index
