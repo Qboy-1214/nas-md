@@ -88,6 +88,10 @@ function initEditor(content, mode, readonly, cursorOffset) {
     cache: { enable: false },
     upload: { url: '', linkToImgUrl: '' },
     after: () => {
+      // Hide Vditor's preview toolbar (Desktop/Tablet/Mobile buttons)
+      const style = document.createElement('style');
+      style.textContent = '.vditor-preview__action { display: none !important; }';
+      vditorEl.appendChild(style);
       if (_editorMode === 'sv') setupSVSync();
       if (_cursorRestoreOffset > 0) {
         setTimeout(() => { restoreCursorPosition(_cursorRestoreOffset); _cursorRestoreOffset = 0; }, 50);
