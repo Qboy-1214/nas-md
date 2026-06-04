@@ -455,6 +455,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_graph()
                 return
 
+            # Tags API
+            if path == "/api/tags":
+                self._handle_tags(qs)
+                return
+
+            # Orphans API
+            if path == "/api/orphans":
+                self._handle_orphans()
+                return
+
             # Sync API
             if path == "/api/sync" and self.command == "POST":
                 self._handle_sync(mount_id, qs)
@@ -906,6 +916,43 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self._send_json(data)
         except Exception as e:
             logger.error("Graph error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_tags(self, qs: dict):
+        """Handle GET /api/tags[?name=xxx] — list all tags or pages for a specific tag."""
+        from nas_md.search import init_db, query_tags
+
+        try:
+            init_db()
+            name = qs.get("name", [None])[0] if qs else None
+            result = query_tags(name)
+            self._send_json(result)
+        except Exception as e:
+            logger.error("Tags error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_orphans(self):
+        """Handle GET /api/orphans — pages with no incoming or outgoing links."""
+        from nas_md.search import init_db, get_connection
+
+        try:
+            init_db()
+            conn = get_connection()
+            try:
+                # Pages that have no links pointing to them and link to nothing
+                rows = conn.execute("""
+                    SELECT p.path, p.title
+                    FROM pages p
+                    WHERE p.id NOT IN (SELECT target_page_id FROM links WHERE target_page_id IS NOT NULL)
+                      AND p.id NOT IN (SELECT source_page_id FROM links)
+                    ORDER BY p.path
+                """).fetchall()
+                result = [{"path": r[0], "title": r[1] or r[0]} for r in rows]
+                self._send_json(result)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error("Orphans error: %s", e)
             self._send_json({"error": str(e)}, 500)
 
     def _handle_sync(self, mount_id: str, qs: dict):

@@ -119,6 +119,11 @@ const API = {
     return r ? r.json() : [];
   },
 
+  async searchPages(query) {
+    const r = await this.request(`/api/search?q=${encodeURIComponent(query)}&limit=15`);
+    return r ? r.json() : [];
+  },
+
   async getBacklinks(page) {
     const r = await this.request(`/api/backlinks?page=${encodeURIComponent(page)}`);
     return r ? r.json() : { backlinks: [] };
@@ -132,6 +137,11 @@ const API = {
   async getGraph() {
     const r = await this.request('/api/graph');
     return r ? r.json() : { nodes: [], edges: [] };
+  },
+
+  async getOrphans() {
+    const r = await this.request('/api/orphans');
+    return r ? r.json() : [];
   },
 
   async sync(mountId, files) {

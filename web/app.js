@@ -867,6 +867,22 @@ async function showDashboard() {
           <span class="dash-recent-time">${p.path}</span>
         </div>`
       ).join('');
+
+    // Load orphan pages
+    try {
+      const orphans = await API.getOrphans();
+      const orphansEl = $('dash-orphans');
+      if (orphansEl) {
+        orphansEl.innerHTML = (!orphans || orphans.length === 0)
+          ? '<p style="color:#999">无孤立页面</p>'
+          : orphans.map(p =>
+            `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
+              <span class="dash-recent-title">${p.title || p.path}</span>
+              <span class="dash-recent-time">孤立页面</span>
+            </div>`
+          ).join('');
+      }
+    } catch (_) {}
   } catch (e) {
     console.error('Dashboard failed:', e);
   }

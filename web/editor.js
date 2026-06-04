@@ -139,6 +139,53 @@ function initEditor(content, mode, readonly) {
       hljs: { enable: true, style: 'github', lineNumber: false },
       theme: { current: 'light', path: '/lib/vditor-cdn/dist/css/content-theme' },
     },
+    hint: {
+      extend: [
+        {
+          key: '[',
+          hint(_value) {
+            // Triggered after typing [[ — search for pages
+            return new Promise((resolve) => {
+              // Get current line text to find the [[ prefix
+              const mode = _vditor.getCurrentMode();
+              let searchQuery = '';
+              if (mode === 'sv') {
+                const ta = _vditor.vditor.sv.element;
+                const pos = ta.selectionStart;
+                const text = ta.value.substring(0, pos);
+                const match = text.match(/\[\[([^\]]*?)$/);
+                if (match) searchQuery = match[1];
+              } else {
+                const sel = window.getSelection();
+                if (sel.rangeCount > 0) {
+                  const range = sel.getRangeAt(0);
+                  const node = range.startContainer;
+                  if (node.nodeType === Node.TEXT_NODE) {
+                    const text = node.textContent.substring(0, range.startOffset);
+                    const match = text.match(/\[\[([^\]]*?)$/);
+                    if (match) searchQuery = match[1];
+                  }
+                }
+              }
+              if (!searchQuery && searchQuery !== '') {
+                resolve([]);
+                return;
+              }
+              API.searchPages(searchQuery).then(results => {
+                if (!results || results.length === 0) {
+                  resolve([]);
+                  return;
+                }
+                resolve(results.map(r => ({
+                  value: `[[${r.title || r.path}]]`,
+                  html: `<span style="color:var(--text-primary)">${r.title || r.path}</span> <span style="color:var(--text-secondary);font-size:0.85em">${r.path || ''}</span>`,
+                })));
+              }).catch(() => resolve([]));
+            });
+          },
+        },
+      ],
+    },
     cache: { enable: false },
     upload: { url: '', linkToImgUrl: '' },
     after: () => {
