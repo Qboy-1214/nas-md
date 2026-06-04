@@ -116,8 +116,16 @@ function showToast(msg) {
   const el = $('toast');
   el.textContent = msg;
   el.style.display = '';
+  // Force reflow
+  void el.offsetHeight;
+  el.classList.add('show');
   if (state.toastTimer) clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => el.style.display = 'none', 2500);
+  state.toastTimer = setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => {
+      if (!el.classList.contains('show')) el.style.display = 'none';
+    }, 200);
+  }, 2500);
 }
 
 // === 挂载目录 ===
@@ -324,6 +332,11 @@ function renderSidebar() {
   const tree = $('file-tree');
   tree.innerHTML = '';
 
+  // SVG icon templates
+  const svgFolder = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+  const svgFile = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+  const svgLock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+
   // Built-in files shown at root level (not nested under a mount point)
   const builtin = state.mounts.find(m => m.id === 'builtin-storage');
   const builtinEntries = builtin ? state.treeData[builtin.id]?.['/'] : null;
@@ -338,12 +351,12 @@ function renderSidebar() {
     for (const e of items) {
       const fullPath = e.path;
       const isActive = state.currentPath === fullPath;
-      const icon = e.isDir ? '📁' : (e.name.endsWith('.md') ? '📝' : '📄');
+      const icon = e.isDir ? svgFolder : svgFile;
       const cls = `tree-item builtin-file ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
       tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}','${builtin.id}')">
         <span class="tree-icon">${icon}</span>
         <span>${e.name}</span>
-        <span class="mount-builtin-badge" title="内置只读">🔒</span>
+        <span class="mount-builtin-badge" title="内置只读">${svgLock}</span>
       </div>`;
     }
   }
@@ -352,26 +365,27 @@ function renderSidebar() {
   const regularMounts = state.mounts.filter(m => m.id !== 'builtin-storage');
   for (const mount of regularMounts) {
     const isExpanded = state.expandedMounts.includes(mount.id);
+    const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
 
     let html = `<div class="mount-group">`;
     html += `<div class="mount-name-row">`;
     html += `<div class="mount-name" onclick="toggleMount('${mount.id}')">`;
-    html += `<span class="mount-icon">${isExpanded ? '▼' : '▶'}</span>`;
+    html += `<span class="mount-icon">${chevron}</span>`;
     html += `<span>${mount.name}</span>`;
-    if (mount.public) html += ` <span class="mount-badge" title="公开目录">🌐</span>`;
+    if (mount.public) html += ` <span class="public-badge">公开</span>`;
     html += `</div>`;
     if (state.isAdmin) {
-      html += `<span class="mount-path-hint" title="${mount.path}">📁 ${mount.path}</span>`;
-      html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载">✕</button>`;
+      html += `<span class="mount-path-hint" title="${mount.path}">${svgFolder} ${mount.path}</span>`;
+      html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
     }
     html += `</div>`;
 
     if (isExpanded) {
-      const tree = state.treeData[mount.id]?.['/'];
-      if (tree) {
-        html += renderEntries(tree.children || [], mount.id, '/');
+      const treeData = state.treeData[mount.id]?.['/'];
+      if (treeData) {
+        html += renderEntries(treeData.children || [], mount.id, '/');
       } else {
-        html += '<div style="padding:8px 12px;color:var(--col-tx-muted)">加载中...</div>';
+        html += '<div class="tree-loading">加载中...</div>';
         loadTree(mount.id, '/').then(() => renderSidebar());
       }
     }
@@ -381,7 +395,7 @@ function renderSidebar() {
   }
 
   if (regularMounts.length === 0 && !builtinEntries) {
-    tree.innerHTML = '<div style="padding:12px;color:var(--col-tx-muted)">暂无挂载目录</div>';
+    tree.innerHTML = '<div class="tree-loading">暂无挂载目录</div>';
   }
 }
 
@@ -402,20 +416,25 @@ function renderEntries(entries, mountId, parentPath) {
       return a.name.localeCompare(b.name);
     });
 
+  // SVG icon templates
+  const svgFolder = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+  const svgFile = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+
   return items.map(e => {
     const fullPath = e.path;
     const isActive = state.currentPath === fullPath;
-    const icon = e.isDir ? '📁' : (e.name.endsWith('.md') ? '📝' : '📄');
+    const icon = e.isDir ? svgFolder : svgFile;
     const cls = `tree-item ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
 
     if (e.isDir) {
       const dirKey = `${mountId}:${fullPath}`;
       const isDirExpanded = state.expandedMounts.includes(dirKey);
       const subEntries = state.treeData[mountId]?.[fullPath];
+      const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isDirExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
 
       let html = `<div>`;
       html += `<div class="${cls}" onclick="toggleDir('${mountId}','${fullPath}')">`;
-      html += `<span class="tree-icon">${isDirExpanded ? '▼' : '▶'}</span>`;
+      html += `<span class="tree-icon">${chevron}</span>`;
       html += `<span class="tree-folder">${e.name}</span>`;
       html += `</div>`;
 
@@ -423,7 +442,7 @@ function renderEntries(entries, mountId, parentPath) {
         if (subEntries) {
           html += `<div class="tree-sub">${renderEntries(subEntries.children || [], mountId, fullPath)}</div>`;
         } else {
-          html += '<div style="padding:8px 12px;color:var(--col-tx-muted)">加载中...</div>';
+          html += '<div class="tree-loading">加载中...</div>';
           loadTree(mountId, fullPath).then(() => renderSidebar());
         }
       }
@@ -489,7 +508,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
     localStorage.setItem('nasmd_last_path', path);
     localStorage.setItem('nasmd_last_mount', mount.id);
 
-    $('breadcrumb').textContent = path + (mount.readonly ? ' 🔒' : '');
+    $('breadcrumb').textContent = path + (mount.readonly ? ' (只读)' : '');
     $('editor-modes').style.display = mount.readonly ? 'none' : (path.endsWith('.md') ? '' : 'none');
     $('btn-save').style.display = mount.readonly ? 'none' : '';
     showPage('editor');
@@ -557,9 +576,41 @@ function startDirtyCheck() {
   if (window._dirtyTimer) clearInterval(window._dirtyTimer);
   window._dirtyTimer = setInterval(() => {
     if (window._vditor) {
-      state.dirty = (window._vditor.getValue() !== window._originalContent);
+      const isDirty = (window._vditor.getValue() !== window._originalContent);
+      if (isDirty !== state.dirty) {
+        state.dirty = isDirty;
+        const btn = $('btn-save');
+        if (btn) btn.classList.toggle('dirty', isDirty);
+      }
     }
   }, 500);
+}
+
+function markDirty() {
+  state.dirty = true;
+  const btn = $('btn-save');
+  if (btn) btn.classList.add('dirty');
+}
+
+function markClean() {
+  state.dirty = false;
+  const btn = $('btn-save');
+  if (btn) btn.classList.remove('dirty');
+}
+
+// === 侧边栏折叠（移动端） ===
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+}
+
+// === 暗色模式 ===
+if (localStorage.getItem('nasmd_dark') === '1') {
+  document.documentElement.classList.add('dark');
+}
+
+function toggleDarkMode() {
+  const isDark = document.documentElement.classList.toggle('dark');
+  localStorage.setItem('nasmd_dark', isDark ? '1' : '0');
 }
 
 async function loadBacklinks(page) {
@@ -607,7 +658,7 @@ async function saveFile() {
   if (!navigator.onLine) {
     // Offline: save to localStorage
     saveToLocalStorage(state.currentPath, content);
-    state.dirty = false;
+    markClean();
     showToast('已离线保存，恢复连接后自动同步');
     return;
   }
@@ -615,7 +666,7 @@ async function saveFile() {
   try {
     await API.putFile(state.currentMountId, state.currentPath, content);
     window._originalContent = content;
-    state.dirty = false;
+    markClean();
     clearLocalStorage(state.currentPath);
     showToast('已保存');
     // Trigger sync after save
@@ -647,10 +698,23 @@ function confirmNewFile() {
   }).catch(() => showToast('创建失败'));
 }
 
+function showNewFile() {
+  const modal = $('new-file-modal');
+  modal.style.display = '';
+  // Force reflow then add active class to trigger animation
+  requestAnimationFrame(() => modal.classList.add('active'));
+  $('new-file-name').focus();
+}
+
 function hideNewFile() {
   const modal = $('new-file-modal');
-  modal.style.display = 'none';
   modal.classList.remove('active');
+  // Wait for transition to finish before hiding
+  setTimeout(() => {
+    if (!modal.classList.contains('active')) {
+      modal.style.display = 'none';
+    }
+  }, 200);
   $('new-file-name').value = '';
 }
 
@@ -677,7 +741,7 @@ async function showGraph() {
     renderGraph(data);
   } catch (e) {
     console.error('Graph failed:', e);
-    $('graph-container').innerHTML = '<p style="padding:20px;color:#999">加载图谱失败</p>';
+    $('graph-container').innerHTML = '<p style="padding:20px;color:var(--c-muted)">加载图谱失败</p>';
   }
 }
 
@@ -685,7 +749,7 @@ function renderGraph(data) {
   const container = $('graph-container');
   container.innerHTML = '';
   if (!data.nodes || data.nodes.length === 0) {
-    container.innerHTML = '<p style="padding:20px;color:#999">暂无数据，请先打开目录并创建笔记</p>';
+    container.innerHTML = '<p style="padding:20px;color:var(--c-muted)">暂无数据，请先打开目录并创建笔记</p>';
     return;
   }
 
@@ -746,7 +810,7 @@ function renderGraph(data) {
 
   node.append('circle')
     .attr('r', d => 6 + (connCount[d.id] || 0) * 2)
-    .attr('fill', d => (connCount[d.id] || 0) > 0 ? '#4a90d9' : '#ccc');
+    .attr('fill', d => (connCount[d.id] || 0) > 0 ? 'var(--c-primary, #5645d4)' : 'var(--c-border, #e5e3df)');
 
   node.append('text')
     .attr('dx', 12)
@@ -795,7 +859,7 @@ async function showDashboard() {
 
     const recent = stats.recent_pages || [];
     $('dash-recent').innerHTML = recent.length === 0
-      ? '<p style="color:#999">暂无数据</p>'
+      ? '<p style="color:var(--c-muted)">暂无数据</p>'
       : recent.map(p =>
         `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
           <span class="dash-recent-title">${p.title || p.path}</span>
@@ -809,7 +873,7 @@ async function showDashboard() {
       const orphansEl = $('dash-orphans');
       if (orphansEl) {
         orphansEl.innerHTML = (!orphans || orphans.length === 0)
-          ? '<p style="color:#999">无孤立页面</p>'
+          ? '<p style="color:var(--c-muted)">无孤立页面</p>'
           : orphans.map(p =>
             `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
               <span class="dash-recent-title">${p.title || p.path}</span>
@@ -953,7 +1017,7 @@ async function doSearch() {
   try {
     state.searchResults = await API.search(query);
     if (state.searchResults.length === 0) {
-      resultsEl.innerHTML = '<div style="padding:8px;color:var(--col-tx-muted)">无结果</div>';
+      resultsEl.innerHTML = '<div style="padding:8px;color:var(--c-muted)">无结果</div>';
       return;
     }
     resultsEl.innerHTML = state.searchResults.map((r, i) => {
@@ -963,7 +1027,7 @@ async function doSearch() {
       const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
       const snippet = (r.snippet || '').replace(/<[^>]*>/g, ''); // strip HTML tags from snippet
       return `<div class="search-result-item" data-idx="${i}">
-        <span class="result-path">${displayTitle} <small style="color:var(--col-tx-muted)">${displayPath}</small></span>
+        <span class="result-path">${displayTitle} <small style="color:var(--c-muted)">${displayPath}</small></span>
         <span class="result-snippet">${snippet}</span>
       </div>`;
     }).join('');
@@ -1064,3 +1128,32 @@ function formatTime(ms) {
   if (diff < 604800000) return `${Math.floor(diff / 86400000)} 天前`;
   return d.toLocaleDateString('zh-CN');
 }
+
+// === 侧边栏点击外部关闭（移动端） ===
+document.querySelector('.main').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.remove('open');
+});
+
+// === 键盘快捷键 ===
+document.addEventListener('keydown', (e) => {
+  // Ctrl+K: 聚焦搜索框
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    $('search-input').focus();
+  }
+  // Ctrl+S: 保存
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveFile();
+  }
+  // Ctrl+N: 新建文件
+  if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+    e.preventDefault();
+    showNewFile();
+  }
+  // Escape: 关闭模态框/搜索结果
+  if (e.key === 'Escape') {
+    $('search-results').innerHTML = '';
+    hideNewFile();
+  }
+});
