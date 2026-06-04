@@ -8,6 +8,7 @@ import argparse
 def cmd_server() -> None:
     """Run the Telegram bot server."""
     import nas_md.config as cfg_mod
+
     cfg_mod.load_bot_config()
     print("files.md server starting...")
     # In a real implementation, this would start the Telegram bot polling loop
@@ -40,6 +41,7 @@ def cmd_web() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
 
     import nas_md.config as cfg_mod
+
     cfg_mod.load_bot_config()
 
     mount_dirs = cfg_mod.server_cfg.mount_dir_list()
@@ -49,7 +51,13 @@ def cmd_web() -> None:
 
     from nas_md.webserver import serve
 
-    serve(mount_dirs=mount_dirs, web_root=web_root, port=port, web_auth_token=cfg_mod.server_cfg.web_auth_token, storage_dir=storage_dir)
+    serve(
+        mount_dirs=mount_dirs,
+        web_root=web_root,
+        port=port,
+        web_auth_token=cfg_mod.server_cfg.web_auth_token,
+        storage_dir=storage_dir,
+    )
 
 
 def main() -> None:

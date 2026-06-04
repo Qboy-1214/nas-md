@@ -54,9 +54,7 @@ def sample_dir(tmp_path):
 class TestSearchInit:
     def test_init_db(self, search_db):
         conn = get_connection(search_db)
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         table_names = [t[0] for t in tables]
         assert "pages" in table_names
         assert "pages_fts" in table_names
@@ -157,7 +155,7 @@ class TestRebuildIndex:
 
     def test_rebuild_clears_old(self, search_db, sample_dir):
         index_file("/old.md", "# Old\nThis should be removed.")
-        count = rebuild_index([sample_dir])
+        rebuild_index([sample_dir])
         results = search("removed", limit=10)
         assert len(results) == 0
 

@@ -103,7 +103,7 @@ def load_bot_config() -> None:
     config_path = PROJECT_ROOT / "config.json"
     if config_path.exists():
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 file_cfg = json.load(f)
             for key, value in file_cfg.items():
                 if hasattr(cfg, key):

@@ -97,11 +97,19 @@ class MountEntry:
         self.readonly = readonly  # files in this mount cannot be modified
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "path": self.path, "public": self.public, "readonly": self.readonly}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "path": self.path,
+            "public": self.public,
+            "readonly": self.readonly,
+        }
 
     @staticmethod
-    def from_dict(d: dict) -> "MountEntry":
-        return MountEntry(d["id"], d["name"], d["path"], d.get("public", False), d.get("readonly", False))
+    def from_dict(d: dict) -> MountEntry:
+        return MountEntry(
+            d["id"], d["name"], d["path"], d.get("public", False), d.get("readonly", False)
+        )
 
 
 class DirEntry:
@@ -113,7 +121,7 @@ class DirEntry:
         self.is_dir = is_dir
         self.size = size
         self.mod_time = mod_time
-        self.children: list["DirEntry"] = []
+        self.children: list[DirEntry] = []
         self.has_md: bool = False  # True if this subtree contains any .md file
 
     def to_dict(self) -> dict:
@@ -138,7 +146,7 @@ def _load_saved_mounts() -> list[dict]:
     if not _MOUNTS_FILE or not os.path.isfile(_MOUNTS_FILE):
         return []
     try:
-        with open(_MOUNTS_FILE, "r", encoding="utf-8") as f:
+        with open(_MOUNTS_FILE, encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
@@ -168,7 +176,7 @@ class MountManager:
             if not d:
                 continue
             # Support "显示名:path" format
-            if ":" in d and not d[1:2] == ":":  # not a Windows drive letter
+            if ":" in d and d[1:2] != ":":  # not a Windows drive letter
                 name, path = d.split(":", 1)
                 name = name.strip()
                 path = os.path.abspath(path.strip())
@@ -211,7 +219,9 @@ class MountManager:
                 return m
         return None
 
-    def update_mount(self, mount_id: str, name: str | None = None, public: bool | None = None) -> MountEntry | None:
+    def update_mount(
+        self, mount_id: str, name: str | None = None, public: bool | None = None
+    ) -> MountEntry | None:
         """Update mount point properties. Returns updated entry or None."""
         mount = self.find_mount(mount_id)
         if not mount:
@@ -390,9 +400,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
         token_params = qs.get("token", [])
-        if token_params and token_params[0] == _auth_token:
-            return True
-        return False
+        return bool(token_params and token_params[0] == _auth_token)
 
     def _require_auth(self) -> bool:
         """Return 401 if auth fails. Returns True if OK."""
@@ -458,9 +466,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             # Public mount tree/file access (no auth needed)
             # Use regex-like check: path contains /mounts/{id}/file, /tree, or /tree-recursive
             mount_file_match = path.split("?")[0]  # Strip query string for matching
-            if ("/api/mounts/" in mount_file_match and 
-                    (mount_file_match.endswith("/file") or mount_file_match.endswith("/tree") or mount_file_match.endswith("/tree-recursive"))
-                    and "/" not in mount_file_match.split("/api/mounts/")[1].split("/")[0]):
+            if (
+                "/api/mounts/" in mount_file_match
+                and (
+                    mount_file_match.endswith("/file")
+                    or mount_file_match.endswith("/tree")
+                    or mount_file_match.endswith("/tree-recursive")
+                )
+                and "/" not in mount_file_match.split("/api/mounts/")[1].split("/")[0]
+            ):
                 mount_id = path.split("/api/mounts/")[1].split("/")[0]
                 if mount_id and self._is_public_mount(mount_id):
                     qs = parse_qs(parsed.query)
@@ -526,18 +540,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
             # PUT /api/mounts/{id} — update mount properties
             # Match before /file, /rename, /mkdir which have longer paths
-            if path.startswith("/api/mounts/") and "/" not in path[len("/api/mounts/"):].rstrip("/"):
-                mount_id = path[len("/api/mounts/"):].rstrip("/")
+            if path.startswith("/api/mounts/") and "/" not in path[len("/api/mounts/") :].rstrip(
+                "/"
+            ):
+                mount_id = path[len("/api/mounts/") :].rstrip("/")
                 self._handle_update_mount(mount_id)
                 return
 
             # /api/mounts/{id}/file
             if "/api/mounts/" in path and path.endswith("/file"):
                 mount_id = path.split("/api/mounts/")[1].split("/file")[0]
-                if self._handle_write_file(mount_id, qs):
-                    # Update search index for the written file
-                    if self.search_dirs:
-                        self._update_search_index()
+                if self._handle_write_file(mount_id, qs) and self.search_dirs:
+                    self._update_search_index()
                 return
 
             # /api/mounts/{id}/rename
@@ -575,8 +589,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 return
 
             # DELETE /api/mounts/{id} — remove mount point
-            if path.startswith("/api/mounts/") and "/" not in path[len("/api/mounts/"):]:
-                mount_id = path[len("/api/mounts/"):]
+            if path.startswith("/api/mounts/") and "/" not in path[len("/api/mounts/") :]:
+                mount_id = path[len("/api/mounts/") :]
                 self._handle_delete_mount(mount_id)
                 return
 
@@ -751,7 +765,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     def _handle_search(self, qs: dict):
         """Handle full-text search requests."""
-        from nas_md.search import search, init_db, get_stats
+        from nas_md.search import search, init_db
 
         query = qs.get("q", [""])[0]
         limit = int(qs.get("limit", ["20"])[0])
@@ -823,7 +837,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     def _handle_add_mount(self):
         """Handle POST /api/mounts to add a new mount point.
-        
+
         No auth required — both visitors and authenticated users can mount.
         Visitors are limited to 1 mount. Authenticated users limited to 1 dynamic mount.
         """
@@ -846,7 +860,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         # Count dynamic (non-pre-configured) mounts
         # Pre-configured mounts have IDs like "mount-0", "mount-1" from startup
         # Dynamic mounts get IDs after those
-        pre_configured_count = len([m for m in self.mount_manager.mounts if m.id.startswith("mount-")])
 
         # Check if this is a new path (not duplicate)
         is_duplicate = False
@@ -917,9 +930,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("Cannot delete built-in mount", 403)
 
         # Remove from mount manager
-        self.mount_manager.mounts = [
-            m for m in self.mount_manager.mounts if m.id != mount_id
-        ]
+        self.mount_manager.mounts = [m for m in self.mount_manager.mounts if m.id != mount_id]
         _save_mounts_to_disk(self.mount_manager.mounts)
 
         # Remove from search dirs
@@ -931,6 +942,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     def _update_search_index(self):
         """Rebuild search index after file write."""
         from nas_md.search import rebuild_index
+
         try:
             count = rebuild_index(self.search_dirs)
             logger.info("Search index updated: %d files", count)
@@ -980,14 +992,21 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        except OSError as e:
+        except OSError:
             self.send_error(500, "Internal server error")
 
 
 # --- Server runner ---
 
 
-def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str = "0.0.0.0", web_auth_token: str = "", storage_dir: str = ""):
+def serve(
+    mount_dirs: list[str],
+    web_root: str = "",
+    port: int = 8080,
+    host: str = "0.0.0.0",
+    web_auth_token: str = "",
+    storage_dir: str = "",
+):
     """Start the HTTP server with mount points and optional static file serving."""
     global _auth_token, _MOUNTS_FILE
     _auth_token = web_auth_token
@@ -1036,7 +1055,9 @@ def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str
     server = HTTPServer((host, port), MountHTTPHandler)
 
     mounts_str = (
-        ", ".join(f"{m.name} ({m.id})={m.path}" for m in mgr.mounts) if not mgr.is_empty() else "(none)"
+        ", ".join(f"{m.name} ({m.id})={m.path}" for m in mgr.mounts)
+        if not mgr.is_empty()
+        else "(none)"
     )
     web_str = web_root if web_root else "(none)"
     auth_str = "enabled" if _auth_token else "disabled"

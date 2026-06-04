@@ -59,7 +59,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "ARG001", "F401", "RUF059"]
+"tests/**/*.py" = ["S101", "ARG001", "F401"]
 "nas_md/server/__init__.py" = ["F401"]
 
 [tool.ruff.lint.flake8-type-checking]

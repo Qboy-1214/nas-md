@@ -67,7 +67,9 @@ def print_banner():
     print(f"  挂载目录: {mount_dirs or '(none)'}")
     print(f"  存储目录: {os.environ.get('STORAGE_DIR', '(none)')}")
 
-    auth_status = "已启用" if os.environ.get("WEB_AUTH_TOKEN") else "已禁用（未设置 WEB_AUTH_TOKEN）"
+    auth_status = (
+        "已启用" if os.environ.get("WEB_AUTH_TOKEN") else "已禁用（未设置 WEB_AUTH_TOKEN）"
+    )
     print(f"  认证: {auth_status}")
     print("=" * 50)
     print("  按 Ctrl+C 停止服务")
