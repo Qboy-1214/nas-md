@@ -133,6 +133,24 @@ const API = {
     const r = await this.request('/api/graph');
     return r ? r.json() : { nodes: [], edges: [] };
   },
+
+  async sync(mountId, files) {
+    const token = localStorage.getItem('nasmd_token') || '';
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const resp = await fetch(`${_apiBase}/api/sync?mount=${encodeURIComponent(mountId)}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ files }),
+    });
+    if (resp.status === 401) { localStorage.removeItem('nasmd_token'); return {}; }
+    return resp.json();
+  },
+
+  async getSyncStatus(mountId) {
+    const r = await this.request(`/api/sync/status?mount=${encodeURIComponent(mountId)}`);
+    return r ? r.json() : {};
+  },
 };
 
 // 全局变量

@@ -611,6 +611,72 @@ GET /api/graph
 }
 ```
 
+### 增量同步
+
+```
+POST /api/sync?mount={mountId}
+```
+
+客户端发送本地文件列表（path + mtime），服务端返回差异。需要认证。
+
+**请求体：**
+```json
+{
+  "files": {
+    "notes/a.md": 1749000000000,
+    "notes/b.md": 1749001000000
+  }
+}
+```
+
+**响应 200：**
+```json
+{
+  "download": [
+    {"path": "notes/a.md", "mtime": 1749005000000}
+  ],
+  "upload": [
+    {"path": "notes/b.md", "mtime": 1749001000000}
+  ],
+  "delete": [
+    {"path": "notes/old.md"}
+  ],
+  "server_time": 1749006000000
+}
+```
+
+- `download`：服务端有更新版本，客户端应下载
+- `upload`：客户端有更新版本，服务端确认
+- `delete`：文件已在服务端删除
+
+### 同步状态
+
+```
+GET /api/sync/status?mount={mountId}
+```
+
+获取挂载点的同步状态信息。需要认证。
+
+**响应 200：**
+```json
+{
+  "mount_id": "default",
+  "file_count": 42,
+  "total_size": 1048576,
+  "latest_mtime": 1749006000000
+}
+```
+
+### 冲突检测
+
+写入文件时，可通过 `expected_mtime` 参数检测冲突：
+
+```
+PUT /api/mounts/{id}/file?path=xxx.md&expected_mtime=1749000000000
+```
+
+如果文件已被修改（mtime 不匹配），服务端会创建 `.conflict.md` 副本后写入新内容。
+
 ---
 
 ## 错误响应

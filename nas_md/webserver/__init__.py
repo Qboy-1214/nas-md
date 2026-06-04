@@ -455,6 +455,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_graph()
                 return
 
+            # Sync API
+            if path == "/api/sync" and self.command == "POST":
+                self._handle_sync(mount_id, qs)
+                return
+
+            if path == "/api/sync/status":
+                self._handle_sync_status(mount_id)
+                return
+
             # Public mounts endpoint (no auth: returns public + visitor mounts)
             if path == "/api/mounts/public":
                 self._handle_public_mounts()
@@ -715,6 +724,22 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         abs_path = self.mount_manager._safe_path(mount, rel_path)
         if abs_path is None:
             return self._send_error("Path escapes mount root", 403)
+
+        # Conflict detection: if expected_mtime given and file has been modified
+        expected_mtime = qs.get("expected_mtime", [None])[0]
+        if expected_mtime and os.path.isfile(abs_path):
+            actual_mtime = int(os.path.getmtime(abs_path) * 1000)
+            if actual_mtime != int(expected_mtime):
+                # Conflict! Create a .conflict.md copy
+                conflict_path = abs_path.rsplit(".", 1)
+                conflict_path = conflict_path[0] + ".conflict." + conflict_path[1] if len(conflict_path) > 1 else abs_path + ".conflict"
+                try:
+                    import shutil
+                    shutil.copy2(abs_path, conflict_path)
+                    logger.warning("Sync conflict detected for %s, created %s", rel_path, os.path.basename(conflict_path))
+                except OSError:
+                    pass
+
         body = self._read_body()
         # Create parent dirs
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -878,7 +903,104 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             logger.error("Graph error: %s", e)
             self._send_json({"error": str(e)}, 500)
 
-    # --- Search index update ---
+    def _handle_sync(self, mount_id: str, qs: dict):
+        """Handle POST /api/sync — incremental file synchronization.
+
+        Client sends: {"files": [{"path": "a.md", "mtime": 1234567890}, ...]}
+        Server returns: {"download": [...], "upload": [...], "delete": [...]}
+        - download: server has newer versions (client should download)
+        - upload: client has newer versions (server confirms, client should upload)
+        - delete: files deleted on server (client should delete)
+        """
+        if not self.mount_manager:
+            return self._send_error("No mounts configured", 404)
+        mount = self.mount_manager.find_mount(mount_id)
+        if not mount:
+            return self._send_error("Mount not found", 404)
+
+        try:
+            body = self._read_body()
+            data = json.loads(body) if body else {}
+            client_files = data.get("files", {})
+
+            # Scan server files
+            download = []
+            upload = []
+            server_files = {}
+
+            for root, dirs, files in os.walk(mount.path):
+                # Skip hidden dirs
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                for fname in files:
+                    if fname.startswith("."):
+                        continue
+                    abs_path = os.path.join(root, fname)
+                    rel_path = os.path.relpath(abs_path, mount.path).replace("\\", "/")
+                    st = os.stat(abs_path)
+                    server_mtime = int(st.st_mtime * 1000)
+                    server_files[rel_path] = server_mtime
+
+                    if rel_path in client_files:
+                        client_mtime = client_files[rel_path]
+                        if server_mtime > client_mtime:
+                            download.append({"path": rel_path, "mtime": server_mtime})
+                        elif client_mtime > server_mtime:
+                            upload.append({"path": rel_path, "mtime": client_mtime})
+                    else:
+                        # New file on server, client doesn't have it
+                        download.append({"path": rel_path, "mtime": server_mtime})
+
+            # Files on client but not on server = deleted on server
+            delete = [
+                {"path": p} for p in client_files
+                if p not in server_files
+            ]
+
+            self._send_json({
+                "download": download,
+                "upload": upload,
+                "delete": delete,
+                "server_time": int(time.time() * 1000),
+            })
+        except Exception as e:
+            logger.error("Sync error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_sync_status(self, mount_id: str):
+        """Handle GET /api/sync/status — get sync status for a mount."""
+        if not self.mount_manager:
+            return self._send_error("No mounts configured", 404)
+        mount = self.mount_manager.find_mount(mount_id)
+        if not mount:
+            return self._send_error("Mount not found", 404)
+
+        try:
+            # Count files on server
+            file_count = 0
+            total_size = 0
+            latest_mtime = 0
+            for root, dirs, files in os.walk(mount.path):
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                for fname in files:
+                    if fname.startswith("."):
+                        continue
+                    abs_path = os.path.join(root, fname)
+                    st = os.stat(abs_path)
+                    file_count += 1
+                    total_size += st.st_size
+                    mtime = int(st.st_mtime * 1000)
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+
+            self._send_json({
+                "mount_id": mount_id,
+                "file_count": file_count,
+                "total_size": total_size,
+                "latest_mtime": latest_mtime,
+            })
+        except Exception as e:
+            logger.error("Sync status error: %s", e)
+            self._send_json({"error": str(e)}, 500)
 
     def _is_public_mount(self, mount_id: str) -> bool:
         """Check if a mount point is publicly accessible (no auth needed)."""
@@ -1168,6 +1290,8 @@ def serve(
     logger.info("    GET  /api/backlinks?page=xxx")
     logger.info("    GET  /api/stats")
     logger.info("    GET  /api/graph")
+    logger.info("    POST /api/sync")
+    logger.info("    GET  /api/sync/status")
     logger.info("    GET  /api/mounts")
     logger.info("    GET  /api/mounts/public")
     logger.info("    PUT  /api/mounts/{id}")

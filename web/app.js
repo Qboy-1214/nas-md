@@ -16,6 +16,9 @@ const state = {
   recentFiles: [],
   showSettings: false,
   toastTimer: null,
+  syncStatus: 'offline',  // offline | synced | syncing | conflict
+  syncTimer: null,
+  lastSyncTime: 0,
 };
 
 // === DOM 引用 ===
@@ -582,12 +585,19 @@ async function openFile(path, preferredMountId) {
     showPage('editor');
 
     if (window._vditor) window._vditor.destroy();
-    initEditor(content, state.editorMode, !!mount.readonly);
+    // Check for offline draft
+    const draft = loadFromLocalStorage(path);
+    const finalContent = draft ? draft.content : content;
+    if (draft) {
+      showToast('已恢复本地缓存版本');
+    }
+    initEditor(finalContent, state.editorMode, !!mount.readonly);
     setFileInfo(mount.id, path);
     state.dirty = false;
     startDirtyCheck();
     renderSidebar();
     loadBacklinks(path);
+    startSyncPolling();
   } catch (e) {
     showToast('加载文件失败');
     console.error(e);
@@ -644,13 +654,27 @@ async function saveFile() {
   const mount = state.mounts.find(m => m.id === state.currentMountId);
   if (mount && mount.readonly) { showToast('此文件不允许修改'); return; }
   const content = window._vditor.getValue();
+
+  if (!navigator.onLine) {
+    // Offline: save to localStorage
+    saveToLocalStorage(state.currentPath, content);
+    state.dirty = false;
+    showToast('已离线保存，恢复连接后自动同步');
+    return;
+  }
+
   try {
     await API.putFile(state.currentMountId, state.currentPath, content);
     window._originalContent = content;
     state.dirty = false;
+    clearLocalStorage(state.currentPath);
     showToast('已保存');
+    // Trigger sync after save
+    performSync();
   } catch (e) {
-    showToast('保存失败');
+    // Fallback to localStorage on error
+    saveToLocalStorage(state.currentPath, content);
+    showToast('保存失败，已缓存到本地');
     console.error(e);
   }
 }
@@ -848,7 +872,129 @@ async function showDashboard() {
   }
 }
 
-// === 搜索 ===
+// === 同步 ===
+function updateSyncIndicator() {
+  const el = $('sync-indicator');
+  if (!el) return;
+  el.className = 'sync-indicator ' + state.syncStatus;
+  const labels = { offline: '离线', synced: '已同步', syncing: '同步中...', conflict: '有冲突' };
+  el.title = labels[state.syncStatus] || state.syncStatus;
+}
+
+function startSyncPolling() {
+  stopSyncPolling();
+  // Poll every 30 seconds
+  state.syncTimer = setInterval(() => performSync(), 30000);
+  // Initial sync
+  performSync();
+}
+
+function stopSyncPolling() {
+  if (state.syncTimer) {
+    clearInterval(state.syncTimer);
+    state.syncTimer = null;
+  }
+}
+
+async function performSync() {
+  if (!state.currentMountId || !navigator.onLine) {
+    state.syncStatus = 'offline';
+    updateSyncIndicator();
+    return;
+  }
+  state.syncStatus = 'syncing';
+  updateSyncIndicator();
+
+  try {
+    // Build client file list from tree cache
+    const files = {};
+    const entries = state.treeData[state.currentMountId + ':/'] || [];
+    collectFileMtimes(entries, files);
+
+    const result = await API.sync(state.currentMountId, files);
+    if (result.download || result.upload || result.delete) {
+      const dl = (result.download || []).length;
+      const ul = (result.upload || []).length;
+      const del = (result.delete || []).length;
+
+      // If there are server changes, refresh file tree
+      if (dl > 0 || del > 0) {
+        await refreshTree();
+      }
+
+      state.syncStatus = (dl > 0 || ul > 0 || del > 0) ? 'synced' : 'synced';
+      state.lastSyncTime = Date.now();
+
+      // Check for conflicts
+      if (result.conflicts && result.conflicts.length > 0) {
+        state.syncStatus = 'conflict';
+        showToast(`发现 ${result.conflicts.length} 个文件冲突`);
+      }
+    } else {
+      state.syncStatus = 'synced';
+    }
+  } catch (e) {
+    console.error('Sync failed:', e);
+    state.syncStatus = navigator.onLine ? 'synced' : 'offline';
+  }
+  updateSyncIndicator();
+}
+
+function collectFileMtimes(entries, files) {
+  if (!entries) return;
+  for (const entry of entries) {
+    if (entry.type === 'file') {
+      files[entry.path] = entry.modTime || 0;
+    } else if (entry.type === 'directory' && entry.children) {
+      collectFileMtimes(entry.children, files);
+    }
+  }
+}
+
+async function refreshTree() {
+  if (!state.currentMountId) return;
+  try {
+    const tree = await API.getTree(state.currentMountId, '/');
+    state.treeData[state.currentMountId + ':/'] = tree.children || [];
+    renderFileTree();
+  } catch (e) {
+    console.error('Refresh tree failed:', e);
+  }
+}
+
+// === 离线支持 ===
+function saveToLocalStorage(path, content) {
+  try {
+    const key = 'nasmd_draft_' + path;
+    localStorage.setItem(key, JSON.stringify({ content, savedAt: Date.now() }));
+  } catch (e) { /* quota exceeded */ }
+}
+
+function loadFromLocalStorage(path) {
+  try {
+    const key = 'nasmd_draft_' + path;
+    const data = localStorage.getItem(key);
+    if (!data) return null;
+    return JSON.parse(data);
+  } catch (e) { return null; }
+}
+
+function clearLocalStorage(path) {
+  try {
+    localStorage.removeItem('nasmd_draft_' + path);
+  } catch (e) { /* ignore */ }
+}
+
+// Online/offline event listeners
+window.addEventListener('online', () => {
+  state.syncStatus = 'synced';
+  updateSyncIndicator();
+  performSync();
+});
+window.addEventListener('offline', () => {
+  state.syncStatus = 'offline';
+  updateSyncIndicator();
+});
 async function doSearch() {
   const query = $('search-input').value.trim();
   const resultsEl = $('search-results');

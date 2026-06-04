@@ -264,6 +264,8 @@ links          — 链接索引（target, display_text, line_number）
 - `GET /api/backlinks?page=xxx` — 反链查询
 - `GET /api/stats` — 统计数据（文件数、任务完成率、标签数等）
 - `GET /api/graph` — 图谱数据（节点+边，用于 D3.js 可视化）
+- `POST /api/sync` — 增量同步（客户端发送文件列表，服务端返回差异）
+- `GET /api/sync/status` — 同步状态（文件数、总大小、最新修改时间）
 
 ## Web 前端架构
 

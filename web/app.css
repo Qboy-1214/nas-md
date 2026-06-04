@@ -259,6 +259,14 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg); colo
 .dash-recent-title { color: var(--link-color, #4a90d9); }
 .dash-recent-time { color: var(--text-tertiary, #999); font-size: 12px; }
 
+/* === Sync Indicator === */
+.sync-indicator { font-size: 10px; margin-left: 8px; cursor: default; }
+.sync-indicator.synced { color: #4caf50; }
+.sync-indicator.syncing { color: #ff9800; animation: pulse 1s infinite; }
+.sync-indicator.offline { color: #f44336; }
+.sync-indicator.conflict { color: #9c27b0; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
 /* === Welcome Page === */
 .welcome-page {
   padding: 48px 48px 64px;
