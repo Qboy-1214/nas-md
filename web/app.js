@@ -460,7 +460,7 @@ function _treeHasPath(entry, path) {
   return false;
 }
 
-async function openFile(path, preferredMountId) {
+async function openFile(path, preferredMountId, searchKeyword) {
   let mount = null;
   // 1. Try preferred mount id (from sidebar click or restore)
   if (preferredMountId) {
@@ -508,10 +508,49 @@ async function openFile(path, preferredMountId) {
     renderSidebar();
     loadBacklinks(path);
     startSyncPolling();
+
+    // If opened from search, scroll to the keyword
+    if (searchKeyword) {
+      _scrollToKeyword(searchKeyword);
+    }
   } catch (e) {
     showToast('加载文件失败');
     console.error(e);
   }
+}
+
+// Scroll to keyword in editor after opening a file from search
+function _scrollToKeyword(keyword) {
+  if (!keyword || !window._vditor) return;
+  // Wait for editor to finish rendering
+  setTimeout(() => {
+    try {
+      // Try Vditor's built-in search (Ctrl+F) and highlight
+      const vditorEl = document.getElementById('vditor');
+      if (!vditorEl) return;
+      // In WYSIWYG mode, search the DOM for the keyword
+      const contentEl = vditorEl.querySelector('.vditor-wysiwyg') || vditorEl.querySelector('.vditor-sv');
+      if (!contentEl) return;
+      const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT);
+      let firstMatch = null;
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const idx = node.textContent.indexOf(keyword);
+        if (idx !== -1) {
+          firstMatch = node;
+          break;
+        }
+      }
+      if (firstMatch && firstMatch.parentElement) {
+        firstMatch.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Highlight the match briefly
+        firstMatch.parentElement.style.backgroundColor = '#fff3b0';
+        setTimeout(() => { firstMatch.parentElement.style.backgroundColor = ''; }, 3000);
+      }
+    } catch (e) {
+      console.warn('Scroll to keyword failed:', e);
+    }
+  }, 500);
 }
 
 function startDirtyCheck() {
@@ -917,16 +956,30 @@ async function doSearch() {
       resultsEl.innerHTML = '<div style="padding:8px;color:var(--col-tx-muted)">无结果</div>';
       return;
     }
-    resultsEl.innerHTML = state.searchResults.map(r => {
+    resultsEl.innerHTML = state.searchResults.map((r, i) => {
       const mountId = r.mount_id || '';
       const relPath = r.rel_path || r.path;
       const displayTitle = r.title || r.filename;
       const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
-      return `<div class="search-result-item" onclick="openFile('${relPath.replace(/'/g, "\\'")}', '${mountId}');$('search-results').innerHTML='';$('search-input').value=''">
+      const snippet = (r.snippet || '').replace(/<[^>]*>/g, ''); // strip HTML tags from snippet
+      return `<div class="search-result-item" data-idx="${i}">
         <span class="result-path">${displayTitle} <small style="color:var(--col-tx-muted)">${displayPath}</small></span>
-        <span class="result-snippet">${r.snippet || ''}</span>
+        <span class="result-snippet">${snippet}</span>
       </div>`;
     }).join('');
+    // Use event delegation instead of inline onclick to avoid escaping issues
+    resultsEl.onclick = (e) => {
+      const item = e.target.closest('.search-result-item');
+      if (!item) return;
+      const idx = parseInt(item.dataset.idx);
+      const r = state.searchResults[idx];
+      if (!r) return;
+      const mountId = r.mount_id || '';
+      const relPath = r.rel_path || r.path;
+      openFile(relPath, mountId, query);
+      resultsEl.innerHTML = '';
+      $('search-input').value = '';
+    };
   } catch (e) {
     console.error('Search failed:', e);
   }
