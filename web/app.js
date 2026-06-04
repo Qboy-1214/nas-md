@@ -47,7 +47,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           $('editor-modes').style.display = mount.readonly ? 'none' : (lastPath.endsWith('.md') ? '' : 'none');
           $('btn-save').style.display = mount.readonly ? 'none' : '';
           showPage('editor');
-          if (window._vditor) _vditor.destroy();
+          if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
           setFileInfo(mount.id, lastPath);
           state.dirty = false;
@@ -194,7 +194,7 @@ function logout() {
   state.treeData = {};
   state.expandedMounts = [];
   state.showSettings = false;
-  if (window._vditor) { _vditor.destroy(); window._vditor = null; }
+  if (window._vditor) { window._vditor.destroy(); window._vditor = null; }
   if (window._dirtyTimer) { clearInterval(window._dirtyTimer); window._dirtyTimer = null; }
   updateAuthUI();
   renderSidebar();
@@ -390,7 +390,7 @@ async function removeMount(mountId) {
     if (state.currentMountId === mountId) {
       state.currentPath = null;
       state.currentMountId = null;
-      if (window._vditor) { _vditor.destroy(); window._vditor = null; }
+      if (window._vditor) { window._vditor.destroy(); window._vditor = null; }
       showPage('welcome');
     }
     renderSidebar();
@@ -577,7 +577,7 @@ async function openFile(path, preferredMountId) {
     $('btn-save').style.display = mount.readonly ? 'none' : '';
     showPage('editor');
 
-    if (window._vditor) _vditor.destroy();
+    if (window._vditor) window._vditor.destroy();
     initEditor(content, state.editorMode, !!mount.readonly);
     setFileInfo(mount.id, path);
     state.dirty = false;
@@ -651,7 +651,7 @@ function navigateHome() {
   $('breadcrumb').textContent = '';
   $('editor-modes').style.display = 'none';
   $('btn-save').style.display = 'none';
-  if (window._vditor) { _vditor.destroy(); window._vditor = null; }
+  if (window._vditor) { window._vditor.destroy(); window._vditor = null; }
   if (window._dirtyTimer) { clearInterval(window._dirtyTimer); window._dirtyTimer = null; }
   showPage('welcome');
   renderSidebar();

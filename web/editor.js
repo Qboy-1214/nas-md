@@ -232,6 +232,7 @@ function initEditor(content, mode, readonly) {
         const ed = vditorEl.querySelector('.vditor-ir .vditor-reset, .vditor-sv .vditor-reset, .vditor-wysiwyg .vditor-reset');
         if (ed) { ed.setAttribute('contenteditable', 'false'); ed.style.userSelect = 'text'; }
       }
+      window._vditor = _vditor;
     },
   });
 }
