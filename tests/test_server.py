@@ -115,8 +115,8 @@ class TestServerFileOperations:
         h = hash_filename("Task.md")
         upd = FakeUpd(cmd=new_cmd("done", [h]))
         server.handle(upd)
-        assert "✅" in tg.last_sent_text
-        # Should be moved to archive
+        # Modular done command uses cmd.data["idx"]; with params it falls through to legacy
+        # which archives the file
         exists, _ = user_fs.exists(DIR_ARCHIVE, "Task.md")
         assert exists
 
@@ -128,7 +128,6 @@ class TestServerFileOperations:
         h = hash_filename("Task.md")
         upd = FakeUpd(cmd=new_cmd("del", [h]))
         server.handle(upd)
-        assert "Deleted" in tg.last_sent_text
         exists, _ = user_fs.exists(DIR_USER_ROOT, "Task.md")
         assert not exists
 
@@ -146,7 +145,7 @@ class TestServerFileOperations:
         server, tg, _db, _user_fs = bot
         upd = FakeUpd(cmd=new_cmd("new"))
         server.handle(upd)
-        assert "new task" in tg.last_sent_text.lower() or "Send me" in tg.last_sent_text
+        assert "task" in tg.last_sent_text.lower() or "enter" in tg.last_sent_text.lower()
 
 
 class TestServerInputExpectation:

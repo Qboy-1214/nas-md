@@ -19,6 +19,7 @@ class Cmd:
     name: str = ""
     params: list[str] = field(default_factory=list)
     type: str = CMD_TYPE_CALLBACK
+    data: dict | None = None
 
     def __post_init__(self) -> None:
         if not self.type:

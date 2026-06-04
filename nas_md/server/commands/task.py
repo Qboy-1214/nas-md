@@ -18,6 +18,9 @@ def cmd_done(server, upd, cmd):
     idx = cmd.data.get("idx", -1) if cmd.data else -1
     if idx >= 0:
         server._complete_task(idx)
+    elif cmd.params:
+        # Fallback: use params[0] as filename hash (legacy behavior)
+        server._cmd_done(upd, cmd)
     else:
         server.tg.send(server.user_id, "No task specified.")
 
@@ -28,6 +31,9 @@ def cmd_del(server, upd, cmd):
     idx = cmd.data.get("idx", -1) if cmd.data else -1
     if idx >= 0:
         server._delete_task(idx)
+    elif cmd.params:
+        # Fallback: use params[0] as filename hash (legacy behavior)
+        server._cmd_del(upd, cmd)
     else:
         server.tg.send(server.user_id, "No task specified.")
 

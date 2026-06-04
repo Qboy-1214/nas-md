@@ -86,16 +86,21 @@ class FS:
         self._mem: dict[str, bytes] = {} if backend == "mem" else None
         self._ensure_dir(root_path)
 
+    @staticmethod
+    def _norm(path: str) -> str:
+        """Normalize path separators to '/' for memory backend consistency."""
+        return path.replace("\\", "/")
+
     def _ensure_dir(self, path: str) -> None:
         if self._mem is not None:
-            path = path.rstrip("/")
+            path = self._norm(path).rstrip("/")
             self._mem[path.encode()] = b""
         else:
             Path(path).mkdir(parents=True, exist_ok=True)
 
     def _read(self, path: str) -> bytes:
         if self._mem is not None:
-            path = path.rstrip("/")
+            path = self._norm(path).rstrip("/")
             data = self._mem.get(path.encode())
             if data is None:
                 raise FileNotFoundError(path)
@@ -104,7 +109,7 @@ class FS:
 
     def _write(self, path: str, data: bytes) -> None:
         if self._mem is not None:
-            path = path.rstrip("/")
+            path = self._norm(path).rstrip("/")
             self._mem[path.encode()] = data
         else:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -112,15 +117,15 @@ class FS:
 
     def _remove(self, path: str) -> None:
         if self._mem is not None:
-            path = path.rstrip("/")
+            path = self._norm(path).rstrip("/")
             self._mem.pop(path.encode(), None)
         else:
             Path(path).unlink()
 
     def _rename(self, old: str, new: str) -> None:
         if self._mem is not None:
-            old = old.rstrip("/")
-            new = new.rstrip("/")
+            old = self._norm(old).rstrip("/")
+            new = self._norm(new).rstrip("/")
             data = self._mem.pop(old.encode(), None)
             if data is not None:
                 self._mem[new.encode()] = data
@@ -130,19 +135,19 @@ class FS:
 
     def _exists(self, path: str) -> bool:
         if self._mem is not None:
-            path = path.rstrip("/")
+            path = self._norm(path).rstrip("/")
             return path.encode() in self._mem
         return Path(path).exists()
 
     def _is_dir(self, path: str) -> bool:
         if self._mem is not None:
-            path = path.rstrip("/")
+            path = self._norm(path).rstrip("/")
             return self._mem.get(path.encode(), None) == b""
         return Path(path).is_dir()
 
     def _stat(self, path: str) -> os.stat_result:
         if self._mem is not None:
-            path = path.rstrip("/")
+            path = self._norm(path).rstrip("/")
             data = self._mem.get(path.encode(), b"")
             # Return a fake stat with ctime in milliseconds
             now_ms = int(time.time() * 1000)
@@ -152,7 +157,8 @@ class FS:
 
     def _list_dir(self, path: str) -> list[str]:
         if self._mem is not None:
-            prefix = path.rstrip("/") + "/"
+            path = self._norm(path).rstrip("/")
+            prefix = path + "/"
             results = set()
             for k in self._mem:
                 k_str = k.decode()
@@ -166,7 +172,8 @@ class FS:
     def _walk(self, path: str):
         """Yield (dirpath, dirnames, filenames) like os.walk."""
         if self._mem is not None:
-            prefix = path.rstrip("/") + "/"
+            path = self._norm(path).rstrip("/")
+            prefix = path + "/"
             dirs = set()
             files = set()
             for k in self._mem:
