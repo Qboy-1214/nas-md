@@ -168,6 +168,7 @@ function getActiveEditorEl() {
 let _svSyncHandler = null;
 let _svScrollSyncHandler = null;
 let _svCursorSyncHandler = null;
+let _svSyncing = false;  // Guard against scroll feedback loop
 
 function setupSVSync() {
   // Remove old handlers if any
@@ -177,18 +178,43 @@ function setupSVSync() {
   const previewEl = _vditor.vditor.preview.element;
 
   // 1. Preview scroll → Editor scroll (reverse sync)
+  // Vditor already syncs editor→preview. We only sync the reverse direction.
+  // The _svSyncing flag prevents: preview scroll → set editorTop →
+  // Vditor's built-in handler fires → sets previewTop → re-triggers us → loop.
   _svScrollSyncHandler = () => {
+    if (_svSyncing) return;
     if (svEl.style.display === 'none') return;
     const previewScrollTop = previewEl.scrollTop;
     const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
     const editorScrollHeight = svEl.scrollHeight - svEl.clientHeight;
     if (previewScrollHeight <= 0 || editorScrollHeight <= 0) return;
-    // Map proportionally
-    svEl.scrollTop = previewScrollTop * editorScrollHeight / previewScrollHeight;
+    const target = previewScrollTop * editorScrollHeight / previewScrollHeight;
+    // Only scroll if the difference is meaningful (avoids micro-loops)
+    if (Math.abs(target - svEl.scrollTop) < 2) return;
+    _svSyncing = true;
+    svEl.scrollTop = target;
+    // Release guard after Vditor's built-in handler has had a chance to fire
+    requestAnimationFrame(() => { _svSyncing = false; });
   };
   previewEl.addEventListener('scroll', _svScrollSyncHandler);
 
-  // 2. Cursor/selection change → scroll preview to match position
+  // 2. Editor scroll → Preview scroll (override Vditor's built-in
+  //    handler so we can pair it with the reverse sync cleanly)
+  _svSyncHandler = () => {
+    if (_svSyncing) return;
+    const editorScrollTop = svEl.scrollTop;
+    const editorScrollHeight = svEl.scrollHeight - svEl.clientHeight;
+    const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
+    if (editorScrollHeight <= 0 || previewScrollHeight <= 0) return;
+    const target = editorScrollTop * previewScrollHeight / editorScrollHeight;
+    if (Math.abs(target - previewEl.scrollTop) < 2) return;
+    _svSyncing = true;
+    previewEl.scrollTop = target;
+    requestAnimationFrame(() => { _svSyncing = false; });
+  };
+  svEl.addEventListener('scroll', _svSyncHandler);
+
+  // 3. Cursor/selection change → scroll preview to match position
   _svCursorSyncHandler = () => {
     const textarea = svEl;
     if (!textarea) return;
@@ -207,7 +233,7 @@ function setupSVSync() {
   };
   document.addEventListener('selectionchange', _svCursorSyncHandler);
 
-  // 3. Scroll preview to match initial cursor position
+  // 4. Scroll preview to match initial cursor position
   setTimeout(() => _svCursorSyncHandler(), 100);
 }
 
@@ -217,11 +243,18 @@ function teardownSVSync() {
       _vditor.vditor.preview.element.removeEventListener('scroll', _svScrollSyncHandler);
     } catch (_) {}
   }
+  if (_svSyncHandler && _vditor) {
+    try {
+      _vditor.vditor.sv.element.removeEventListener('scroll', _svSyncHandler);
+    } catch (_) {}
+  }
   if (_svCursorSyncHandler) {
     document.removeEventListener('selectionchange', _svCursorSyncHandler);
   }
   _svScrollSyncHandler = null;
+  _svSyncHandler = null;
   _svCursorSyncHandler = null;
+  _svSyncing = false;
 }
 
 function restoreCursorPosition(offset) {
