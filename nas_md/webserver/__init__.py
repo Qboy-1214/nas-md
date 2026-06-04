@@ -954,7 +954,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     def _serve_static(self, path: str):
         """Serve static PWA files from web_root."""
         if not self.web_root:
-            return self.send_error(404, "No web root configured")
+            return self.send_error(404, "No web root")
 
         # Default to index.html
         if path == "/":
@@ -981,7 +981,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         except OSError as e:
-            self.send_error(500, str(e))
+            self.send_error(500, "Internal server error")
 
 
 # --- Server runner ---
