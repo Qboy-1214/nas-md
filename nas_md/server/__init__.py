@@ -291,6 +291,9 @@ class Server:
         self.user_id = user_id
         self.user_config = UserConfig(user_fs, user_id, server_cfg.config_filename)
         self.world_clock = WorldClockPlugin()
+        # Initialize modular command router
+        from nas_md.server.router import register_all_modules
+        register_all_modules()
 
     def handle(self, upd) -> None:
         """Main entry point for handling an update."""
@@ -310,6 +313,14 @@ class Server:
 
     def _handle_command(self, upd, cmd: Cmd) -> None:
         """Route a command to its handler."""
+        # Try modular router first
+        from nas_md.server.router import get_handler
+        handler = get_handler(cmd.name)
+        if handler:
+            handler(self, upd, cmd)
+            return
+
+        # Fallback to legacy handlers
         handlers = {
             CMD_HOME: self._cmd_home,
             CMD_BACK: self._cmd_back,
@@ -392,6 +403,35 @@ class Server:
 
         # Default: add as a new task
         self._add_task(msg_text)
+
+        # Auto-index wiki-links and tags
+        self._auto_index_content(msg_text)
+
+    def _auto_index_content(self, text: str) -> None:
+        """Auto-create pages for [[wiki-links]] and index #tags in message text."""
+        import re
+        # Auto-create pages for [[wiki-links]]
+        wiki_links = re.findall(r'\[\[([^\]]+)\]\]', text)
+        for link in wiki_links:
+            self._ensure_page_exists(link)
+
+    def _ensure_page_exists(self, page_name: str) -> None:
+        """Create a page if it doesn't exist (for wiki-link auto-creation)."""
+        import os
+        from nas_md.fs import sanitize_filename
+        filename = sanitize_filename(page_name) + ".md"
+        # Check in notes directory
+        notes_dir = self.user_fs.notes_dir() if hasattr(self.user_fs, 'notes_dir') else ""
+        if not notes_dir:
+            return
+        filepath = os.path.join(notes_dir, filename)
+        if not os.path.exists(filepath):
+            try:
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(f"# {page_name}\n\n")
+            except OSError:
+                pass
 
     def _handle_input_expectation(self, upd, msg_text: str, expected_cmd: Cmd) -> None:
         """Handle a message that is an expected input for a previous command."""

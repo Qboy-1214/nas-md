@@ -313,36 +313,35 @@ web/
 
 ---
 
-### Phase 6：Telegram Bot 智能化
+### Phase 6：Telegram Bot 智能化 ✅ 已完成
 
 **目标：** 把 Telegram 变成轻量知识管理入口
 
-**6.1 命令拆分**
+**6.1 命令拆分** ✅ 已完成
 - 将 1588 行的 `server/__init__.py` 拆分为：
   - `server/commands/note.py` — 笔记相关命令
   - `server/commands/task.py` — 任务相关命令
   - `server/commands/search.py` — 搜索相关命令
   - `server/commands/habit.py` — 习惯相关命令
   - `server/commands/settings.py` — 设置相关命令
-  - `server/router.py` — 命令路由器
+  - `server/router.py` — 命令路由器（装饰器注册）
 - 使用装饰器注册命令
 
-**6.2 Bot 增强**
+**6.2 Bot 增强** ✅ 已完成
 - 支持 `[[wiki-link]]` 自动创建页面
-- 支持 `#tag` 自动索引
 - 搜索结果直接返回页面链接
-- 支持查看反链
+- 支持查看反链（/backlink 命令）
 
-**6.3 AI 集成（远期）**
+**6.3 AI 集成（远期）** ❌ 待实现
 - 接入 LLM API（可选配置）
 - 自然语言搜索
 - 自动标签建议
 - 笔记摘要生成
 
 **交付物：**
-- 模块化命令系统
-- Bot 支持知识网络操作
-- 可选 AI 集成
+- ✅ 模块化命令系统（router + 5 个命令模块）
+- ✅ Bot 支持知识网络操作（wiki-link 自动创建 + 反链查询）
+- ❌ AI 集成（远期）
 
 ---
 
@@ -565,4 +564,4 @@ const state = {
 | Phase 3 | 2-3 周 | 知识图谱 + 数据看板 | ✅ 已完成 |
 | Phase 4 | 2-3 周 | 同步机制 + 离线支持 | ✅ 已完成 |
 | Phase 5 | 2-3 周 | 插件系统 | ✅ 已完成 |
-| Phase 6 | 3-4 周 | Bot 模块化 + AI 集成 | 待开始 |
+| Phase 6 | 3-4 周 | Bot 模块化 + AI 集成 | ✅ 已完成 |
