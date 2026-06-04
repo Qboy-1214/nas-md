@@ -168,12 +168,12 @@ web/
 
 ---
 
-### Phase 2：元数据 + 对象索引 + 双向链接
+### Phase 2：元数据 + 对象索引 + 双向链接 🔶 进行中（核心已完成）
 
 **目标：** 让笔记从"静态文档"变成"知识节点"
 
-**2.1 Frontmatter 元数据**
-- FS 层支持 YAML frontmatter 解析
+**2.1 Frontmatter 元数据** ✅ 已完成
+- FS 层支持 YAML frontmatter 解析（使用 PyYAML）
   ```yaml
   ---
   title: 我的笔记
@@ -182,22 +182,23 @@ web/
   created: 2026-06-03
   ---
   ```
+- Frontmatter title 优先于 heading title 和文件名
 - 编辑器支持 frontmatter 编辑（Vditor 原生支持）
 - 对没有 frontmatter 的文件完全兼容（自动从文件名推断 title）
 
-**2.2 对象索引器**
-- 创建 `nas_md/indexer/` 模块
-  - `scanner.py` — 文件扫描器：遍历 .md 文件，提取结构化对象
-  - `objects.py` — 对象定义：Page / Task / Tag / Link / Frontmatter
-  - `store.py` — 索引存储：SQLite 表设计
+**2.2 对象索引器** ✅ 已完成（扩展 search 模块，非独立 indexer 模块）
+- 扩展 `nas_md/search/` 模块，新增 `extract.py` 提取器
+  - `extract.py` — 纯函数提取器：frontmatter / headings / tags / tasks
+  - 数据库扩展：`tags` / `tasks` / `headings` 表 + `pages.frontmatter` 列
+  - 级联删除：`ON DELETE CASCADE` 自动清理关联对象
 - 索引对象类型：
   - **Page**：页面（文件名、frontmatter、修改时间）
   - **Task**：任务项（`- [ ]` / `- [x]`，所属页面、完成状态）
   - **Tag**：标签（`#tag` 语法 + frontmatter tags）
-  - **Link**：链接（`[[wiki-link]]` 语法）
   - **Heading**：标题（`## Heading`，用于大纲）
+- 实时索引：文件保存时立即提取并更新，单事务保证一致性
 
-**2.3 双向链接 + 反链**
+**2.3 双向链接 + 反链** ❌ 待实现
 - 解析 `[[Page Name]]` 语法，建立链接关系
 - 维护反链索引：`{page: [backlinks]}`
 - 前端展示：
@@ -205,17 +206,17 @@ web/
   - 鼠标悬停 `[[link]]` 显示目标页面预览
   - 点击跳转到目标页面
 
-**2.4 查询 API**
+**2.4 查询 API** ✅ 已完成
 - `GET /api/query?type=task&status=pending` — 查询未完成任务
 - `GET /api/query?type=tag&name=project` — 查询带某标签的页面
-- `GET /api/query?type=link&page=xxx` — 查询某页面的所有链接
-- `GET /api/backlinks?page=xxx` — 查询反链
+- `GET /api/query?type=heading&page=xxx` — 查询某页面的标题列表
+- `GET /api/query?type=link&page=xxx` — 查询某页面的所有链接 ❌ 待实现
 
 **交付物：**
-- 笔记支持 YAML frontmatter
-- 自动对象索引（Task / Tag / Link）
-- 双向链接 + 反链展示
-- 结构化查询 API
+- ✅ 笔记支持 YAML frontmatter（PyYAML 解析）
+- ✅ 自动对象索引（Task / Tag / Heading）
+- ❌ 双向链接 + 反链展示（Phase 2 后续迭代）
+- ✅ 结构化查询 API（/api/query）
 
 ---
 
@@ -491,10 +492,8 @@ const state = {
 | `PUT` | `/api/mounts/{id}/mkdir` | 创建目录 | 1 | ✅ |
 | `DELETE` | `/api/mounts/{id}/file?path=/xxx` | 删除文件 | 1 | ✅ |
 | `GET` | `/api/find-path?name=xxx` | 搜索目录路径（无需认证） | 1 | ✅ |
-| `GET` | `/api/search?q=关键词` | 全文搜索 | 1 | ⚠️ UI 就绪 |
-| `POST` | `/api/index/rebuild` | 重建索引 | 2 | ❌ |
-| `GET` | `/api/index/status` | 索引状态 | 2 | ❌ |
-| `GET` | `/api/query?type=task&status=pending` | 结构化查询 | 2 | ❌ |
+| `GET` | `/api/search?q=关键词` | 全文搜索 | 1 | ✅ 已实现 |
+| `GET` | `/api/query?type=task\|tag\|heading` | 结构化查询 | 2 | ✅ 已实现 |
 | `GET` | `/api/backlinks?page=xxx` | 反链查询 | 2 | ❌ |
 | `GET` | `/api/links?page=xxx` | 出链查询 | 2 | ❌ |
 | `GET` | `/api/tags` | 标签列表 | 2 | ❌ |
@@ -559,7 +558,7 @@ const state = {
 | Phase | 预计周期 | 核心交付 | 状态 |
 |-------|----------|----------|------|
 | Phase 1 | 3 天 | Web 编辑器 + 登录认证 | ✅ 已完成 |
-| Phase 2 | 3-4 周 | Frontmatter + 对象索引 + 双向链接 | 待开始 |
+| Phase 2 | 3-4 周 | Frontmatter + 对象索引 + 双向链接 | 🔶 核心已完成 |
 | Phase 3 | 2-3 周 | 知识图谱 + 数据看板 | 待开始 |
 | Phase 4 | 2-3 周 | 同步机制 + 离线支持 | 待开始 |
 | Phase 5 | 2-3 周 | 插件系统 | 待开始 |

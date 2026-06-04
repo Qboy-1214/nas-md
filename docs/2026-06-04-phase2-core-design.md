@@ -1,4 +1,4 @@
-# Phase 2 核心：Frontmatter + 对象索引器 设计
+# Phase 2 核心：Frontmatter + 对象索引器 设计 ✅ 已完成
 
 > 日期：2026-06-04
 > 范围：Phase 2 的核心部分（双向链接和查询 API 的完整版留待后续迭代）

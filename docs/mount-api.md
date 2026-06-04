@@ -401,6 +401,126 @@ DELETE /api/mounts/{id}/file?path=/file.md
 
 ---
 
+## 搜索与查询 API
+
+### 全文搜索
+
+```
+GET /api/search?q=keyword&limit=20
+```
+
+使用 SQLite FTS5 进行全文搜索。需要认证。
+
+**参数：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `q` | 必填 | 搜索关键词 |
+| `limit` | 20 | 返回结果数量上限 |
+
+**响应 200：**
+```json
+[
+  {"path": "notes/todo.md", "title": "Todo", "snippet": "...matching text..."},
+  ...
+]
+```
+
+---
+
+### 结构化查询
+
+```
+GET /api/query?type=task|tag|heading
+```
+
+查询结构化对象（任务、标签、标题）。需要认证。
+
+#### 查询任务
+
+```
+GET /api/query?type=task&status=pending
+```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `type` | 必填，固定为 `task` |
+| `status` | 可选，`pending` 或 `done`，不传则返回全部 |
+
+**响应 200：**
+```json
+{
+  "tasks": [
+    {"content": "Buy groceries", "done": false, "page": "notes/todo.md", "line": 5},
+    ...
+  ]
+}
+```
+
+#### 查询标签
+
+```
+GET /api/query?type=tag
+GET /api/query?type=tag&name=project
+```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `type` | 必填，固定为 `tag` |
+| `name` | 可选，指定标签名则返回含该标签的页面列表 |
+
+**响应 200（无 name，返回标签列表）：**
+```json
+{
+  "tags": [
+    {"name": "project", "count": 5},
+    {"name": "python", "count": 3},
+    ...
+  ]
+}
+```
+
+**响应 200（有 name，返回页面列表）：**
+```json
+{
+  "pages": [
+    {"path": "notes/a.md", "title": "A"},
+    ...
+  ]
+}
+```
+
+#### 查询标题
+
+```
+GET /api/query?type=heading&page=notes/a.md
+```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `type` | 必填，固定为 `heading` |
+| `page` | 可选，指定页面路径则返回该页面的标题列表 |
+
+**响应 200：**
+```json
+{
+  "headings": [
+    {"level": 2, "text": "Section", "line": 10, "page": "notes/a.md"},
+    ...
+  ]
+}
+```
+
+**响应 400：** 无效的查询类型。
+
+---
+
 ## 错误响应
 
 所有错误均返回 JSON：

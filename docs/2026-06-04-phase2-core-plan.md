@@ -1,6 +1,6 @@
-# Phase 2 核心：Frontmatter + 对象索引器 实施计划
+# Phase 2 核心：Frontmatter + 对象索引器 实施计划 ✅ 已完成
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在现有 search 模块上扩展，实现 Frontmatter 解析、对象索引（Tag/Task/Heading）和结构化查询 API。
 
@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `pyproject.toml`
 
-- [ ] **Step 1: 在 pyproject.toml 中添加 PyYAML 依赖**
+- [x] **Step 1: 在 pyproject.toml 中添加 PyYAML 依赖**
 
 在 `[project]` 部分添加 `dependencies` 字段：
 
@@ -28,17 +28,17 @@ requires-python = ">=3.11"
 dependencies = ["pyyaml>=6.0"]
 ```
 
-- [ ] **Step 2: 安装依赖**
+- [x] **Step 2: 安装依赖**
 
 Run: `pip install pyyaml>=6.0`
 Expected: Successfully installed PyYAML
 
-- [ ] **Step 3: 验证安装**
+- [x] **Step 3: 验证安装**
 
 Run: `python -c "import yaml; print(yaml.__version__)"`
 Expected: 打印版本号
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pyproject.toml
@@ -53,7 +53,7 @@ git commit -m "feat: add pyyaml dependency for frontmatter parsing"
 - Create: `nas_md/search/extract.py`
 - Create: `tests/test_extract.py`
 
-- [ ] **Step 1: 创建 extract.py — frontmatter 提取**
+- [x] **Step 1: 创建 extract.py — frontmatter 提取**
 
 ```python
 """Content extractors for structured objects from Markdown files."""
@@ -100,7 +100,7 @@ def _strip_frontmatter(content: str) -> str:
     return content[end + 3 :].lstrip("\n")
 ```
 
-- [ ] **Step 2: 创建 extract.py — headings 提取**
+- [x] **Step 2: 创建 extract.py — headings 提取**
 
 追加到 `extract.py`：
 
@@ -132,7 +132,7 @@ def extract_headings(content: str) -> list[dict]:
     return results
 ```
 
-- [ ] **Step 3: 创建 extract.py — tags 提取**
+- [x] **Step 3: 创建 extract.py — tags 提取**
 
 追加到 `extract.py`：
 
@@ -184,7 +184,7 @@ def extract_tags(content: str, frontmatter: dict[str, Any] | None = None) -> lis
     return [{"name": name, "source": source} for name, source in sorted(tags.items())]
 ```
 
-- [ ] **Step 4: 创建 extract.py — tasks 提取**
+- [x] **Step 4: 创建 extract.py — tasks 提取**
 
 追加到 `extract.py`：
 
@@ -214,7 +214,7 @@ def extract_tasks(content: str) -> list[dict]:
     return results
 ```
 
-- [ ] **Step 5: 创建测试文件 tests/test_extract.py**
+- [x] **Step 5: 创建测试文件 tests/test_extract.py**
 
 ```python
 """Tests for search extractors."""
@@ -343,7 +343,7 @@ class TestExtractTags:
 
 class TestExtractTasks:
     def test_pending_task(self):
-        content = "- [ ] Buy groceries"
+        content = "- [x] Buy groceries"
         result = extract_tasks(content)
         assert len(result) == 1
         assert result[0]["content"] == "Buy groceries"
@@ -356,19 +356,19 @@ class TestExtractTasks:
         assert result[0]["done"] == 1
 
     def test_mixed_tasks(self):
-        content = "- [ ] Todo\n- [x] Done\n- [ ] Another"
+        content = "- [x] Todo\n- [x] Done\n- [x] Another"
         result = extract_tasks(content)
         assert len(result) == 3
         assert [t["done"] for t in result] == [0, 1, 0]
 
     def test_task_line_numbers(self):
-        content = "# Title\n\n- [ ] Task one\n\n- [ ] Task two"
+        content = "# Title\n\n- [x] Task one\n\n- [x] Task two"
         result = extract_tasks(content)
         assert result[0]["line_number"] == 3
         assert result[1]["line_number"] == 5
 
     def test_tasks_skip_frontmatter(self):
-        content = "---\ntitle: Test\n---\n- [ ] Real task"
+        content = "---\ntitle: Test\n---\n- [x] Real task"
         result = extract_tasks(content)
         assert len(result) == 1
         assert result[0]["content"] == "Real task"
@@ -390,12 +390,12 @@ class TestExtractTasks:
         assert result[0]["done"] == 1
 ```
 
-- [ ] **Step 6: 运行测试验证**
+- [x] **Step 6: 运行测试验证**
 
 Run: `python -m pytest tests/test_extract.py -v`
 Expected: 所有测试通过
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add nas_md/search/extract.py tests/test_extract.py
@@ -410,7 +410,7 @@ git commit -m "feat: add content extractors for frontmatter, headings, tags, tas
 - Modify: `nas_md/search/__init__.py`
 - Modify: `tests/test_search.py`
 
-- [ ] **Step 1: 扩展 init_db() — 新增 tags/tasks/headings 表和 frontmatter 列**
+- [x] **Step 1: 扩展 init_db() — 新增 tags/tasks/headings 表和 frontmatter 列**
 
 在 `init_db()` 的 `conn.executescript()` 中，在现有建表语句之后追加：
 
@@ -470,7 +470,7 @@ except Exception:
     pass  # Column already exists
 ```
 
-- [ ] **Step 2: 修改 index_file() — 提取并存储对象**
+- [x] **Step 2: 修改 index_file() — 提取并存储对象**
 
 替换现有 `index_file()` 函数：
 
@@ -548,7 +548,7 @@ def index_file(path: str, content: str) -> None:
 
 需要在文件顶部添加 `import json`。
 
-- [ ] **Step 3: 修改 rebuild_index() — 遍历时一并提取对象**
+- [x] **Step 3: 修改 rebuild_index() — 遍历时一并提取对象**
 
 在 `rebuild_index()` 的 INSERT INTO pages 语句中添加 `frontmatter` 列，并在插入 page 后提取对象：
 
@@ -627,7 +627,7 @@ def rebuild_index(directories: list[str]) -> int:
         # ... rest of metadata storage unchanged
 ```
 
-- [ ] **Step 4: 新增查询函数**
+- [x] **Step 4: 新增查询函数**
 
 在 `search/__init__.py` 末尾添加：
 
@@ -724,7 +724,7 @@ def query_headings(page_path: str | None = None) -> list[dict]:
         conn.close()
 ```
 
-- [ ] **Step 5: 扩展测试 tests/test_search.py**
+- [x] **Step 5: 扩展测试 tests/test_search.py**
 
 在测试文件中添加新的测试类：
 
@@ -772,7 +772,7 @@ class TestObjectIndexing:
         assert "project" in names
 
     def test_index_file_extracts_tasks(self, search_db):
-        content = "# Todo\n- [ ] Buy milk\n- [x] Write code\n- [ ] Review PR"
+        content = "# Todo\n- [x] Buy milk\n- [x] Write code\n- [x] Review PR"
         index_file("/todo.md", content)
         tasks = query_tasks()
         assert len(tasks) == 3
@@ -782,14 +782,14 @@ class TestObjectIndexing:
         assert len(done) == 1
 
     def test_remove_file_cascades(self, search_db):
-        content = "# Title\n- [ ] Task\n#tag"
+        content = "# Title\n- [x] Task\n#tag"
         index_file("/cascade.md", content)
         remove_file("/cascade.md")
         assert query_headings("/cascade.md") == []
         assert query_tasks() == []
 
     def test_reindex_updates_objects(self, search_db):
-        index_file("/update.md", "# Old Title\n- [ ] Old task")
+        index_file("/update.md", "# Old Title\n- [x] Old task")
         index_file("/update.md", "# New Title\n- [x] New task")
         headings = query_headings("/update.md")
         assert len(headings) == 1
@@ -812,12 +812,12 @@ class TestObjectIndexing:
         assert results[0]["title"] == "Custom Title"
 ```
 
-- [ ] **Step 6: 运行全部搜索测试**
+- [x] **Step 6: 运行全部搜索测试**
 
 Run: `python -m pytest tests/test_search.py tests/test_extract.py -v`
 Expected: 所有测试通过
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add nas_md/search/__init__.py tests/test_search.py
@@ -831,7 +831,7 @@ git commit -m "feat: extend search module with object indexing (tags, tasks, hea
 **Files:**
 - Modify: `nas_md/webserver/__init__.py`
 
-- [ ] **Step 1: 在 webserver do_GET 中添加 /api/query 路由**
+- [x] **Step 1: 在 webserver do_GET 中添加 /api/query 路由**
 
 在 `do_GET` 方法的路由分发中，在 search API 路由之后添加：
 
@@ -842,7 +842,7 @@ if path == "/api/query":
     return
 ```
 
-- [ ] **Step 2: 实现 _handle_query 方法**
+- [x] **Step 2: 实现 _handle_query 方法**
 
 在 `MountHTTPHandler` 类中添加：
 
@@ -873,7 +873,7 @@ def _handle_query(self, qs: dict):
         self._send_error("Invalid query type. Use: task, tag, heading", 400)
 ```
 
-- [ ] **Step 3: 在 serve() 的 API 端点日志中添加 /api/query**
+- [x] **Step 3: 在 serve() 的 API 端点日志中添加 /api/query**
 
 在 `serve()` 函数的 `logger.info("    GET  /api/search?q=keyword")` 之后添加：
 
@@ -881,7 +881,7 @@ def _handle_query(self, qs: dict):
 logger.info("    GET  /api/query?type=task|tag|heading")
 ```
 
-- [ ] **Step 4: 手动测试 API**
+- [x] **Step 4: 手动测试 API**
 
 启动服务后测试：
 
@@ -896,7 +896,7 @@ curl "http://localhost:8080/api/query?type=heading&page=/欢迎.md"
 
 Expected: 返回 JSON 格式的查询结果
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add nas_md/webserver/__init__.py
@@ -910,22 +910,22 @@ git commit -m "feat: add /api/query endpoint for structured object queries"
 **Files:**
 - Possibly modify: `nas_md/search/__init__.py`, `nas_md/search/extract.py`, `tests/test_extract.py`, `tests/test_search.py`
 
-- [ ] **Step 1: 运行 ruff 检查**
+- [x] **Step 1: 运行 ruff 检查**
 
 Run: `python -m ruff check nas_md/search/ nas_md/webserver/ tests/`
 Expected: 无错误，或修复后无错误
 
-- [ ] **Step 2: 运行 black 格式化**
+- [x] **Step 2: 运行 black 格式化**
 
 Run: `python -m black nas_md/search/ nas_md/webserver/ tests/`
 Expected: 所有文件已格式化
 
-- [ ] **Step 3: 运行全部测试**
+- [x] **Step 3: 运行全部测试**
 
 Run: `python -m pytest tests/ -v`
 Expected: 所有测试通过
 
-- [ ] **Step 4: 推送并监控 CI**
+- [x] **Step 4: 推送并监控 CI**
 
 ```bash
 git push
@@ -933,7 +933,7 @@ git push
 
 监控 GitHub Actions CI 结果，如有失败则修复。
 
-- [ ] **Step 5: 最终 Commit（如有修复）**
+- [x] **Step 5: 最终 Commit（如有修复）**
 
 ```bash
 git add -A
