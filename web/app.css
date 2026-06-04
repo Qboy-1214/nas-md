@@ -375,6 +375,11 @@ a:hover {
   background: none; box-shadow: none;
 }
 
+/* Save Group */
+.save-group {
+  display: flex; align-items: center; gap: var(--s-xs);
+}
+
 /* Save Button — Ghost style */
 .save-btn {
   padding: var(--s-xs) var(--s-md); background: transparent;
@@ -384,11 +389,37 @@ a:hover {
   transition: all 0.15s ease; height: var(--button-h);
 }
 
-.save-btn:hover:not(.disabled) { color: var(--c-ink); border-color: var(--c-ink); }
+.save-btn:hover:not(:disabled) { color: var(--c-ink); border-color: var(--c-ink); }
 
 .save-btn.dirty { color: var(--c-primary); border-color: var(--c-primary); }
-.save-btn.dirty:hover { color: var(--c-primary-hover); border-color: var(--c-primary-hover); }
-.save-btn.disabled { opacity: 0.4; cursor: default; }
+.save-btn.dirty:hover:not(:disabled) { color: var(--c-primary-hover); border-color: var(--c-primary-hover); }
+.save-btn.saving { opacity: 0.5; cursor: wait; pointer-events: none; }
+
+/* Auto-save Toggle Switch */
+.autosave-toggle {
+  position: relative; display: inline-flex; align-items: center;
+  cursor: pointer; width: 32px; height: 18px;
+}
+.autosave-toggle input { display: none; }
+.autosave-slider {
+  position: absolute; inset: 0;
+  background: var(--c-border-strong);
+  border-radius: 9px;
+  transition: background 0.2s ease;
+}
+.autosave-slider::before {
+  content: ''; position: absolute;
+  width: 14px; height: 14px; left: 2px; bottom: 2px;
+  background: var(--c-on-primary);
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+.autosave-toggle input:checked + .autosave-slider {
+  background: var(--c-primary);
+}
+.autosave-toggle input:checked + .autosave-slider::before {
+  transform: translateX(14px);
+}
 
 /* User Area (topbar) */
 .user-area { margin-left: var(--s-xs); }

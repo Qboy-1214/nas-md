@@ -53,7 +53,13 @@
         <button onclick="setEditorMode('sv')">分屏预览</button>
         <button onclick="setEditorMode('wysiwyg')">所见即所得</button>
       </div>
-      <button class="save-btn" id="btn-save" onclick="saveFile()" style="display:none">保存</button>
+      <div class="save-group" id="save-group" style="display:none">
+        <button class="save-btn" id="btn-save" onclick="saveFile()">保存</button>
+        <label class="autosave-toggle" title="自动保存">
+          <input type="checkbox" id="autosave-switch" onchange="toggleAutoSave(this.checked)">
+          <span class="autosave-slider"></span>
+        </label>
+      </div>
       <button class="outline-toggle-btn" id="btn-outline" onclick="if(window._toggleOutline) window._toggleOutline()" title="大纲 (Ctrl+O)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="3" y1="12" x2="21" y2="12"></line>

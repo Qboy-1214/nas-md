@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           state.searchResults = [];
           $('breadcrumb').textContent = lastPath + (mount.readonly ? ' 🔒' : '');
           $('editor-modes').style.display = mount.readonly ? 'none' : (lastPath.endsWith('.md') ? '' : 'none');
-          $('btn-save').style.display = mount.readonly ? 'none' : '';
+          $('save-group').style.display = mount.readonly ? 'none' : '';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
@@ -510,7 +510,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
 
     $('breadcrumb').textContent = path + (mount.readonly ? ' (只读)' : '');
     $('editor-modes').style.display = mount.readonly ? 'none' : (path.endsWith('.md') ? '' : 'none');
-    $('btn-save').style.display = mount.readonly ? 'none' : '';
+    $('save-group').style.display = mount.readonly ? 'none' : '';
     showPage('editor');
 
     if (window._vditor) window._vditor.destroy();
@@ -581,10 +581,40 @@ function startDirtyCheck() {
         state.dirty = isDirty;
         const btn = $('btn-save');
         if (btn) btn.classList.toggle('dirty', isDirty);
+        // Auto-save trigger
+        if (isDirty && state.autoSave) scheduleAutoSave();
       }
     }
   }, 500);
 }
+
+// === Auto-save ===
+state.autoSave = localStorage.getItem('nasmd_autosave') === '1';
+
+function toggleAutoSave(on) {
+  state.autoSave = on;
+  localStorage.setItem('nasmd_autosave', on ? '1' : '0');
+  if (!on && window._autoSaveTimer) {
+    clearTimeout(window._autoSaveTimer);
+    window._autoSaveTimer = null;
+  }
+}
+
+function scheduleAutoSave() {
+  if (window._autoSaveTimer) clearTimeout(window._autoSaveTimer);
+  window._autoSaveTimer = setTimeout(() => {
+    if (state.dirty && state.autoSave && state.currentPath) {
+      saveFile({ silent: true });
+    }
+    window._autoSaveTimer = null;
+  }, 3000);
+}
+
+// Restore auto-save switch state on load
+document.addEventListener('DOMContentLoaded', () => {
+  const sw = $('autosave-switch');
+  if (sw) sw.checked = state.autoSave;
+});
 
 function markDirty() {
   state.dirty = true;
@@ -648,18 +678,29 @@ function toggleBacklinks() {
   if (panel) panel.classList.toggle('collapsed');
 }
 
-async function saveFile() {
+async function saveFile({ silent = false } = {}) {
   if (!state.currentPath || !state.currentMountId || !window._vditor) return;
   // Check if current mount is readonly
   const mount = state.mounts.find(m => m.id === state.currentMountId);
-  if (mount && mount.readonly) { showToast('此文件不允许修改'); return; }
+  if (mount && mount.readonly) { if (!silent) showToast('此文件不允许修改'); return; }
   const content = window._vditor.getValue();
+
+  // Show saving state on button (only for manual save)
+  const btn = $('btn-save');
+  if (!silent && btn) {
+    btn.classList.add('saving');
+    btn.disabled = true;
+  }
 
   if (!navigator.onLine) {
     // Offline: save to localStorage
     saveToLocalStorage(state.currentPath, content);
     markClean();
-    showToast('已离线保存，恢复连接后自动同步');
+    if (!silent) {
+      showToast('已离线保存，恢复连接后自动同步');
+      btn.classList.remove('saving');
+      btn.disabled = false;
+    }
     return;
   }
 
@@ -668,14 +709,20 @@ async function saveFile() {
     window._originalContent = content;
     markClean();
     clearLocalStorage(state.currentPath);
-    showToast('已保存');
+    if (!silent) showToast('已保存');
+    else showToast('自动保存完成');
     // Trigger sync after save
     performSync();
   } catch (e) {
     // Fallback to localStorage on error
     saveToLocalStorage(state.currentPath, content);
-    showToast('保存失败，已缓存到本地');
+    if (!silent) showToast('保存失败，已缓存到本地');
     console.error(e);
+  } finally {
+    if (!silent && btn) {
+      btn.classList.remove('saving');
+      btn.disabled = false;
+    }
   }
 }
 
@@ -726,9 +773,10 @@ function navigateHome() {
   state.currentMountId = null;
   $('breadcrumb').textContent = '';
   $('editor-modes').style.display = 'none';
-  $('btn-save').style.display = 'none';
+  $('save-group').style.display = 'none';
   if (window._vditor) { window._vditor.destroy(); window._vditor = null; }
   if (window._dirtyTimer) { clearInterval(window._dirtyTimer); window._dirtyTimer = null; }
+  if (window._autoSaveTimer) { clearTimeout(window._autoSaveTimer); window._autoSaveTimer = null; }
   showPage('welcome');
   renderSidebar();
 }
