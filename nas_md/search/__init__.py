@@ -91,7 +91,8 @@ def index_file(path: str, content: str) -> None:
         content_hash = str(hash(content))
         now = int(os.path.getmtime(path) * 1000) if os.path.exists(path) else 0
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO pages (path, filename, title, content, content_hash, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
@@ -99,7 +100,9 @@ def index_file(path: str, content: str) -> None:
                 content=excluded.content,
                 content_hash=excluded.content_hash,
                 updated_at=excluded.updated_at
-        """, (path, filename, title, content, content_hash, now))
+        """,
+            (path, filename, title, content, content_hash, now),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -121,7 +124,8 @@ def search(query: str, limit: int = 20) -> list[dict]:
     try:
         # Use FTS5 query with prefix matching
         fts_query = f"{query}*"
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT p.path, p.filename, p.title,
                    snippet(pages_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
                    rank
@@ -130,17 +134,21 @@ def search(query: str, limit: int = 20) -> list[dict]:
             WHERE pages_fts MATCH ?
             ORDER BY rank
             LIMIT ?
-        """, (fts_query, limit)).fetchall()
+        """,
+            (fts_query, limit),
+        ).fetchall()
 
         results = []
         for row in rows:
-            results.append({
-                "path": row[0],
-                "filename": row[1],
-                "title": row[2] or row[1],
-                "snippet": row[3] or "",
-                "rank": row[4],
-            })
+            results.append(
+                {
+                    "path": row[0],
+                    "filename": row[1],
+                    "title": row[2] or row[1],
+                    "snippet": row[3] or "",
+                    "rank": row[4],
+                }
+            )
         return results
     except Exception as e:
         logger.error("Search error: %s", e)
@@ -174,10 +182,13 @@ def rebuild_index(directories: list[str]) -> int:
                     content_hash = str(hash(content))
                     updated_at = int(md_file.stat().st_mtime * 1000)
 
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT INTO pages (path, filename, title, content, content_hash, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, (rel_path, filename, title, content, content_hash, updated_at))
+                    """,
+                        (rel_path, filename, title, content, content_hash, updated_at),
+                    )
                     count += 1
                 except Exception as e:
                     logger.warning("Failed to index %s: %s", md_file, e)
@@ -186,14 +197,20 @@ def rebuild_index(directories: list[str]) -> int:
         logger.info("Indexed %d files", count)
 
         # Store index metadata
-        conn.execute("""
+        conn.execute(
+            """
             INSERT OR REPLACE INTO index_meta (key, value)
             VALUES ('last_rebuild', ?)
-        """, (str(int(time.time() * 1000)),))
-        conn.execute("""
+        """,
+            (str(int(time.time() * 1000)),),
+        )
+        conn.execute(
+            """
             INSERT OR REPLACE INTO index_meta (key, value)
             VALUES ('file_count', ?)
-        """, (str(count),))
+        """,
+            (str(count),),
+        )
         conn.commit()
 
         return count
