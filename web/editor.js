@@ -181,11 +181,14 @@ function setupSVSync() {
   // create an infinite loop when both sides listen. A polling loop
   // sidesteps this entirely: we only push scroll position when it
   // actually changed from the last known value.
+  // One-way sync: editor → preview only.
+  // Syncing preview back to editor causes a feedback loop because
+  // changing editor scrollTop triggers Vditor to re-render the preview,
+  // which resets preview scrollTop, which triggers another sync.
+  // The preview panel is read-only rendered output — user scrolling it
+  // should not affect the editor.
   const tick = () => {
     const eTop = svEl.scrollTop;
-    const pTop = previewEl.scrollTop;
-
-    // Editor changed → push to preview
     if (eTop !== _svLastEditorTop) {
       const eMax = svEl.scrollHeight - svEl.clientHeight;
       const pMax = previewEl.scrollHeight - previewEl.clientHeight;
@@ -193,19 +196,7 @@ function setupSVSync() {
         previewEl.scrollTop = eTop * pMax / eMax;
       }
       _svLastEditorTop = eTop;
-      _svLastPreviewTop = previewEl.scrollTop;
     }
-    // Preview changed (user scrolled preview directly) → push to editor
-    else if (pTop !== _svLastPreviewTop) {
-      const eMax = svEl.scrollHeight - svEl.clientHeight;
-      const pMax = previewEl.scrollHeight - previewEl.clientHeight;
-      if (eMax > 0 && pMax > 0) {
-        svEl.scrollTop = pTop * eMax / pMax;
-      }
-      _svLastPreviewTop = pTop;
-      _svLastEditorTop = svEl.scrollTop;
-    }
-
     _svRafId = requestAnimationFrame(tick);
   };
   _svRafId = requestAnimationFrame(tick);
