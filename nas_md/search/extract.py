@@ -137,3 +137,37 @@ def extract_tasks(content: str) -> list[dict]:
         line_number = body[: match.start() + len(indent)].count("\n") + fm_lines + 1
         results.append({"content": text, "done": done, "line_number": line_number})
     return results
+
+
+_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+
+
+def extract_links(content: str) -> list[dict]:
+    """Extract wiki-links from Markdown content.
+
+    Returns list of {"target": str, "display_text": str|None, "line_number": int}.
+    Matches [[Page Name]] and [[Page Name|Display Text]].
+    Skips links inside code blocks.
+    """
+    body = _strip_frontmatter(content)
+    # Remove code blocks to avoid false positives
+    body_no_code = re.sub(r"```[\s\S]*?```", "", body)
+    body_no_code = re.sub(r"`[^`]+`", "", body_no_code)
+
+    fm_lines = 0
+    if content.startswith("---"):
+        end = content.find("---", 3)
+        if end != -1:
+            fm_lines = content[: end + 3].count("\n")
+
+    results = []
+    for match in _LINK_RE.finditer(body_no_code):
+        target = match.group(1).strip()
+        display_text = match.group(2)
+        if display_text:
+            display_text = display_text.strip()
+        line_number = body_no_code[: match.start()].count("\n") + fm_lines + 1
+        results.append(
+            {"target": target, "display_text": display_text, "line_number": line_number}
+        )
+    return results

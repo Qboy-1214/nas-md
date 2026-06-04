@@ -585,6 +585,7 @@ async function openFile(path, preferredMountId) {
     state.dirty = false;
     startDirtyCheck();
     renderSidebar();
+    loadBacklinks(path);
   } catch (e) {
     showToast('加载文件失败');
     console.error(e);
@@ -598,6 +599,41 @@ function startDirtyCheck() {
       state.dirty = (window._vditor.getValue() !== window._originalContent);
     }
   }, 500);
+}
+
+async function loadBacklinks(page) {
+  const panel = $('backlinks-panel');
+  const content = $('backlinks-content');
+  const title = $('backlinks-title');
+  if (!panel || !page.endsWith('.md')) {
+    if (panel) panel.style.display = 'none';
+    return;
+  }
+  try {
+    const data = await API.getBacklinks(page);
+    const bls = data.backlinks || [];
+    if (bls.length === 0) {
+      panel.style.display = 'none';
+      return;
+    }
+    title.textContent = `反向链接 (${bls.length})`;
+    content.innerHTML = bls.map(bl =>
+      `<div class="backlink-item" onclick="openFile('${bl.path.replace(/'/g, "\\'")}')">
+        <span class="backlink-page">${bl.title || bl.path}</span>
+        <span class="backlink-line">第 ${bl.line} 行</span>
+      </div>`
+    ).join('');
+    panel.style.display = '';
+    panel.classList.remove('collapsed');
+  } catch (e) {
+    console.error('Backlinks error:', e);
+    panel.style.display = 'none';
+  }
+}
+
+function toggleBacklinks() {
+  const panel = $('backlinks-panel');
+  if (panel) panel.classList.toggle('collapsed');
 }
 
 async function saveFile() {

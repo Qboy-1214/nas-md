@@ -11,7 +11,9 @@ from nas_md.search import (
     get_stats,
     index_file,
     init_db,
+    query_backlinks,
     query_headings,
+    query_links,
     query_tags,
     query_tasks,
     rebuild_index,
@@ -263,3 +265,71 @@ class TestObjectIndexing:
         tags = query_tags()
         project_tag = next(t for t in tags if t["name"] == "project")
         assert project_tag["count"] == 2
+
+
+class TestLinksIndexing:
+    def test_index_file_extracts_links(self, search_db):
+        index_file("/a.md", "# A\nSee [[B]] for details.")
+        links = query_links("/a.md")
+        assert len(links) == 1
+        assert links[0]["target"] == "B"
+        assert links[0]["display_text"] is None
+
+    def test_index_file_extracts_links_with_display(self, search_db):
+        index_file("/a.md", "# A\nSee [[B|beta]] for details.")
+        links = query_links("/a.md")
+        assert len(links) == 1
+        assert links[0]["target"] == "B"
+        assert links[0]["display_text"] == "beta"
+
+    def test_query_backlinks(self, search_db):
+        index_file("/a.md", "# Page A\nSee [[B]] here.")
+        index_file("/b.md", "# Page B\nContent")
+        backlinks = query_backlinks("/b.md")
+        assert len(backlinks) == 1
+        assert backlinks[0]["path"] == "/a.md"
+        assert backlinks[0]["target"] == "B"
+
+    def test_query_backlinks_by_title(self, search_db):
+        index_file("/a.md", "# A\nSee [[Page B]] here.")
+        index_file("/b.md", "# Page B\nContent")
+        backlinks = query_backlinks("/b.md")
+        assert len(backlinks) == 1
+        assert backlinks[0]["path"] == "/a.md"
+
+    def test_query_backlinks_no_results(self, search_db):
+        index_file("/a.md", "# A\nNo links here.")
+        index_file("/b.md", "# B\nContent")
+        backlinks = query_backlinks("/b.md")
+        assert len(backlinks) == 0
+
+    def test_remove_file_cascades_links(self, search_db):
+        index_file("/a.md", "# A\nSee [[B]].")
+        conn = get_connection()
+        try:
+            count_before = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
+            assert count_before == 1
+        finally:
+            conn.close()
+        remove_file("/a.md")
+        conn = get_connection()
+        try:
+            count_after = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
+            assert count_after == 0
+        finally:
+            conn.close()
+
+    def test_reindex_updates_links(self, search_db):
+        index_file("/a.md", "# A\nSee [[B]].")
+        assert len(query_links("/a.md")) == 1
+        index_file("/a.md", "# A\nSee [[C]] and [[D]].")
+        links = query_links("/a.md")
+        assert len(links) == 2
+        targets = {l["target"] for l in links}
+        assert targets == {"C", "D"}
+
+    def test_query_links_all(self, search_db):
+        index_file("/a.md", "# A\n[[B]]")
+        index_file("/c.md", "# C\n[[D]]")
+        links = query_links()
+        assert len(links) == 2

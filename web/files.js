@@ -118,6 +118,11 @@ const API = {
     const r = await this.request(`/api/search?q=${encodeURIComponent(query)}&limit=20`);
     return r ? r.json() : [];
   },
+
+  async getBacklinks(page) {
+    const r = await this.request(`/api/backlinks?page=${encodeURIComponent(page)}`);
+    return r ? r.json() : { backlinks: [] };
+  },
 };
 
 // 全局变量

@@ -5,6 +5,7 @@ import pytest
 from nas_md.search.extract import (
     extract_frontmatter,
     extract_headings,
+    extract_links,
     extract_tags,
     extract_tasks,
 )
@@ -168,3 +169,61 @@ class TestExtractTasks:
         result = extract_tasks(content)
         assert len(result) == 1
         assert result[0]["done"] == 1
+
+
+class TestExtractLinks:
+    def test_simple_link(self):
+        content = "See [[Project Notes]] for details."
+        result = extract_links(content)
+        assert len(result) == 1
+        assert result[0]["target"] == "Project Notes"
+        assert result[0]["display_text"] is None
+
+    def test_link_with_display_text(self):
+        content = "See [[Project Notes|项目笔记]] for details."
+        result = extract_links(content)
+        assert len(result) == 1
+        assert result[0]["target"] == "Project Notes"
+        assert result[0]["display_text"] == "项目笔记"
+
+    def test_multiple_links(self):
+        content = "Link to [[A]] and [[B|beta]] and [[C]]."
+        result = extract_links(content)
+        assert len(result) == 3
+        assert result[0]["target"] == "A"
+        assert result[1]["target"] == "B"
+        assert result[2]["target"] == "C"
+
+    def test_link_line_numbers(self):
+        content = "# Title\n\nSee [[A]] here.\n\nAlso [[B]]."
+        result = extract_links(content)
+        assert result[0]["line_number"] == 3
+        assert result[1]["line_number"] == 5
+
+    def test_links_skip_code_blocks(self):
+        content = "```\n[[Not a link]]\n```\n[[Real Link]]"
+        result = extract_links(content)
+        assert len(result) == 1
+        assert result[0]["target"] == "Real Link"
+
+    def test_links_skip_frontmatter(self):
+        content = "---\ntitle: Test\n---\n[[Real Link]]"
+        result = extract_links(content)
+        assert len(result) == 1
+        assert result[0]["target"] == "Real Link"
+
+    def test_no_links(self):
+        content = "Just plain text without any links."
+        assert extract_links(content) == []
+
+    def test_link_with_path(self):
+        content = "See [[notes/project]] for details."
+        result = extract_links(content)
+        assert len(result) == 1
+        assert result[0]["target"] == "notes/project"
+
+    def test_chinese_link(self):
+        content = "参考 [[项目笔记]] 了解更多。"
+        result = extract_links(content)
+        assert len(result) == 1
+        assert result[0]["target"] == "项目笔记"

@@ -83,6 +83,14 @@
     <!-- 编辑器 -->
     <div class="editor-container" id="editor-container" style="display:none">
       <div id="vditor"></div>
+      <!-- 反向链接面板 -->
+      <div id="backlinks-panel" class="backlinks-panel" style="display:none">
+        <div class="backlinks-header" onclick="toggleBacklinks()">
+          <span class="backlinks-title" id="backlinks-title">反向链接 (0)</span>
+          <span class="backlinks-toggle" id="backlinks-toggle">▼</span>
+        </div>
+        <div class="backlinks-content" id="backlinks-content"></div>
+      </div>
     </div>
 
     <!-- 设置页 -->

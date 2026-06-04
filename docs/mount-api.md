@@ -431,10 +431,10 @@ GET /api/search?q=keyword&limit=20
 ### 结构化查询
 
 ```
-GET /api/query?type=task|tag|heading
+GET /api/query?type=task|tag|heading|link
 ```
 
-查询结构化对象（任务、标签、标题）。需要认证。
+查询结构化对象（任务、标签、标题、链接）。需要认证。
 
 #### 查询任务
 
@@ -518,6 +518,54 @@ GET /api/query?type=heading&page=notes/a.md
 ```
 
 **响应 400：** 无效的查询类型。
+
+#### 查询链接
+
+```
+GET /api/query?type=link&page=notes/a.md
+```
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `type` | 必填，固定为 `link` |
+| `page` | 可选，指定页面路径则返回该页面的出链列表 |
+
+**响应 200：**
+```json
+{
+  "links": [
+    {"target": "Project Notes", "display_text": "项目笔记", "line": 5},
+    {"target": "TODO", "display_text": null, "line": 12}
+  ]
+}
+```
+
+### 反链查询
+
+```
+GET /api/backlinks?page=notes/a.md
+```
+
+查询哪些页面链接到指定页面。需要认证。
+
+**参数：**
+
+| 参数 | 说明 |
+|------|------|
+| `page` | 必填，目标页面路径 |
+
+**响应 200：**
+```json
+{
+  "backlinks": [
+    {"path": "notes/b.md", "title": "Note B", "line": 3, "target": "a", "display_text": null}
+  ]
+}
+```
+
+**响应 400：** 缺少 `page` 参数。
 
 ---
 

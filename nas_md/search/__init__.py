@@ -123,6 +123,20 @@ def init_db(db_path: str | None = None) -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_headings_page_id ON headings(page_id)")
 
+        # Links table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS links (
+                id INTEGER PRIMARY KEY,
+                page_id INTEGER NOT NULL,
+                target TEXT NOT NULL,
+                display_text TEXT,
+                line_number INTEGER,
+                FOREIGN KEY (page_id) REFERENCES pages(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_links_target ON links(target)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_links_page_id ON links(page_id)")
+
         conn.commit()
         logger.info("Search database initialized at %s", db_path or get_db_path())
     finally:
@@ -134,6 +148,7 @@ def index_file(path: str, content: str) -> None:
     from nas_md.search.extract import (
         extract_frontmatter,
         extract_headings,
+        extract_links,
         extract_tags,
         extract_tasks,
     )
@@ -178,6 +193,7 @@ def index_file(path: str, content: str) -> None:
         conn.execute("DELETE FROM tags WHERE page_id = ?", (page_id,))
         conn.execute("DELETE FROM tasks WHERE page_id = ?", (page_id,))
         conn.execute("DELETE FROM headings WHERE page_id = ?", (page_id,))
+        conn.execute("DELETE FROM links WHERE page_id = ?", (page_id,))
 
         # Insert headings
         for h in extract_headings(content):
@@ -198,6 +214,13 @@ def index_file(path: str, content: str) -> None:
             conn.execute(
                 "INSERT INTO tasks (page_id, line_number, content, done) VALUES (?, ?, ?, ?)",
                 (page_id, t["line_number"], t["content"], t["done"]),
+            )
+
+        # Insert links
+        for lk in extract_links(content):
+            conn.execute(
+                "INSERT INTO links (page_id, target, display_text, line_number) VALUES (?, ?, ?, ?)",
+                (page_id, lk["target"], lk.get("display_text"), lk["line_number"]),
             )
 
         conn.commit()
@@ -259,6 +282,7 @@ def rebuild_index(directories: list[str]) -> int:
     from nas_md.search.extract import (
         extract_frontmatter,
         extract_headings,
+        extract_links,
         extract_tags,
         extract_tasks,
     )
@@ -325,6 +349,11 @@ def rebuild_index(directories: list[str]) -> int:
                         conn.execute(
                             "INSERT INTO tasks (page_id, line_number, content, done) VALUES (?, ?, ?, ?)",
                             (page_id, t["line_number"], t["content"], t["done"]),
+                        )
+                    for lk in extract_links(content):
+                        conn.execute(
+                            "INSERT INTO links (page_id, target, display_text, line_number) VALUES (?, ?, ?, ?)",
+                            (page_id, lk["target"], lk.get("display_text"), lk["line_number"]),
                         )
 
                     count += 1
@@ -471,5 +500,82 @@ def query_headings(page_path: str | None = None) -> list[dict]:
                 LIMIT 500
             """).fetchall()
             return [{"level": r[0], "text": r[1], "line": r[2], "page": r[3]} for r in rows]
+    finally:
+        conn.close()
+
+
+def query_links(page_path: str | None = None) -> list[dict]:
+    """Query outgoing links. If page_path given, return links from that page."""
+    conn = get_connection()
+    try:
+        if page_path:
+            rows = conn.execute(
+                """
+                SELECT l.target, l.display_text, l.line_number
+                FROM links l JOIN pages p ON l.page_id = p.id
+                WHERE p.path = ?
+                ORDER BY l.line_number
+            """,
+                (page_path,),
+            ).fetchall()
+            return [
+                {"target": r[0], "display_text": r[1], "line": r[2]} for r in rows
+            ]
+        else:
+            rows = conn.execute("""
+                SELECT l.target, l.display_text, l.line_number, p.path
+                FROM links l JOIN pages p ON l.page_id = p.id
+                ORDER BY p.path, l.line_number
+                LIMIT 500
+            """).fetchall()
+            return [
+                {"target": r[0], "display_text": r[1], "line": r[2], "page": r[3]}
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
+def query_backlinks(page_path: str) -> list[dict]:
+    """Query backlinks — pages that link TO the given page.
+
+    Matches links.target against the page path, filename stem, or title.
+    """
+    conn = get_connection()
+    try:
+        # Get the page's filename stem and title for matching
+        page_row = conn.execute(
+            "SELECT filename, title FROM pages WHERE path = ?", (page_path,)
+        ).fetchone()
+        if not page_row:
+            return []
+
+        filename = page_row[0]
+        title = page_row[1] or ""
+        stem = Path(filename).stem  # e.g. "a" from "a.md"
+
+        # Match target against: exact path, filename stem, or title
+        rows = conn.execute(
+            """
+            SELECT DISTINCT p.path, p.title, l.line_number, l.target, l.display_text
+            FROM links l JOIN pages p ON l.page_id = p.id
+            WHERE l.target = ?
+               OR l.target = ?
+               OR l.target = ?
+               OR l.target LIKE '%' || ? || '%'
+            ORDER BY p.path, l.line_number
+        """,
+            (page_path, stem, title, stem),
+        ).fetchall()
+        return [
+            {
+                "path": r[0],
+                "title": r[1] or r[0],
+                "line": r[2],
+                "target": r[3],
+                "display_text": r[4],
+            }
+            for r in rows
+        ]
     finally:
         conn.close()

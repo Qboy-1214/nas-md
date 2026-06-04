@@ -168,7 +168,7 @@ web/
 
 ---
 
-### Phase 2：元数据 + 对象索引 + 双向链接 🔶 进行中（核心已完成）
+### Phase 2：元数据 + 对象索引 + 双向链接 ✅ 已完成
 
 **目标：** 让笔记从"静态文档"变成"知识节点"
 
@@ -198,25 +198,25 @@ web/
   - **Heading**：标题（`## Heading`，用于大纲）
 - 实时索引：文件保存时立即提取并更新，单事务保证一致性
 
-**2.3 双向链接 + 反链** ❌ 待实现
+**2.3 双向链接 + 反链** ✅ 已完成
 - 解析 `[[Page Name]]` 语法，建立链接关系
 - 维护反链索引：`{page: [backlinks]}`
 - 前端展示：
-  - 页面底部显示"被引用"列表
-  - 鼠标悬停 `[[link]]` 显示目标页面预览
-  - 点击跳转到目标页面
+  - 页面底部显示"反向链接"面板（可折叠）
+  - 点击跳转到来源页面
 
 **2.4 查询 API** ✅ 已完成
 - `GET /api/query?type=task&status=pending` — 查询未完成任务
 - `GET /api/query?type=tag&name=project` — 查询带某标签的页面
 - `GET /api/query?type=heading&page=xxx` — 查询某页面的标题列表
-- `GET /api/query?type=link&page=xxx` — 查询某页面的所有链接 ❌ 待实现
+- `GET /api/query?type=link&page=xxx` — 查询某页面的所有链接 ✅ 已实现
+- `GET /api/backlinks?page=xxx` — 查询某页面的反链 ✅ 已实现
 
 **交付物：**
 - ✅ 笔记支持 YAML frontmatter（PyYAML 解析）
-- ✅ 自动对象索引（Task / Tag / Heading）
-- ❌ 双向链接 + 反链展示（Phase 2 后续迭代）
-- ✅ 结构化查询 API（/api/query）
+- ✅ 自动对象索引（Task / Tag / Heading / Link）
+- ✅ 双向链接 + 反链展示
+- ✅ 结构化查询 API（/api/query + /api/backlinks）
 
 ---
 
@@ -494,8 +494,8 @@ const state = {
 | `GET` | `/api/find-path?name=xxx` | 搜索目录路径（无需认证） | 1 | ✅ |
 | `GET` | `/api/search?q=关键词` | 全文搜索 | 1 | ✅ 已实现 |
 | `GET` | `/api/query?type=task\|tag\|heading` | 结构化查询 | 2 | ✅ 已实现 |
-| `GET` | `/api/backlinks?page=xxx` | 反链查询 | 2 | ❌ |
-| `GET` | `/api/links?page=xxx` | 出链查询 | 2 | ❌ |
+| `GET` | `/api/backlinks?page=xxx` | 反链查询 | 2 | ✅ |
+| `GET` | `/api/query?type=link&page=xxx` | 出链查询 | 2 | ✅ |
 | `GET` | `/api/tags` | 标签列表 | 2 | ❌ |
 | `GET` | `/api/stats` | 统计数据 | 3 | ❌ |
 | `GET` | `/api/graph` | 图谱数据（节点+边） | 3 | ❌ |
@@ -558,7 +558,7 @@ const state = {
 | Phase | 预计周期 | 核心交付 | 状态 |
 |-------|----------|----------|------|
 | Phase 1 | 3 天 | Web 编辑器 + 登录认证 | ✅ 已完成 |
-| Phase 2 | 3-4 周 | Frontmatter + 对象索引 + 双向链接 | 🔶 核心已完成 |
+| Phase 2 | 3-4 周 | Frontmatter + 对象索引 + 双向链接 | ✅ 已完成 |
 | Phase 3 | 2-3 周 | 知识图谱 + 数据看板 | 待开始 |
 | Phase 4 | 2-3 周 | 同步机制 + 离线支持 | 待开始 |
 | Phase 5 | 2-3 周 | 插件系统 | 待开始 |

@@ -440,6 +440,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_query(qs)
                 return
 
+            # Backlinks API
+            if path == "/api/backlinks":
+                self._handle_backlinks(qs)
+                return
+
             # Public mounts endpoint (no auth: returns public + visitor mounts)
             if path == "/api/mounts/public":
                 self._handle_public_mounts()
@@ -788,8 +793,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(e)}, 500)
 
     def _handle_query(self, qs: dict):
-        """Handle GET /api/query?type=task|tag|heading"""
-        from nas_md.search import init_db, query_tasks, query_tags, query_headings
+        """Handle GET /api/query?type=task|tag|heading|link"""
+        from nas_md.search import init_db, query_tasks, query_tags, query_headings, query_links
 
         query_type = qs.get("type", [""])[0]
 
@@ -812,10 +817,31 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 page = qs.get("page", [None])[0]
                 headings = query_headings(page_path=page)
                 self._send_json({"headings": headings})
+            elif query_type == "link":
+                page = qs.get("page", [None])[0]
+                links = query_links(page_path=page)
+                self._send_json({"links": links})
             else:
-                self._send_error("Invalid query type. Use: task, tag, heading", 400)
+                self._send_error("Invalid query type. Use: task, tag, heading, link", 400)
         except Exception as e:
             logger.error("Query error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_backlinks(self, qs: dict):
+        """Handle GET /api/backlinks?page=xxx"""
+        from nas_md.search import init_db, query_backlinks
+
+        page = qs.get("page", [""])[0]
+        if not page:
+            self._send_error("Missing 'page' parameter", 400)
+            return
+
+        try:
+            init_db()
+            backlinks = query_backlinks(page)
+            self._send_json({"backlinks": backlinks})
+        except Exception as e:
+            logger.error("Backlinks error: %s", e)
             self._send_json({"error": str(e)}, 500)
 
     # --- Search index update ---
@@ -1104,7 +1130,8 @@ def serve(
     logger.info("  API endpoints:")
     logger.info("    GET  /api/health")
     logger.info("    GET  /api/search?q=keyword")
-    logger.info("    GET  /api/query?type=task|tag|heading")
+    logger.info("    GET  /api/query?type=task|tag|heading|link")
+    logger.info("    GET  /api/backlinks?page=xxx")
     logger.info("    GET  /api/mounts")
     logger.info("    GET  /api/mounts/public")
     logger.info("    PUT  /api/mounts/{id}")

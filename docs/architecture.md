@@ -244,6 +244,7 @@ pages_fts      — FTS5 全文搜索虚拟表
 tags           — 标签索引（name, source: body|frontmatter）
 tasks          — 任务索引（content, done, line_number）
 headings       — 标题索引（level, text, line_number）
+links          — 链接索引（target, display_text, line_number）
 ```
 
 所有对象表通过 `ON DELETE CASCADE` 关联 pages 表，删除页面时自动清理。
@@ -251,7 +252,7 @@ headings       — 标题索引（level, text, line_number）
 **索引流程：**
 
 ```
-文件保存 → extract_frontmatter → extract_headings/tags/tasks
+文件保存 → extract_frontmatter → extract_headings/tags/tasks/links
          → UPSERT pages（含 frontmatter JSON）
          → DELETE 旧对象 → INSERT 新对象 → COMMIT（单事务）
 ```
@@ -259,7 +260,8 @@ headings       — 标题索引（level, text, line_number）
 **API 端点：**
 
 - `GET /api/search?q=keyword` — 全文搜索
-- `GET /api/query?type=task|tag|heading` — 结构化查询
+- `GET /api/query?type=task|tag|heading|link` — 结构化查询
+- `GET /api/backlinks?page=xxx` — 反链查询
 
 ## Web 前端架构
 

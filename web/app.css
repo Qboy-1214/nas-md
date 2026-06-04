@@ -183,8 +183,47 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg); colo
 
 /* Editor Area */
 .editor-area { flex: 1; overflow: hidden; position: relative; }
-.editor-container { height: 100%; }
-.editor-container #vditor { height: 100% !important; border: none !important; }
+.editor-container { height: 100%; display: flex; flex-direction: column; }
+.editor-container #vditor { flex: 1; min-height: 0; border: none !important; }
+
+/* === Backlinks Panel === */
+.backlinks-panel {
+  border-top: 1px solid var(--border-color, #e0e0e0);
+  background: var(--bg-secondary, #f8f9fa);
+  flex-shrink: 0;
+}
+.backlinks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--text-secondary, #666);
+}
+.backlinks-header:hover { background: var(--hover-bg, #eee); }
+.backlinks-title { font-weight: 500; }
+.backlinks-toggle { font-size: 11px; transition: transform 0.2s; }
+.backlinks-panel.collapsed .backlinks-toggle { transform: rotate(-90deg); }
+.backlinks-panel.collapsed .backlinks-content { display: none; }
+.backlinks-content {
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.backlink-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #333);
+}
+.backlink-item:hover { background: var(--hover-bg, #eee); }
+.backlink-page { color: var(--link-color, #4a90d9); font-weight: 500; }
+.backlink-line { color: var(--text-tertiary, #999); font-size: 12px; }
 
 /* === Welcome Page === */
 .welcome-page {
