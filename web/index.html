@@ -30,9 +30,6 @@
     <button class="nav-btn" onclick="navigateHome()">🏠 首页</button>
     <button class="nav-btn" onclick="showGraph()">🔗 图谱</button>
     <button class="nav-btn" onclick="showDashboard()">📊 看板</button>
-    <button class="nav-btn" id="btn-settings" onclick="showSettings()">⚙️ 设置</button>
-    <button class="nav-btn" id="btn-login" onclick="showLogin()">登录</button>
-    <button class="nav-btn" id="btn-logout" onclick="logout()" style="display:none">退出</button>
   </div>
 </aside>
 
@@ -48,6 +45,13 @@
         <button onclick="setEditorMode('wysiwyg')">所见即所得</button>
       </div>
       <button class="save-btn" id="btn-save" onclick="saveFile()" style="display:none">保存</button>
+      <button class="outline-toggle-btn" id="btn-outline" onclick="if(window._toggleOutline) window._toggleOutline()" title="大纲 (Ctrl+O)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="6" x2="15" y2="6"></line>
+          <line x1="3" y1="18" x2="17" y2="18"></line>
+        </svg>
+      </button>
       <span class="sync-indicator" id="sync-indicator" title="同步状态">●</span>
     </div>
   </header>
@@ -62,8 +66,8 @@
         <p class="welcome-desc">轻量、快速的 Markdown 笔记管理器。输入目录路径即可浏览、搜索和编辑你的笔记。</p>
       </div>
 
-      <!-- 打开目录 -->
-      <div class="open-dir-section">
+      <!-- 打开目录 (admin only) -->
+      <div class="open-dir-section admin-only">
         <label class="section-label">打开目录</label>
         <div class="open-dir-input-group">
           <input type="text" id="new-dir-path" placeholder="输入目录路径，或点击浏览选择" class="open-dir-input" onclick="chooseDirectory()">
@@ -73,7 +77,7 @@
           <!-- 隐藏的文件选择器，用于选择文件夹 -->
           <input type="file" id="dir-picker" webkitdirectory style="display:none" onchange="onDirPicked(event)">
         </div>
-        <p class="open-dir-hint" id="guest-hint" style="display:none">游客最多挂载 1 个目录，请先登录</p>
+
       </div>
 
       <!-- 已挂载的目录 -->
@@ -137,37 +141,9 @@
       <div id="dash-orphans" class="dash-recent"></div>
     </div>
 
-    <!-- 设置页 -->
-    <div class="settings-page" id="settings-page" style="display:none">
-      <h1>设置</h1>
-      <div class="setting-item">
-        <label>API 地址</label>
-        <span class="setting-value" id="setting-api"></span>
-      </div>
-      <div class="setting-item">
-        <label>挂载点</label>
-        <div id="setting-mounts"></div>
-      </div>
-    </div>
+
   </div>
 </main>
-
-<!-- 登录 Modal -->
-<div class="modal-overlay" id="login-modal" style="display:none">
-  <div class="modal login-modal">
-    <div class="login-modal-header">
-      <h3>登录</h3>
-      <button class="modal-close" onclick="hideLogin()">✕</button>
-    </div>
-    <p class="login-modal-desc">输入 Token 以解锁更多功能</p>
-    <input type="password" id="login-token" placeholder="请输入访问 Token" class="modal-input" autofocus>
-    <p class="login-error" id="login-error" style="display:none"></p>
-    <div class="modal-actions">
-      <button onclick="hideLogin()">取消</button>
-      <button class="primary-btn" onclick="login()">登录</button>
-    </div>
-  </div>
-</div>
 
 <!-- 新建文件对话框 -->
 <div class="modal-overlay" id="new-file-modal" style="display:none">
@@ -188,7 +164,7 @@
 <div class="toast" id="toast" style="display:none"></div>
 
 <script src="lib/vditor/index.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="lib/d3/d3.min.js"></script>
 <script src="files.js"></script>
 <script src="editor.js"></script>
 <script src="app.js"></script>

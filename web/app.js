@@ -4,7 +4,6 @@
 
 // === 状态 ===
 const state = {
-  token: null,
   mounts: [],
   expandedMounts: [],
   treeData: {},
@@ -14,11 +13,11 @@ const state = {
   dirty: false,
   searchResults: [],
   recentFiles: [],
-  showSettings: false,
   toastTimer: null,
   syncStatus: 'offline',  // offline | synced | syncing | conflict
   syncTimer: null,
   lastSyncTime: 0,
+  isAdmin: window.location.pathname.startsWith('/admin') || window.location.hash === '#admin',
 };
 
 // === DOM 引用 ===
@@ -26,11 +25,9 @@ const $ = id => document.getElementById(id);
 
 // === 初始化 ===
 document.addEventListener('DOMContentLoaded', async () => {
-  const savedToken = localStorage.getItem('nasmd_token');
-  if (savedToken) {
-    state.token = savedToken;
-  }
-  updateAuthUI();
+  // Set admin class on body for CSS visibility control
+  if (state.isAdmin) document.body.classList.add('admin');
+
   await loadMounts();
   await loadRecentFiles();
   // Restore last opened file, or fall back to welcome.md
@@ -44,7 +41,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (content !== null) {
           state.currentPath = lastPath;
           state.currentMountId = mount.id;
-          state.showSettings = false;
           state.searchResults = [];
           $('breadcrumb').textContent = lastPath + (mount.readonly ? ' 🔒' : '');
           $('editor-modes').style.display = mount.readonly ? 'none' : (lastPath.endsWith('.md') ? '' : 'none');
@@ -109,25 +105,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // === UI 更新 ===
-function updateAuthUI() {
-  const loginBtn = $('btn-login');
-  const logoutBtn = $('btn-logout');
-  const guestHint = $('guest-hint');
-  if (state.token) {
-    loginBtn.style.display = 'none';
-    logoutBtn.style.display = '';
-    guestHint.style.display = 'none';
-  } else {
-    loginBtn.style.display = '';
-    logoutBtn.style.display = 'none';
-    guestHint.style.display = '';
-  }
-}
-
 function showPage(page) {
   $('welcome-page').style.display = page === 'welcome' ? '' : 'none';
   $('editor-container').style.display = page === 'editor' ? '' : 'none';
-  $('settings-page').style.display = page === 'settings' ? '' : 'none';
   $('graph-page').style.display = page === 'graph' ? '' : 'none';
   $('dashboard-page').style.display = page === 'dashboard' ? '' : 'none';
 }
@@ -140,82 +120,13 @@ function showToast(msg) {
   state.toastTimer = setTimeout(() => el.style.display = 'none', 2500);
 }
 
-// === 登录 ===
-function showLogin() {
-  const modal = $('login-modal');
-  modal.style.display = '';
-  modal.classList.add('active');
-  $('login-token').value = '';
-  $('login-error').style.display = 'none';
-  setTimeout(() => $('login-token').focus(), 50);
-}
-
-function hideLogin() {
-  const modal = $('login-modal');
-  modal.style.display = 'none';
-  modal.classList.remove('active');
-}
-
-async function login() {
-  const token = $('login-token').value.trim();
-  if (!token) {
-    $('login-error').textContent = '请输入 Token';
-    $('login-error').style.display = '';
-    return;
-  }
-  try {
-    const resp = await fetch(`${_apiBase}/api/mounts`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    if (resp.ok) {
-      state.token = token;
-      localStorage.setItem('nasmd_token', token);
-      updateAuthUI();
-      hideLogin();
-      await loadMounts();
-      await loadRecentFiles();
-      showToast('登录成功');
-    } else if (resp.status === 401) {
-      $('login-error').textContent = 'Token 无效';
-      $('login-error').style.display = '';
-    } else {
-      $('login-error').textContent = `验证失败 (${resp.status})`;
-      $('login-error').style.display = '';
-    }
-  } catch (e) {
-    $('login-error').textContent = '网络错误';
-    $('login-error').style.display = '';
-  }
-}
-
-function logout() {
-  localStorage.removeItem('nasmd_token');
-  localStorage.removeItem('nasmd_last_path');
-  localStorage.removeItem('nasmd_last_mount');
-  state.token = null;
-  state.currentPath = null;
-  state.currentMountId = null;
-  state.mounts = [];
-  state.treeData = {};
-  state.expandedMounts = [];
-  state.showSettings = false;
-  if (window._vditor) { window._vditor.destroy(); window._vditor = null; }
-  if (window._dirtyTimer) { clearInterval(window._dirtyTimer); window._dirtyTimer = null; }
-  updateAuthUI();
-  renderSidebar();
-  showPage('welcome');
-  showToast('已退出');
-  // 退出后重新加载公开挂载点
-  loadMounts();
-}
-
 // === 挂载目录 ===
 let _loadMountsBusy = false;
 async function loadMounts() {
   if (_loadMountsBusy) return;
   _loadMountsBusy = true;
   try {
-    if (state.token) {
+    if (state.isAdmin) {
       state.mounts = await API.getMounts();
     } else {
       state.mounts = await API.getPublicMounts();
@@ -378,11 +289,8 @@ async function removeMount(mountId) {
   const mount = state.mounts.find(m => m.id === mountId);
   if (mount && mount.id === 'builtin-storage') { showToast('内置目录不能卸载'); return; }
   try {
-    const token = localStorage.getItem('nasmd_token') || '';
-    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
     const resp = await fetch(`${_apiBase}/api/mounts/${mountId}`, {
       method: 'DELETE',
-      headers,
     });
     if (resp.ok) {
       // Backend successfully deleted
@@ -452,7 +360,10 @@ function renderSidebar() {
     html += `<span>${mount.name}</span>`;
     if (mount.public) html += ` <span class="mount-badge" title="公开目录">🌐</span>`;
     html += `</div>`;
-    html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载">✕</button>`;
+    if (state.isAdmin) {
+      html += `<span class="mount-path-hint" title="${mount.path}">📁 ${mount.path}</span>`;
+      html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载">✕</button>`;
+    }
     html += `</div>`;
 
     if (isExpanded) {
@@ -574,7 +485,6 @@ async function openFile(path, preferredMountId) {
     if (content === null) { showToast('文件不存在'); return; }
     state.currentPath = path;
     state.currentMountId = mount.id;
-    state.showSettings = false;
     state.searchResults = [];
     localStorage.setItem('nasmd_last_path', path);
     localStorage.setItem('nasmd_last_mount', mount.id);
@@ -711,7 +621,6 @@ function navigateHome() {
   localStorage.removeItem('nasmd_last_mount');
   state.currentPath = null;
   state.currentMountId = null;
-  state.showSettings = false;
   $('breadcrumb').textContent = '';
   $('editor-modes').style.display = 'none';
   $('btn-save').style.display = 'none';
@@ -721,19 +630,7 @@ function navigateHome() {
   renderSidebar();
 }
 
-function showSettings() {
-  state.showSettings = true;
-  $('breadcrumb').textContent = '设置';
-  $('setting-api').textContent = _apiBase;
-  const mountsEl = $('setting-mounts');
-  mountsEl.innerHTML = state.mounts.map(m =>
-    `<div class="mount-info"><strong>${m.name}</strong>: ${m.path}${m.public ? ' <span class="public-badge">公开</span>' : ''}</div>`
-  ).join('');
-  showPage('settings');
-}
-
 async function showGraph() {
-  state.showSettings = false;
   $('breadcrumb').textContent = '知识图谱';
   showPage('graph');
   try {
@@ -845,7 +742,6 @@ function renderGraph(data) {
 }
 
 async function showDashboard() {
-  state.showSettings = false;
   $('breadcrumb').textContent = '数据看板';
   showPage('dashboard');
   try {
@@ -1032,6 +928,18 @@ async function doSearch() {
   }
 }
 
+// === Admin mode (URL hash #admin) ===
+function checkAdminMode() {
+  const wasAdmin = state.isAdmin;
+  state.isAdmin = window.location.pathname.startsWith('/admin') || window.location.hash === '#admin';
+  if (wasAdmin !== state.isAdmin) {
+    document.body.classList.toggle('admin', state.isAdmin);
+    renderSidebar();
+    loadMounts();
+  }
+}
+window.addEventListener('hashchange', checkAdminMode);
+
 // === 编辑器模式 ===
 function setEditorMode(mode) {
   if (state.editorMode === mode) return;
@@ -1045,6 +953,7 @@ function setEditorMode(mode) {
 // === 最近文件 ===
 async function loadRecentFiles() {
   const allFiles = [];
+  const activeMountIds = new Set(state.mounts.map(m => m.id));
   for (const mount of state.mounts) {
     try {
       // Ensure tree data is loaded (may already be cached)
@@ -1053,8 +962,11 @@ async function loadRecentFiles() {
       if (root) collectFiles(root, mount.id, allFiles);
     } catch {}
   }
-  allFiles.sort((a, b) => b.modTime - a.modTime);
-  state.recentFiles = allFiles.slice(0, 10);
+  // Filter out files belonging to mounts that no longer exist
+  // (treeData may persist briefly after unmount due to async)
+  const filtered = allFiles.filter(f => activeMountIds.has(f.mountId));
+  filtered.sort((a, b) => b.modTime - a.modTime);
+  state.recentFiles = filtered.slice(0, 10);
   renderRecentFiles();
 }
 

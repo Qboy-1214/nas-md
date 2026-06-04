@@ -15,6 +15,75 @@ logger = logging.getLogger("search")
 # Default database path — can be overridden via SEARCH_DB env
 DEFAULT_DB_PATH = os.path.join(os.getcwd(), "search.db")
 
+# FTS tokenizer version — increment to force rebuild when tokenizer changes
+_FTS_TOKENIZER_VERSION = 2  # v1=unicode61, v2=trigram
+
+
+def _migrate_fts_tokenizer(conn: sqlite3.Connection) -> None:
+    """Check if FTS table uses the correct tokenizer; rebuild if not."""
+    try:
+        # Check current tokenizer version
+        row = conn.execute(
+            "SELECT value FROM index_meta WHERE key = 'fts_tokenizer_version'"
+        ).fetchone()
+        current_version = int(row[0]) if row else 1
+
+        if current_version >= _FTS_TOKENIZER_VERSION:
+            return  # Already up to date
+
+        # Need to rebuild — drop and recreate FTS table
+        logger.info(
+            "Migrating FTS tokenizer from v%d to v%d, rebuilding index...",
+            current_version,
+            _FTS_TOKENIZER_VERSION,
+        )
+        conn.execute("DROP TABLE IF EXISTS pages_fts")
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+                path,
+                title,
+                content,
+                content='pages',
+                tokenize='trigram'
+            )
+        """)
+        # Recreate triggers
+        conn.execute("DROP TRIGGER IF EXISTS pages_ai")
+        conn.execute("DROP TRIGGER IF EXISTS pages_ad")
+        conn.execute("DROP TRIGGER IF EXISTS pages_au")
+        conn.executescript("""
+            CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
+                INSERT INTO pages_fts(rowid, path, title, content)
+                VALUES (new.id, new.path, new.title, new.content);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
+                INSERT INTO pages_fts(pages_fts, rowid, path, title, content)
+                VALUES ('delete', old.id, old.path, old.title, old.content);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+                INSERT INTO pages_fts(pages_fts, rowid, path, title, content)
+                VALUES ('delete', old.id, old.path, old.title, old.content);
+                INSERT INTO pages_fts(rowid, path, title, content)
+                VALUES (new.id, new.path, new.title, new.content);
+            END;
+        """)
+        # Re-populate FTS from pages table
+        conn.execute("""
+            INSERT INTO pages_fts(rowid, path, title, content)
+            SELECT id, path, title, content FROM pages
+        """)
+        # Record new version
+        conn.execute(
+            "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+            ("fts_tokenizer_version", str(_FTS_TOKENIZER_VERSION)),
+        )
+        conn.commit()
+        logger.info("FTS tokenizer migration complete.")
+    except Exception as e:
+        logger.error("FTS migration error: %s", e)
+
 
 def get_db_path() -> str:
     """Get the search database path."""
@@ -52,7 +121,7 @@ def init_db(db_path: str | None = None) -> None:
                 title,
                 content,
                 content='pages',
-                tokenize='unicode61'
+                tokenize='trigram'
             );
 
             CREATE TABLE IF NOT EXISTS index_meta (
@@ -82,6 +151,9 @@ def init_db(db_path: str | None = None) -> None:
         # Add frontmatter column (idempotent — skip if already exists)
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute("ALTER TABLE pages ADD COLUMN frontmatter TEXT")
+
+        # Migrate FTS from unicode61 to trigram if needed
+        _migrate_fts_tokenizer(conn)
 
         # Tags table
         conn.execute("""
@@ -240,23 +312,40 @@ def remove_file(path: str) -> None:
 
 def search(query: str, limit: int = 20) -> list[dict]:
     """Search the index for matching files."""
+    if not query or not query.strip():
+        return []
+
     conn = get_connection()
     try:
-        # Use FTS5 query with prefix matching
-        fts_query = f"{query}*"
-        rows = conn.execute(
-            """
-            SELECT p.path, p.filename, p.title,
-                   snippet(pages_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
-                   rank
-            FROM pages_fts
-            JOIN pages p ON p.id = pages_fts.rowid
-            WHERE pages_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-        """,
-            (fts_query, limit),
-        ).fetchall()
+        # trigram tokenizer: use direct match (no prefix * needed)
+        # For queries < 3 chars, fall back to LIKE
+        if len(query) < 3:
+            rows = conn.execute(
+                """
+                SELECT path, filename, title,
+                       '' as snippet,
+                       0 as rank
+                FROM pages
+                WHERE title LIKE ? OR content LIKE ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """,
+                (f"%{query}%", f"%{query}%", limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT p.path, p.filename, p.title,
+                       snippet(pages_fts, 2, '<mark>', '</mark>', '...', 32) as snippet,
+                       rank
+                FROM pages_fts
+                JOIN pages p ON p.id = pages_fts.rowid
+                WHERE pages_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """,
+                (query, limit),
+            ).fetchall()
 
         results = []
         for row in rows:

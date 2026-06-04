@@ -42,7 +42,6 @@ class Config:
     web_root: str = "./web"
     web_port: int = 8080
     web_host: str = "127.0.0.1"
-    web_auth_token: str = ""
     open_browser: bool = True
 
     def api_host(self) -> str:
@@ -128,7 +127,6 @@ def load_bot_config() -> None:
         "WEB_ROOT": "web_root",
         "WEB_PORT": ("web_port", int),
         "WEB_HOST": "web_host",
-        "WEB_AUTH_TOKEN": "web_auth_token",
     }
     for env_key, cfg_key in env_map.items():
         val = os.environ.get(env_key)

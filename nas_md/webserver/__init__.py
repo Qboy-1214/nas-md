@@ -17,8 +17,8 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger("webserver")
 
-# --- Auth token (set via environment or config) ---
-_auth_token: str = os.environ.get("WEB_AUTH_TOKEN", "")
+# --- Admin mode (no token auth; admin access via /admin URL prefix) ---
+_admin_mode: bool = False  # Set True if server started with admin enabled
 
 # --- Content-Type overrides for text files (add charset=utf-8) ---
 
@@ -388,32 +388,30 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if hasattr(self, "_gzip_writer"):
             self._gzip_writer.close()
 
-    # --- CORS preflight ---
-    def _check_auth(self) -> bool:
-        """Check Bearer token auth. Returns True if authorized."""
-        if not _auth_token:
-            return True  # No token configured = open access
-        auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            return auth[7:] == _auth_token
-        # Also check query param for initial load
-        parsed = urlparse(self.path)
-        qs = parse_qs(parsed.query)
-        token_params = qs.get("token", [])
-        return bool(token_params and token_params[0] == _auth_token)
-
-    def _require_auth(self) -> bool:
-        """Return 401 if auth fails. Returns True if OK."""
-        if self._check_auth():
+    # --- Admin check (URL-based, no token) ---
+    def _is_admin_request(self) -> bool:
+        """Check if this request comes from the /admin path."""
+        # Check Referer header (browser sends this for API calls from /admin page)
+        referer = self.headers.get("Referer", "")
+        if "/admin" in referer:
             return True
-        self._send_json({"error": "Unauthorized"}, 401)
+        # Check custom header set by frontend
+        if self.headers.get("X-Admin", "") == "1":
+            return True
+        return False
+
+    def _require_admin(self) -> bool:
+        """Return 403 if not admin. Returns True if OK."""
+        if self._is_admin_request():
+            return True
+        self._send_json({"error": "Admin access required"}, 403)
         return False
 
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin")
         self.end_headers()
 
     # --- GET ---
@@ -423,14 +421,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             path = parsed.path.rstrip("/") or "/"
             qs = parse_qs(parsed.query)
 
-            # --- Auth-protected API routes ---
+            # --- API routes ---
 
             # Public health check
             if path == "/api/health":
-                self._send_json({"status": "ok", "auth": bool(_auth_token)})
+                self._send_json({"status": "ok", "admin": self._is_admin_request()})
                 return
 
-            # Search API (public for visitors, auth for full scope)
+            # Search API (public for all visitors)
             if path == "/api/search":
                 self._handle_search(qs)
                 return
@@ -479,12 +477,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_plugins()
                 return
 
-            # Public mounts endpoint (no auth: returns public + visitor mounts)
+            # Public mounts endpoint (returns public + visitor mounts)
             if path == "/api/mounts/public":
                 self._handle_public_mounts()
                 return
 
             # Static files (public, no auth needed for frontend)
+            # Also serves SPA routes like /admin, /graph etc. via fallback to index.html
             if not path.startswith("/api/"):
                 self._serve_static(path)
                 return
@@ -530,13 +529,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         self._handle_tree(mount_id, qs)
                     return
 
-            # All remaining API routes require auth
-            if not self._require_auth():
+            # All remaining API routes require admin access
+            if not self._require_admin():
                 return
 
-            # Mount API routes (auth required)
+            # Mount API routes (admin required)
 
-            # GET /api/mounts — return ALL mounts for authenticated user
+            # GET /api/mounts — return ALL mounts (admin only)
             if path == "/api/mounts":
                 if self.mount_manager and not self.mount_manager.is_empty():
                     self._send_json([m.to_dict() for m in self.mount_manager.mounts])
@@ -578,8 +577,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             path = parsed.path.rstrip("/") or ""
             qs = parse_qs(parsed.query)
 
-            # Auth check for write operations
-            if not self._require_auth():
+            # Admin check for write operations
+            if not self._require_admin():
                 return
 
             # PUT /api/mounts/{id} — update mount properties
@@ -623,8 +622,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             path = parsed.path.rstrip("/") or ""
             qs = parse_qs(parsed.query)
 
-            # Auth check
-            if not self._require_auth():
+            # Admin check
+            if not self._require_admin():
                 return
 
             if "/api/mounts/" in path and path.endswith("/file"):
@@ -650,13 +649,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or ""
 
-            # POST /api/mounts — public for visitors (no auth required)
+            # POST /api/mounts — add new mount (admin required)
             if path == "/api/mounts":
                 self._handle_add_mount()
                 return
 
-            # Auth check for all other POST routes
-            if not self._require_auth():
+            # Admin check for all other POST routes
+            if not self._require_admin():
                 return
 
             # /syncFilenames
@@ -901,6 +900,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             init_db()
             stats = get_stats()
+            # Filter recent_pages to only include files in currently mounted directories
+            if self.mount_manager and not self.mount_manager.is_empty():
+                mount_paths = [m.path.lower().rstrip("\\/") for m in self.mount_manager.mounts]
+                stats["recent_pages"] = [
+                    p for p in stats.get("recent_pages", [])
+                    if any(p["path"].lower().startswith(mp + os.sep) or p["path"].lower() == mp for mp in mount_paths)
+                ]
             self._send_json(stats)
         except Exception as e:
             logger.error("Stats error: %s", e)
@@ -1127,8 +1133,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     def _handle_add_mount(self):
         """Handle POST /api/mounts to add a new mount point.
 
-        No auth required — both visitors and authenticated users can mount.
-        Visitors are limited to 1 mount. Authenticated users limited to 1 dynamic mount.
+        No auth required — both visitors and admin users can mount.
+        Visitors are limited to 1 mount. Admin users limited to 1 dynamic mount.
         """
         body = self._read_body()
         try:
@@ -1253,7 +1259,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     # --- Static files ---
 
     def _serve_static(self, path: str):
-        """Serve static PWA files from web_root."""
+        """Serve static PWA files from web_root. Falls back to index.html for SPA routes."""
         if not self.web_root:
             return self.send_error(404, "No web root")
 
@@ -1269,7 +1275,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self.send_error(403, "Forbidden")
 
         if not os.path.isfile(full_path):
-            return self.send_error(404, "Not found")
+            # SPA fallback: serve index.html for any non-file path
+            # (e.g. /admin, /graph, /dashboard — all handled by frontend JS)
+            index_path = os.path.join(web_root_real, "index.html")
+            if os.path.isfile(index_path):
+                full_path = index_path
+            else:
+                return self.send_error(404, "Not found")
 
         ct = _content_type(full_path)
 
@@ -1293,12 +1305,10 @@ def serve(
     web_root: str = "",
     port: int = 8080,
     host: str = "0.0.0.0",
-    web_auth_token: str = "",
     storage_dir: str = "",
 ):
     """Start the HTTP server with mount points and optional static file serving."""
-    global _auth_token, _MOUNTS_FILE
-    _auth_token = web_auth_token
+    global _MOUNTS_FILE
     _MOUNTS_FILE = os.path.join(storage_dir, "mounts.json") if storage_dir else ""
 
     mgr = MountManager(mount_dirs)
@@ -1349,11 +1359,10 @@ def serve(
         else "(none)"
     )
     web_str = web_root if web_root else "(none)"
-    auth_str = "enabled" if _auth_token else "disabled"
     logger.info(f"Starting HTTP server on {host}:{port}")
     logger.info(f"  Mount points: {mounts_str}")
     logger.info(f"  Web root: {web_str}")
-    logger.info(f"  Auth: {auth_str}")
+    logger.info("  Admin: access via /admin URL path")
     logger.info("  API endpoints:")
     logger.info("    GET  /api/health")
     logger.info("    GET  /api/search?q=keyword")

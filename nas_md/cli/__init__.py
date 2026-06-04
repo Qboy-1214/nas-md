@@ -55,7 +55,6 @@ def cmd_web() -> None:
         mount_dirs=mount_dirs,
         web_root=web_root,
         port=port,
-        web_auth_token=cfg_mod.server_cfg.web_auth_token,
         storage_dir=storage_dir,
     )
 

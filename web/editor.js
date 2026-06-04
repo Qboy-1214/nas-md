@@ -18,6 +18,49 @@ let _pendingRestore = null;
 
 window._getVditor = () => _vditor;
 
+// Toggle outline panel visibility, persist to localStorage
+window._toggleOutline = () => {
+  if (!_vditor) return;
+  const vditorEl = document.getElementById('vditor');
+  const outlineEl = vditorEl?.querySelector('.vditor-outline');
+  if (!outlineEl) return;
+  const isCurrentlyVisible = outlineEl.style.display !== 'none';
+  const shouldShow = !isCurrentlyVisible;
+  outlineEl.style.display = shouldShow ? '' : 'none';
+  localStorage.setItem('nasmd_outline_visible', shouldShow ? '1' : '0');
+};
+
+// Restore outline visibility from localStorage after editor init
+function _restoreOutlineVisibility() {
+  const saved = localStorage.getItem('nasmd_outline_visible');
+  if (saved === null) return; // no saved state, use Vditor default
+  const vditorEl = document.getElementById('vditor');
+  const outlineEl = vditorEl?.querySelector('.vditor-outline');
+  if (!outlineEl) return;
+  const shouldShow = saved === '1';
+  outlineEl.style.display = shouldShow ? '' : 'none';
+  // If showing outline, force Vditor to render it
+  if (shouldShow && _vditor) {
+    // Vditor only renders outline content on certain events;
+    // trigger a render by dispatching a resize
+    window.dispatchEvent(new Event('resize'));
+  }
+}
+
+// Watch for outline panel toggle (via Vditor toolbar button) and persist state
+let _outlineToggleObserver = null;
+function _watchOutlineToggle() {
+  if (_outlineToggleObserver) _outlineToggleObserver.disconnect();
+  const vditorEl = document.getElementById('vditor');
+  const outlineEl = vditorEl?.querySelector('.vditor-outline');
+  if (!outlineEl) return;
+  _outlineToggleObserver = new MutationObserver(() => {
+    const isVisible = outlineEl.style.display !== 'none';
+    localStorage.setItem('nasmd_outline_visible', isVisible ? '1' : '0');
+  });
+  _outlineToggleObserver.observe(outlineEl, { attributes: true, attributeFilter: ['style', 'class'] });
+}
+
 // Get the scrollable element for the current editor mode
 function _getScrollEl(vd, mode) {
   if (!vd) return null;
@@ -195,6 +238,8 @@ function initEditor(content, mode, readonly) {
       vditorEl.appendChild(style);
       if (_editorMode === 'sv') setupSVSync();
       setupOutlineHighlight();
+      _restoreOutlineVisibility();
+      _watchOutlineToggle();
 
       const needsRestore = _pendingRestore !== null;
       if (needsRestore) {

@@ -19,18 +19,15 @@ const _apiBase = (() => {
 
 const API = {
   async request(path, options = {}) {
-    const token = localStorage.getItem('nasmd_token') || '';
     const headers = { ...options.headers };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
     if (options.body && typeof options.body === 'string') {
       headers['Content-Type'] = headers['Content-Type'] || 'text/plain; charset=utf-8';
     }
-    const resp = await fetch(`${_apiBase}${path}`, { ...options, headers });
-    if (resp.status === 401) {
-      localStorage.removeItem('nasmd_token');
-      // 不 reload，由调用方处理
-      return null;
+    // Add X-Admin header when in admin mode
+    if (window.state?.isAdmin || window.location.pathname.startsWith('/admin') || window.location.hash === '#admin') {
+      headers['X-Admin'] = '1';
     }
+    const resp = await fetch(`${_apiBase}${path}`, { ...options, headers });
     return resp;
   },
 
@@ -145,15 +142,12 @@ const API = {
   },
 
   async sync(mountId, files) {
-    const token = localStorage.getItem('nasmd_token') || '';
     const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
     const resp = await fetch(`${_apiBase}/api/sync?mount=${encodeURIComponent(mountId)}`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ files }),
     });
-    if (resp.status === 401) { localStorage.removeItem('nasmd_token'); return {}; }
     return resp.json();
   },
 
