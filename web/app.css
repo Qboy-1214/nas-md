@@ -421,9 +421,11 @@ html, body { height: 100%; font-family: var(--font); background: var(--bg); colo
   .sidebar { position: absolute; z-index: 200; height: 100%; }
 }
 
-/* Outline active heading highlight */
+/* Outline: all headings smaller, active one bold + blue */
+.vditor-outline li > span {
+  font-size: 13px;
+}
 .vditor-outline li > span.outline-active {
   color: #1677ff;
-  font-size: 0.9em;
   font-weight: 700;
 }
