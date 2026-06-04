@@ -165,10 +165,10 @@ function getActiveEditorEl() {
 }
 
 // SV mode: reverse scroll sync + cursor tracking
-let _svEditorScrollHandler = null;
-let _svPreviewScrollHandler = null;
 let _svCursorSyncHandler = null;
-let _svSyncing = false;  // Guard against scroll feedback loop
+let _svRafId = null;
+let _svLastEditorTop = 0;
+let _svLastPreviewTop = 0;
 
 function setupSVSync() {
   teardownSVSync();
@@ -176,32 +176,39 @@ function setupSVSync() {
   const svEl = _vditor.vditor.sv.element;
   const previewEl = _vditor.vditor.preview.element;
 
-  // Unified scroll handler: sync source → target proportionally
-  // _svSyncing prevents the target's scroll event from bouncing back.
-  const syncScroll = (source, target) => {
-    const srcHeight = source.scrollHeight - source.clientHeight;
-    const tgtHeight = target.scrollHeight - target.clientHeight;
-    if (srcHeight <= 0 || tgtHeight <= 0) return;
-    const targetTop = source.scrollTop * tgtHeight / srcHeight;
-    if (Math.abs(targetTop - target.scrollTop) < 1) return;
-    _svSyncing = true;
-    target.scrollTop = targetTop;
-    requestAnimationFrame(() => { _svSyncing = false; });
-  };
+  // Use a single rAF loop instead of scroll events to avoid feedback.
+  // Scroll events from Vditor's built-in sync and our own adjustments
+  // create an infinite loop when both sides listen. A polling loop
+  // sidesteps this entirely: we only push scroll position when it
+  // actually changed from the last known value.
+  const tick = () => {
+    const eTop = svEl.scrollTop;
+    const pTop = previewEl.scrollTop;
 
-  // Editor scroll → Preview
-  _svEditorScrollHandler = () => {
-    if (_svSyncing) return;
-    syncScroll(svEl, previewEl);
-  };
-  svEl.addEventListener('scroll', _svEditorScrollHandler);
+    // Editor changed → push to preview
+    if (eTop !== _svLastEditorTop) {
+      const eMax = svEl.scrollHeight - svEl.clientHeight;
+      const pMax = previewEl.scrollHeight - previewEl.clientHeight;
+      if (eMax > 0 && pMax > 0) {
+        previewEl.scrollTop = eTop * pMax / eMax;
+      }
+      _svLastEditorTop = eTop;
+      _svLastPreviewTop = previewEl.scrollTop;
+    }
+    // Preview changed (user scrolled preview directly) → push to editor
+    else if (pTop !== _svLastPreviewTop) {
+      const eMax = svEl.scrollHeight - svEl.clientHeight;
+      const pMax = previewEl.scrollHeight - previewEl.clientHeight;
+      if (eMax > 0 && pMax > 0) {
+        svEl.scrollTop = pTop * eMax / pMax;
+      }
+      _svLastPreviewTop = pTop;
+      _svLastEditorTop = svEl.scrollTop;
+    }
 
-  // Preview scroll → Editor
-  _svPreviewScrollHandler = () => {
-    if (_svSyncing) return;
-    syncScroll(previewEl, svEl);
+    _svRafId = requestAnimationFrame(tick);
   };
-  previewEl.addEventListener('scroll', _svPreviewScrollHandler);
+  _svRafId = requestAnimationFrame(tick);
 
   // Cursor/selection change → scroll preview to cursor line
   _svCursorSyncHandler = () => {
@@ -216,6 +223,7 @@ function setupSVSync() {
     const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
     const ratio = lineNumber / (totalLines - 1);
     previewEl.scrollTop = ratio * previewScrollHeight;
+    _svLastPreviewTop = previewEl.scrollTop;
   };
   document.addEventListener('selectionchange', _svCursorSyncHandler);
 
@@ -224,19 +232,16 @@ function setupSVSync() {
 }
 
 function teardownSVSync() {
-  if (_svEditorScrollHandler && _vditor) {
-    try { _vditor.vditor.sv.element.removeEventListener('scroll', _svEditorScrollHandler); } catch (_) {}
-  }
-  if (_svPreviewScrollHandler && _vditor) {
-    try { _vditor.vditor.preview.element.removeEventListener('scroll', _svPreviewScrollHandler); } catch (_) {}
+  if (_svRafId) {
+    cancelAnimationFrame(_svRafId);
+    _svRafId = null;
   }
   if (_svCursorSyncHandler) {
     document.removeEventListener('selectionchange', _svCursorSyncHandler);
+    _svCursorSyncHandler = null;
   }
-  _svEditorScrollHandler = null;
-  _svPreviewScrollHandler = null;
-  _svCursorSyncHandler = null;
-  _svSyncing = false;
+  _svLastEditorTop = 0;
+  _svLastPreviewTop = 0;
 }
 
 function restoreCursorPosition(offset) {
