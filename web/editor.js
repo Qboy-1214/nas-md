@@ -6,29 +6,20 @@ let _vditor = null;
 let _currentMountId = null;
 let _currentRelPath = null;
 let _originalContent = '';
-let _editorMode = 'ir';  // ir | sv | wysiwyg
+let _editorMode = 'ir';
 let _cursorRestoreOffset = 0;
 
-// Expose for app.js
 window._getVditor = () => _vditor;
 
-// Reinitialize editor with a new mode (Vditor doesn't support runtime mode switch)
 window._reinitEditor = (mode) => {
   if (!_vditor) return;
   const content = _vditor.getValue();
-
-  // Save scroll position from the active panel
   let scrollTop = 0;
   const oldMode = _vditor.getCurrentMode();
-  if (oldMode === 'sv') {
-    scrollTop = _vditor.vditor.sv.element.scrollTop;
-  } else if (oldMode === 'ir') {
-    scrollTop = _vditor.vditor.ir.element.scrollTop;
-  } else if (oldMode === 'wysiwyg') {
-    scrollTop = _vditor.vditor.wysiwyg.element.parentElement.scrollTop;
-  }
+  if (oldMode === 'sv') scrollTop = _vditor.vditor.sv.element.scrollTop;
+  else if (oldMode === 'ir') scrollTop = _vditor.vditor.ir.element.scrollTop;
+  else if (oldMode === 'wysiwyg') scrollTop = _vditor.vditor.wysiwyg.element.parentElement.scrollTop;
 
-  // Save cursor position as text offset
   let cursorOffset = 0;
   try {
     _vditor.focus();
@@ -37,8 +28,8 @@ window._reinitEditor = (mode) => {
       const range = sel.getRangeAt(0);
       const preRange = range.cloneRange();
       if (oldMode === 'sv') {
-        const textarea = _vditor.vditor.sv.element;
-        if (textarea) cursorOffset = textarea.selectionStart;
+        const ta = _vditor.vditor.sv.element;
+        if (ta) cursorOffset = ta.selectionStart;
       } else {
         const el = oldMode === 'wysiwyg' ? _vditor.vditor.wysiwyg.element : _vditor.vditor.ir.element;
         preRange.selectNodeContents(el);
@@ -53,22 +44,13 @@ window._reinitEditor = (mode) => {
   _cursorRestoreOffset = cursorOffset;
   initEditor(content, mode, false, cursorOffset);
 
-  // Restore scroll position after the new editor renders
   requestAnimationFrame(() => {
     if (!_vditor) return;
     const nd = _vditor.vditor;
-    if (mode === 'sv') {
-      nd.sv.element.scrollTop = scrollTop;
-    } else if (mode === 'ir') {
-      nd.ir.element.scrollTop = scrollTop;
-    } else if (mode === 'wysiwyg') {
-      nd.wysiwyg.element.parentElement.scrollTop = scrollTop;
-    }
-    // Restore focus after scroll is set
-    setTimeout(() => {
-      const el = getActiveEditorEl();
-      if (el) el.focus();
-    }, 30);
+    if (mode === 'sv') nd.sv.element.scrollTop = scrollTop;
+    else if (mode === 'ir') nd.ir.element.scrollTop = scrollTop;
+    else if (mode === 'wysiwyg') nd.wysiwyg.element.parentElement.scrollTop = scrollTop;
+    setTimeout(() => { const el = getActiveEditorEl(); if (el) el.focus(); }, 30);
   });
 };
 
@@ -76,7 +58,6 @@ function initEditor(content, mode, readonly, cursorOffset) {
   _editorMode = mode || 'ir';
   _originalContent = content || '';
   _cursorRestoreOffset = cursorOffset || 0;
-
   const vditorEl = document.getElementById('vditor');
   vditorEl.innerHTML = '';
 
@@ -100,54 +81,24 @@ function initEditor(content, mode, readonly, cursorOffset) {
     ],
     preview: {
       mode: 'both',
-      markdown: {
-        toc: true,
-        autoSpace: true,
-        fixTermTypo: true,
-      },
-      hljs: {
-        enable: true,
-        style: 'github',
-        lineNumber: false,
-      },
-      theme: {
-        current: 'light',
-        path: 'https://unpkg.com/vditor@3.10.7/dist/css/content-theme',
-      },
+      markdown: { toc: true, autoSpace: true, fixTermTypo: true },
+      hljs: { enable: true, style: 'github', lineNumber: false },
+      theme: { current: 'light', path: 'https://unpkg.com/vditor@3.10.7/dist/css/content-theme' },
     },
-    cache: {
-      enable: false,
-    },
-    upload: {
-      url: '',  // 暂不启用上传
-      linkToImgUrl: '',
-    },
+    cache: { enable: false },
+    upload: { url: '', linkToImgUrl: '' },
     after: () => {
-      // SV mode: wire up scroll sync and cursor tracking
-      if (_editorMode === 'sv') {
-        setupSVSync();
-      }
-      // Restore cursor/focus after a delay to ensure DOM is fully ready
+      if (_editorMode === 'sv') setupSVSync();
       if (_cursorRestoreOffset > 0) {
-        setTimeout(() => {
-          restoreCursorPosition(_cursorRestoreOffset);
-          _cursorRestoreOffset = 0;
-        }, 50);
+        setTimeout(() => { restoreCursorPosition(_cursorRestoreOffset); _cursorRestoreOffset = 0; }, 50);
       } else {
-        setTimeout(() => {
-          const el = getActiveEditorEl();
-          if (el) el.focus();
-        }, 50);
+        setTimeout(() => { const el = getActiveEditorEl(); if (el) el.focus(); }, 50);
       }
-      // 只读模式：禁用编辑区，隐藏工具栏
       if (readonly) {
-        const toolbar = vditorEl.querySelector('.vditor-toolbar');
-        if (toolbar) toolbar.style.display = 'none';
-        const editor = vditorEl.querySelector('.vditor-ir .vditor-reset, .vditor-sv .vditor-reset, .vditor-wysiwyg .vditor-reset');
-        if (editor) {
-          editor.setAttribute('contenteditable', 'false');
-          editor.style.userSelect = 'text';
-        }
+        const tb = vditorEl.querySelector('.vditor-toolbar');
+        if (tb) tb.style.display = 'none';
+        const ed = vditorEl.querySelector('.vditor-ir .vditor-reset, .vditor-sv .vditor-reset, .vditor-wysiwyg .vditor-reset');
+        if (ed) { ed.setAttribute('contenteditable', 'false'); ed.style.userSelect = 'text'; }
       }
     },
   });
@@ -155,207 +106,133 @@ function initEditor(content, mode, readonly, cursorOffset) {
 
 function getActiveEditorEl() {
   if (!_vditor) return null;
-  const mode = _vditor.getCurrentMode();
-  if (mode === 'sv') return _vditor.vditor.sv.element;
-  if (mode === 'ir') return _vditor.vditor.ir.element;
-  if (mode === 'wysiwyg') return _vditor.vditor.wysiwyg.element;
+  const m = _vditor.getCurrentMode();
+  if (m === 'sv') return _vditor.vditor.sv.element;
+  if (m === 'ir') return _vditor.vditor.ir.element;
+  if (m === 'wysiwyg') return _vditor.vditor.wysiwyg.element;
   return null;
 }
 
 // ─── SV mode: two-way scroll sync + cursor tracking ─────────────────────
 //
-// Challenge: Vditor's SV mode has a scroll handler on sv.element that
-// calls preview.render(). If we set svEl.scrollTop, that handler fires,
-// re-renders the preview, and resets preview.scrollTop → feedback loop.
+// Vditor's SV scroll handler directly sets previewEl.scrollTop when
+// svEl scrolls. If our rAF also pushes preview→editor, we get:
+//   preview scroll → set svEl.scrollTop → Vditor sets previewEl.scrollTop
+//   → our rAF sees preview change → pushes back → loop.
 //
-// Solution: wrap preview.render with a suppression flag. When our rAF
-// loop is about to set svEl.scrollTop (preview→editor sync), we set
-// _svRenderSuppress=true first. Vditor's scroll handler still fires,
-// but preview.render() becomes a no-op. After the scroll is set, we
-// clear the flag so future user-triggered scrolls render normally.
+// Fix: track which side actually changed between ticks. When both sides
+// change, it means Vditor pushed editor→preview, so we re-sync
+// editor→preview (not preview→editor). This breaks the feedback loop.
 
-let _svCursorSyncHandler = null;
+let _svCursorHandler = null;
 let _svRafId = null;
-let _svLastEditorTop = 0;
-let _svLastPreviewTop = 0;
-let _svRenderSuppress = false;
+let _svLastE = 0;
+let _svLastP = 0;
 
 function setupSVSync() {
   teardownSVSync();
-
   const svEl = _vditor.vditor.sv.element;
-  const preview = _vditor.vditor.preview;
+  const pv = _vditor.vditor.preview;
 
-  // DEBUG: log render calls to trace the loop
-  const origRender = preview.render.bind(preview);
-  let _svRenderCount = 0;
-  preview.render = function(vditor) {
-    _svRenderCount++;
-    if (_svRenderSuppress) {
-      console.warn('[SV] render SUPPRESSED #' + _svRenderCount + ', pTop:', preview.element.scrollTop, 'eTop:', svEl.scrollTop);
-      return;
-    }
-    console.warn('[SV] render #' + _svRenderCount + ', pTop:', preview.element.scrollTop, 'eTop:', svEl.scrollTop);
-    return origRender(vditor);
-  };
+  function syncE2P(eTop) {
+    const eMax = svEl.scrollHeight - svEl.clientHeight;
+    const pMax = pv.element.scrollHeight - pv.element.clientHeight;
+    if (eMax > 0 && pMax > 0) pv.element.scrollTop = eTop * pMax / eMax;
+    _svLastE = eTop;
+    _svLastP = pv.element.scrollTop;
+  }
 
-  let _svTickCount = 0;
-  const _svDebugEl = document.createElement('div');
-  _svDebugEl.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#0f0;font:12px monospace;padding:4px;z-index:9999;max-height:60px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
-  document.body.appendChild(_svDebugEl);
-
-  const _svLog = (msg) => {
-    _svDebugEl.textContent = msg;
-    // Also keep a ring buffer
-    _svDebugRing = _svDebugRing.slice(-5);
-    _svDebugRing.push(msg);
-  };
-  let _svDebugRing = [];
+  function syncP2E(pTop) {
+    const eMax = svEl.scrollHeight - svEl.clientHeight;
+    const pMax = pv.element.scrollHeight - pv.element.clientHeight;
+    if (eMax > 0 && pMax > 0) svEl.scrollTop = pTop * eMax / pMax;
+    _svLastE = svEl.scrollTop;
+    _svLastP = pTop;
+  }
 
   const tick = () => {
-    _svTickCount++;
-    const eTop = svEl.scrollTop;
-    const pTop = preview.element.scrollTop;
+    const e = svEl.scrollTop;
+    const p = pv.element.scrollTop;
+    const eMoved = Math.abs(e - _svLastE) > 0.5;
+    const pMoved = Math.abs(p - _svLastP) > 0.5;
 
-    // Editor changed → sync to preview
-    if (Math.abs(eTop - _svLastEditorTop) > 0.5) {
-      const eMax = svEl.scrollHeight - svEl.clientHeight;
-      const pMax = preview.element.scrollHeight - preview.element.clientHeight;
-      if (eMax > 0 && pMax > 0) {
-        preview.element.scrollTop = eTop * pMax / eMax;
-      }
-      _svLog('e→p e:' + Math.round(eTop) + ' p:' + Math.round(preview.element.scrollTop) + ' render:' + _svRenderCount);
-      _svLastEditorTop = eTop;
-      _svLastPreviewTop = preview.element.scrollTop;
+    if (eMoved && !pMoved) {
+      // User scrolled editor → follow preview
+      syncE2P(e);
+    } else if (pMoved && !eMoved) {
+      // User scrolled preview → follow editor
+      syncP2E(p);
+    } else if (eMoved && pMoved) {
+      // Both moved → Vditor pushed editor→preview; re-assert editor→preview
+      syncE2P(e);
     }
-    // Preview changed → sync to editor
-    else if (Math.abs(pTop - _svLastPreviewTop) > 0.5) {
-      const eMax = svEl.scrollHeight - svEl.clientHeight;
-      const pMax = preview.element.scrollHeight - preview.element.clientHeight;
-      if (eMax > 0 && pMax > 0) {
-        const target = pTop * eMax / pMax;
-        _svLog('p→e p:' + Math.round(pTop) + ' t:' + Math.round(target) + ' r:' + _svRenderCount);
-        _svRenderSuppress = true;
-        svEl.scrollTop = target;
-        _svRenderSuppress = false;
-        _svLastEditorTop = svEl.scrollTop;
-      }
-      _svLastPreviewTop = pTop;
-    }
-    else {
-      _svLastEditorTop = eTop;
-      _svLastPreviewTop = pTop;
-    }
+    // else: nothing changed
 
     _svRafId = requestAnimationFrame(tick);
   };
   _svRafId = requestAnimationFrame(tick);
 
-  // Cursor/selection change → scroll preview to cursor line
-  _svCursorSyncHandler = () => {
-    const textarea = svEl;
-    if (!textarea) return;
-    const pos = textarea.selectionStart;
-    const text = textarea.value;
-    const textBefore = text.substring(0, pos);
-    const lineNumber = textBefore.split('\n').length - 1;
-    const totalLines = text.split('\n').length;
-    if (totalLines <= 1) return;
-    const previewScrollHeight = preview.element.scrollHeight - preview.element.clientHeight;
-    const ratio = lineNumber / (totalLines - 1);
-    preview.element.scrollTop = ratio * previewScrollHeight;
-    _svLastPreviewTop = preview.element.scrollTop;
+  // Cursor tracking: scroll preview to cursor line
+  _svCursorHandler = () => {
+    const ta = svEl;
+    if (!ta) return;
+    const pos = ta.selectionStart;
+    const before = ta.value.substring(0, pos);
+    const line = before.split('\n').length - 1;
+    const total = ta.value.split('\n').length;
+    if (total <= 1) return;
+    const maxP = pv.element.scrollHeight - pv.element.clientHeight;
+    pv.element.scrollTop = (line / (total - 1)) * maxP;
+    _svLastP = pv.element.scrollTop;
   };
-  document.addEventListener('selectionchange', _svCursorSyncHandler);
-
-  // Scroll preview to match initial cursor position
-  setTimeout(() => _svCursorSyncHandler(), 100);
+  document.addEventListener('selectionchange', _svCursorHandler);
+  setTimeout(() => _svCursorHandler(), 100);
 }
 
 function teardownSVSync() {
-  if (_svRafId) {
-    cancelAnimationFrame(_svRafId);
-    _svRafId = null;
-  }
-  if (_svCursorSyncHandler) {
-    document.removeEventListener('selectionchange', _svCursorSyncHandler);
-    _svCursorSyncHandler = null;
-  }
-  // Restore original preview.render if we wrapped it
-  if (_vditor) {
-    const preview = _vditor.vditor.preview;
-    // We can't easily restore since we replaced it, but on reinit
-    // Vditor is destroyed and recreated, so the wrap is fresh.
-  }
-  _svLastEditorTop = 0;
-  _svLastPreviewTop = 0;
-  _svRenderSuppress = false;
+  if (_svRafId) { cancelAnimationFrame(_svRafId); _svRafId = null; }
+  if (_svCursorHandler) { document.removeEventListener('selectionchange', _svCursorHandler); _svCursorHandler = null; }
+  _svLastE = 0;
+  _svLastP = 0;
 }
 
 // ─── Cursor / content helpers ───────────────────────────────────────────
 
 function restoreCursorPosition(offset) {
   if (!_vditor) return;
-  const vditor = _vditor.vditor;
+  const vd = _vditor.vditor;
   const mode = _vditor.getCurrentMode();
-
   if (mode === 'sv') {
-    const textarea = vditor.sv.element;
-    if (textarea) {
-      textarea.focus();
-      textarea.setSelectionRange(offset, offset);
-    }
-  } else {
-    const el = mode === 'wysiwyg' ? vditor.wysiwyg.element : vditor.ir.element;
-    if (!el) return;
-    el.focus();
-    let charCount = 0;
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
-    let node;
-    while ((node = walker.nextNode())) {
-      const nodeLen = node.textContent.length;
-      if (charCount + nodeLen >= offset) {
-        const range = document.createRange();
-        const sel = window.getSelection();
-        range.setStart(node, Math.min(offset - charCount, nodeLen));
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        return;
-      }
-      charCount += nodeLen;
-    }
-    const range = document.createRange();
-    const sel = window.getSelection();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(range);
+    const ta = vd.sv.element;
+    if (ta) { ta.focus(); ta.setSelectionRange(offset, offset); }
+    return;
   }
+  const el = mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
+  if (!el) return;
+  el.focus();
+  let cc = 0;
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+  let n;
+  while ((n = w.nextNode())) {
+    const nl = n.textContent.length;
+    if (cc + nl >= offset) {
+      const r = document.createRange();
+      const s = window.getSelection();
+      r.setStart(n, Math.min(offset - cc, nl));
+      r.collapse(true);
+      s.removeAllRanges(); s.addRange(r);
+      return;
+    }
+    cc += nl;
+  }
+  const r = document.createRange();
+  const s = window.getSelection();
+  r.selectNodeContents(el); r.collapse(false);
+  s.removeAllRanges(); s.addRange(r);
 }
 
-function getEditorContent() {
-  if (!_vditor) return '';
-  return _vditor.getValue();
-}
-
-function isDirty() {
-  if (!_vditor) return false;
-  return _vditor.getValue() !== _originalContent;
-}
-
-function markSaved() {
-  _originalContent = getEditorContent();
-}
-
-function getCurrentFileInfo() {
-  return {
-    mountId: _currentMountId,
-    relPath: _currentRelPath,
-  };
-}
-
-function setFileInfo(mountId, relPath) {
-  _currentMountId = mountId;
-  _currentRelPath = relPath;
-}
+function getEditorContent() { return _vditor ? _vditor.getValue() : ''; }
+function isDirty() { return _vditor ? _vditor.getValue() !== _originalContent : false; }
+function markSaved() { _originalContent = getEditorContent(); }
+function getCurrentFileInfo() { return { mountId: _currentMountId, relPath: _currentRelPath }; }
+function setFileInfo(mountId, relPath) { _currentMountId = mountId; _currentRelPath = relPath; }
