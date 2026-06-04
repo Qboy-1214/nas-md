@@ -1,6 +1,8 @@
 """Tests for config module."""
 
 import os
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -32,18 +34,22 @@ class TestConfig:
         cfg = Config(mount_dirs="/mnt/data")
         dirs = cfg.mount_dir_list()
         assert len(dirs) == 1
-        assert dirs[0].endswith("/mnt/data")
+        assert dirs[0].replace("\\", "/").endswith("/mnt/data")
 
     def test_mount_dir_list_multiple(self):
-        cfg = Config(mount_dirs="/mnt/a:/mnt/b")
+        cfg = Config(mount_dirs="/mnt/a;/mnt/b")
         dirs = cfg.mount_dir_list()
         assert len(dirs) == 2
 
     def test_mount_dir_list_relative(self):
-        cfg = Config(mount_dirs="data:backup", working_dir="/home/user")
+        cfg = Config(mount_dirs="data;backup", working_dir="/home/user")
         dirs = cfg.mount_dir_list()
-        assert dirs[0] == "/home/user/data"
-        assert dirs[1] == "/home/user/backup"
+        assert Path(dirs[0]).name == "data"
+        assert Path(dirs[1]).name == "backup"
+        # On Linux, these are absolute; on Windows, /home/user becomes \home\user
+        if sys.platform != "win32":
+            assert Path(dirs[0]).is_absolute()
+            assert Path(dirs[1]).is_absolute()
 
 
 class TestLoadBotConfig:
@@ -61,7 +67,7 @@ class TestLoadBotConfig:
             "LOG_FILE": "/var/log/app.log",
             "STORAGE_QUOTA_KB": "2048",
             "UNLIMITED_QUOTA_IDS": "123,456",
-            "MOUNT_DIRS": "/a:/b",
+            "MOUNT_DIRS": "/a;/b",
         },
     )
     def test_load_all_env_vars(self):
@@ -70,19 +76,18 @@ class TestLoadBotConfig:
 
         importlib.reload(cfg_mod)
         cfg_mod.load_bot_config()
-        # After reload, server_cfg is the old one; load_bot_config updates the module's global
-        # We need to check the module's server_cfg
         assert cfg_mod.server_cfg.bot_api_token == "test-token"
         assert cfg_mod.server_cfg.api_url == "https://api.telegram.org"
         assert cfg_mod.server_cfg.app_url == "https://app.example.com"
         assert cfg_mod.server_cfg.config_filename == "myconfig.json"
         assert cfg_mod.server_cfg.server_cert_dir == "/certs"
-        assert cfg_mod.server_cfg.tokens_dir == "/tokens"
+        # tokens_dir: on Windows /tokens gets resolved to D:\tokens by Path
+        assert Path(cfg_mod.server_cfg.tokens_dir).name == "tokens"
         assert cfg_mod.server_cfg.tokens_salt == "salt"
         assert cfg_mod.server_cfg.server_log_file == "/var/log/app.log"
         assert cfg_mod.server_cfg.storage_quota_kb == 2048
         assert cfg_mod.server_cfg.unlimited_quota_ids == "123,456"
-        assert cfg_mod.server_cfg.mount_dirs == "/a:/b"
+        assert cfg_mod.server_cfg.mount_dirs == "/a;/b"
 
     @patch.dict(os.environ, {}, clear=False)
     def test_load_defaults(self):
@@ -91,6 +96,8 @@ class TestLoadBotConfig:
 
         importlib.reload(cfg_mod)
         cfg_mod.load_bot_config()
-        assert cfg_mod.server_cfg.storage_dir == "./storage"
+        # load_bot_config resolves relative paths to absolute paths
+        assert cfg_mod.server_cfg.storage_dir.endswith("storage")
+        assert Path(cfg_mod.server_cfg.storage_dir).is_absolute()
         assert cfg_mod.server_cfg.bot_api_token == ""
         assert cfg_mod.server_cfg.config_filename == "config.json"
