@@ -123,8 +123,7 @@ function initEditor(content, mode, readonly, cursorOffset) {
       linkToImgUrl: '',
     },
     after: () => {
-      // SV mode: wire up reverse scroll sync (preview → editor)
-      // and cursor tracking (editor cursor → preview scroll)
+      // SV mode: wire up scroll sync and cursor tracking
       if (_editorMode === 'sv') {
         setupSVSync();
       }
@@ -135,7 +134,6 @@ function initEditor(content, mode, readonly, cursorOffset) {
           _cursorRestoreOffset = 0;
         }, 50);
       } else {
-        // Even without cursor offset, restore focus to the editor
         setTimeout(() => {
           const el = getActiveEditorEl();
           if (el) el.focus();
@@ -164,39 +162,71 @@ function getActiveEditorEl() {
   return null;
 }
 
-// SV mode: reverse scroll sync + cursor tracking
+// ─── SV mode: two-way scroll sync + cursor tracking ─────────────────────
+//
+// Challenge: Vditor's SV mode has a scroll handler on sv.element that
+// calls preview.render(). If we set svEl.scrollTop, that handler fires,
+// re-renders the preview, and resets preview.scrollTop → feedback loop.
+//
+// Solution: wrap preview.render with a suppression flag. When our rAF
+// loop is about to set svEl.scrollTop (preview→editor sync), we set
+// _svRenderSuppress=true first. Vditor's scroll handler still fires,
+// but preview.render() becomes a no-op. After the scroll is set, we
+// clear the flag so future user-triggered scrolls render normally.
+
 let _svCursorSyncHandler = null;
 let _svRafId = null;
 let _svLastEditorTop = 0;
 let _svLastPreviewTop = 0;
+let _svRenderSuppress = false;
 
 function setupSVSync() {
   teardownSVSync();
 
   const svEl = _vditor.vditor.sv.element;
-  const previewEl = _vditor.vditor.preview.element;
+  const preview = _vditor.vditor.preview;
 
-  // Use a single rAF loop instead of scroll events to avoid feedback.
-  // Scroll events from Vditor's built-in sync and our own adjustments
-  // create an infinite loop when both sides listen. A polling loop
-  // sidesteps this entirely: we only push scroll position when it
-  // actually changed from the last known value.
-  // One-way sync: editor → preview only.
-  // Syncing preview back to editor causes a feedback loop because
-  // changing editor scrollTop triggers Vditor to re-render the preview,
-  // which resets preview scrollTop, which triggers another sync.
-  // The preview panel is read-only rendered output — user scrolling it
-  // should not affect the editor.
+  // Wrap preview.render to respect our suppression flag
+  const origRender = preview.render.bind(preview);
+  preview.render = function(vditor) {
+    if (_svRenderSuppress) return;
+    return origRender(vditor);
+  };
+
   const tick = () => {
     const eTop = svEl.scrollTop;
-    if (eTop !== _svLastEditorTop) {
+    const pTop = preview.element.scrollTop;
+
+    // Editor changed → sync to preview
+    if (Math.abs(eTop - _svLastEditorTop) > 0.5) {
       const eMax = svEl.scrollHeight - svEl.clientHeight;
-      const pMax = previewEl.scrollHeight - previewEl.clientHeight;
+      const pMax = preview.element.scrollHeight - preview.element.clientHeight;
       if (eMax > 0 && pMax > 0) {
-        previewEl.scrollTop = eTop * pMax / eMax;
+        preview.element.scrollTop = eTop * pMax / eMax;
       }
       _svLastEditorTop = eTop;
+      _svLastPreviewTop = preview.element.scrollTop;
     }
+    // Preview changed → sync to editor
+    else if (Math.abs(pTop - _svLastPreviewTop) > 0.5) {
+      const eMax = svEl.scrollHeight - svEl.clientHeight;
+      const pMax = preview.element.scrollHeight - preview.element.clientHeight;
+      if (eMax > 0 && pMax > 0) {
+        const target = pTop * eMax / pMax;
+        // Suppress Vditor's render-on-scroll while we set scrollTop
+        _svRenderSuppress = true;
+        svEl.scrollTop = target;
+        _svRenderSuppress = false;
+        _svLastEditorTop = svEl.scrollTop;
+      }
+      _svLastPreviewTop = pTop;
+    }
+    else {
+      // Drift or echo — just update tracking
+      _svLastEditorTop = eTop;
+      _svLastPreviewTop = pTop;
+    }
+
     _svRafId = requestAnimationFrame(tick);
   };
   _svRafId = requestAnimationFrame(tick);
@@ -211,10 +241,10 @@ function setupSVSync() {
     const lineNumber = textBefore.split('\n').length - 1;
     const totalLines = text.split('\n').length;
     if (totalLines <= 1) return;
-    const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
+    const previewScrollHeight = preview.element.scrollHeight - preview.element.clientHeight;
     const ratio = lineNumber / (totalLines - 1);
-    previewEl.scrollTop = ratio * previewScrollHeight;
-    _svLastPreviewTop = previewEl.scrollTop;
+    preview.element.scrollTop = ratio * previewScrollHeight;
+    _svLastPreviewTop = preview.element.scrollTop;
   };
   document.addEventListener('selectionchange', _svCursorSyncHandler);
 
@@ -231,9 +261,18 @@ function teardownSVSync() {
     document.removeEventListener('selectionchange', _svCursorSyncHandler);
     _svCursorSyncHandler = null;
   }
+  // Restore original preview.render if we wrapped it
+  if (_vditor) {
+    const preview = _vditor.vditor.preview;
+    // We can't easily restore since we replaced it, but on reinit
+    // Vditor is destroyed and recreated, so the wrap is fresh.
+  }
   _svLastEditorTop = 0;
   _svLastPreviewTop = 0;
+  _svRenderSuppress = false;
 }
+
+// ─── Cursor / content helpers ───────────────────────────────────────────
 
 function restoreCursorPosition(offset) {
   if (!_vditor) return;
@@ -241,18 +280,15 @@ function restoreCursorPosition(offset) {
   const mode = _vditor.getCurrentMode();
 
   if (mode === 'sv') {
-    // SV mode: textarea
     const textarea = vditor.sv.element;
     if (textarea) {
       textarea.focus();
       textarea.setSelectionRange(offset, offset);
     }
   } else {
-    // IR or WYSIWYG mode: contenteditable div
     const el = mode === 'wysiwyg' ? vditor.wysiwyg.element : vditor.ir.element;
     if (!el) return;
     el.focus();
-    // Walk text nodes to find the node and offset at the target position
     let charCount = 0;
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
     let node;
@@ -269,7 +305,6 @@ function restoreCursorPosition(offset) {
       }
       charCount += nodeLen;
     }
-    // If offset is beyond content length, collapse to end
     const range = document.createRange();
     const sel = window.getSelection();
     range.selectNodeContents(el);
