@@ -165,94 +165,76 @@ function getActiveEditorEl() {
 }
 
 // SV mode: reverse scroll sync + cursor tracking
-let _svSyncHandler = null;
-let _svScrollSyncHandler = null;
+let _svEditorScrollHandler = null;
+let _svPreviewScrollHandler = null;
 let _svCursorSyncHandler = null;
 let _svSyncing = false;  // Guard against scroll feedback loop
 
 function setupSVSync() {
-  // Remove old handlers if any
   teardownSVSync();
 
   const svEl = _vditor.vditor.sv.element;
   const previewEl = _vditor.vditor.preview.element;
 
-  // 1. Preview scroll → Editor scroll (reverse sync)
-  // Vditor already syncs editor→preview. We only sync the reverse direction.
-  // The _svSyncing flag prevents: preview scroll → set editorTop →
-  // Vditor's built-in handler fires → sets previewTop → re-triggers us → loop.
-  _svScrollSyncHandler = () => {
-    if (_svSyncing) return;
-    if (svEl.style.display === 'none') return;
-    const previewScrollTop = previewEl.scrollTop;
-    const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
-    const editorScrollHeight = svEl.scrollHeight - svEl.clientHeight;
-    if (previewScrollHeight <= 0 || editorScrollHeight <= 0) return;
-    const target = previewScrollTop * editorScrollHeight / previewScrollHeight;
-    // Only scroll if the difference is meaningful (avoids micro-loops)
-    if (Math.abs(target - svEl.scrollTop) < 2) return;
+  // Unified scroll handler: sync source → target proportionally
+  // _svSyncing prevents the target's scroll event from bouncing back.
+  const syncScroll = (source, target) => {
+    const srcHeight = source.scrollHeight - source.clientHeight;
+    const tgtHeight = target.scrollHeight - target.clientHeight;
+    if (srcHeight <= 0 || tgtHeight <= 0) return;
+    const targetTop = source.scrollTop * tgtHeight / srcHeight;
+    if (Math.abs(targetTop - target.scrollTop) < 1) return;
     _svSyncing = true;
-    svEl.scrollTop = target;
-    // Release guard after Vditor's built-in handler has had a chance to fire
+    target.scrollTop = targetTop;
     requestAnimationFrame(() => { _svSyncing = false; });
   };
-  previewEl.addEventListener('scroll', _svScrollSyncHandler);
 
-  // 2. Editor scroll → Preview scroll (override Vditor's built-in
-  //    handler so we can pair it with the reverse sync cleanly)
-  _svSyncHandler = () => {
+  // Editor scroll → Preview
+  _svEditorScrollHandler = () => {
     if (_svSyncing) return;
-    const editorScrollTop = svEl.scrollTop;
-    const editorScrollHeight = svEl.scrollHeight - svEl.clientHeight;
-    const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
-    if (editorScrollHeight <= 0 || previewScrollHeight <= 0) return;
-    const target = editorScrollTop * previewScrollHeight / editorScrollHeight;
-    if (Math.abs(target - previewEl.scrollTop) < 2) return;
-    _svSyncing = true;
-    previewEl.scrollTop = target;
-    requestAnimationFrame(() => { _svSyncing = false; });
+    syncScroll(svEl, previewEl);
   };
-  svEl.addEventListener('scroll', _svSyncHandler);
+  svEl.addEventListener('scroll', _svEditorScrollHandler);
 
-  // 3. Cursor/selection change → scroll preview to match position
+  // Preview scroll → Editor
+  _svPreviewScrollHandler = () => {
+    if (_svSyncing) return;
+    syncScroll(previewEl, svEl);
+  };
+  previewEl.addEventListener('scroll', _svPreviewScrollHandler);
+
+  // Cursor/selection change → scroll preview to cursor line
   _svCursorSyncHandler = () => {
     const textarea = svEl;
     if (!textarea) return;
     const pos = textarea.selectionStart;
     const text = textarea.value;
-    // Calculate which line the cursor is on
     const textBefore = text.substring(0, pos);
-    const lines = textBefore.split('\n');
-    const lineNumber = lines.length - 1;
+    const lineNumber = textBefore.split('\n').length - 1;
     const totalLines = text.split('\n').length;
     if (totalLines <= 1) return;
-    // Scroll preview proportionally
     const previewScrollHeight = previewEl.scrollHeight - previewEl.clientHeight;
     const ratio = lineNumber / (totalLines - 1);
     previewEl.scrollTop = ratio * previewScrollHeight;
   };
   document.addEventListener('selectionchange', _svCursorSyncHandler);
 
-  // 4. Scroll preview to match initial cursor position
+  // Scroll preview to match initial cursor position
   setTimeout(() => _svCursorSyncHandler(), 100);
 }
 
 function teardownSVSync() {
-  if (_svScrollSyncHandler && _vditor) {
-    try {
-      _vditor.vditor.preview.element.removeEventListener('scroll', _svScrollSyncHandler);
-    } catch (_) {}
+  if (_svEditorScrollHandler && _vditor) {
+    try { _vditor.vditor.sv.element.removeEventListener('scroll', _svEditorScrollHandler); } catch (_) {}
   }
-  if (_svSyncHandler && _vditor) {
-    try {
-      _vditor.vditor.sv.element.removeEventListener('scroll', _svSyncHandler);
-    } catch (_) {}
+  if (_svPreviewScrollHandler && _vditor) {
+    try { _vditor.vditor.preview.element.removeEventListener('scroll', _svPreviewScrollHandler); } catch (_) {}
   }
   if (_svCursorSyncHandler) {
     document.removeEventListener('selectionchange', _svCursorSyncHandler);
   }
-  _svScrollSyncHandler = null;
-  _svSyncHandler = null;
+  _svEditorScrollHandler = null;
+  _svPreviewScrollHandler = null;
   _svCursorSyncHandler = null;
   _svSyncing = false;
 }
