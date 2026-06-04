@@ -1008,6 +1008,7 @@ def serve(mount_dirs: list[str], web_root: str = "", port: int = 8080, host: str
             try:
                 entry = MountEntry.from_dict(entry_dict)
                 if os.path.isdir(entry.path) and os.path.normpath(entry.path) not in existing_paths:
+                    entry.public = True  # All dynamic mounts are public by default
                     mgr.mounts.append(entry)
                     existing_paths.add(os.path.normpath(entry.path))
                     logger.info(f"Restored mount: {entry.name} ({entry.id})={entry.path}")

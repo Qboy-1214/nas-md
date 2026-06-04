@@ -83,7 +83,7 @@ function initEditor(content, mode, readonly, cursorOffset) {
       mode: 'both',
       markdown: { toc: true, autoSpace: true, fixTermTypo: true },
       hljs: { enable: true, style: 'github', lineNumber: false },
-      theme: { current: 'light', path: 'https://unpkg.com/vditor@3.10.7/dist/css/content-theme' },
+      theme: { current: 'light', path: '/lib/vditor-cdn/dist/css/content-theme' },
     },
     cache: { enable: false },
     upload: { url: '', linkToImgUrl: '' },
