@@ -917,12 +917,16 @@ async function doSearch() {
       resultsEl.innerHTML = '<div style="padding:8px;color:var(--col-tx-muted)">无结果</div>';
       return;
     }
-    resultsEl.innerHTML = state.searchResults.map(r =>
-      `<div class="search-result-item" onclick="openFile('${r.path}');$('search-results').innerHTML='';$('search-input').value=''">
-        <span class="result-path">${r.path}</span>
+    resultsEl.innerHTML = state.searchResults.map(r => {
+      const mountId = r.mount_id || '';
+      const relPath = r.rel_path || r.path;
+      const displayTitle = r.title || r.filename;
+      const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
+      return `<div class="search-result-item" onclick="openFile('${relPath.replace(/'/g, "\\'")}', '${mountId}');$('search-results').innerHTML='';$('search-input').value=''">
+        <span class="result-path">${displayTitle} <small style="color:var(--col-tx-muted)">${displayPath}</small></span>
         <span class="result-snippet">${r.snippet || ''}</span>
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
   } catch (e) {
     console.error('Search failed:', e);
   }

@@ -836,10 +836,41 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             init_db()  # Ensure DB exists
             results = search(query.strip(), limit=limit)
+            # Enrich results with mount_id and relative path
+            for r in results:
+                mount_info = self._find_mount_for_path(r["path"])
+                if mount_info:
+                    r["mount_id"] = mount_info["mount_id"]
+                    r["rel_path"] = mount_info["rel_path"]
+                else:
+                    r["mount_id"] = None
+                    r["rel_path"] = r["path"]
             self._send_json(results)
         except Exception as e:
             logger.error("Search error: %s", e)
             self._send_json({"error": str(e)}, 500)
+
+    def _find_mount_for_path(self, file_path: str) -> dict | None:
+        """Find the mount that contains this file path and return mount_id + relative path.
+
+        file_path may be an absolute path or a relative path stored in the search index.
+        """
+        if not self.mount_manager:
+            return None
+        # Normalize the file path
+        file_path_norm = file_path.replace("\\", "/")
+        for m in self.mount_manager.mounts:
+            # Try as absolute path
+            mount_path_norm = os.path.normcase(m.path.replace("\\", "/")).rstrip("/")
+            fp_norm = os.path.normcase(file_path_norm)
+            if fp_norm.startswith(mount_path_norm + "/") or fp_norm == mount_path_norm:
+                rel = file_path_norm[len(mount_path_norm):].lstrip("/")
+                return {"mount_id": m.id, "rel_path": rel}
+            # Try as relative path — check if file exists under mount root
+            abs_candidate = os.path.join(m.path, file_path)
+            if os.path.isfile(abs_candidate):
+                return {"mount_id": m.id, "rel_path": file_path_norm}
+        return None
 
     def _handle_query(self, qs: dict):
         """Handle GET /api/query?type=task|tag|heading|link"""
