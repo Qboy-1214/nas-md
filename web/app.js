@@ -5,7 +5,6 @@
 // === 状态 ===
 const state = {
   token: null,
-  sidebarCollapsed: false,
   mounts: [],
   expandedMounts: [],
   treeData: {},
@@ -37,8 +36,59 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (lastPath && lastMountId) {
     const mount = state.mounts.find(m => m.id === lastMountId);
     if (mount) {
-      await openFile(lastPath);
-      return;
+      try {
+        const content = await API.getFile(mount.id, lastPath);
+        if (content !== null) {
+          state.currentPath = lastPath;
+          state.currentMountId = mount.id;
+          state.showSettings = false;
+          state.searchResults = [];
+          $('breadcrumb').textContent = lastPath + (mount.readonly ? ' 🔒' : '');
+          $('editor-modes').style.display = mount.readonly ? 'none' : (lastPath.endsWith('.md') ? '' : 'none');
+          $('btn-save').style.display = mount.readonly ? 'none' : '';
+          showPage('editor');
+          if (window._vditor) _vditor.destroy();
+          initEditor(content, state.editorMode, !!mount.readonly);
+          setFileInfo(mount.id, lastPath);
+          state.dirty = false;
+          startDirtyCheck();
+          // Expand sidebar to show the current file
+          if (!state.expandedMounts.includes(mount.id)) {
+            state.expandedMounts.push(mount.id);
+          }
+          // Expand all parent directories in the path
+          const dirParts = lastPath.split('/').filter(Boolean);
+          const dirsToExpand = [];
+          for (let i = 1; i < dirParts.length; i++) {
+            const dirPath = '/' + dirParts.slice(0, i).join('/');
+            dirsToExpand.push(dirPath);
+          }
+          // Load tree data sequentially for each directory level, then render
+          (async () => {
+            await loadTree(mount.id, '/');
+            // Also load builtin-storage tree so welcome.md shows in sidebar
+            const builtin = state.mounts.find(m => m.id === 'builtin-storage');
+            if (builtin && !state.treeData[builtin.id]) {
+              await loadTree(builtin.id, '/');
+            }
+            for (const dp of dirsToExpand) {
+              const dirKey = `${mount.id}:${dp}`;
+              if (!state.expandedMounts.includes(dirKey)) {
+                state.expandedMounts.push(dirKey);
+              }
+              await loadTree(mount.id, dp);
+            }
+            renderSidebar();
+          })();
+          renderSidebar();
+          return;
+        }
+      } catch (e) {
+        console.error('Failed to restore last file:', e);
+      }
+      // File no longer exists, clear stale state
+      localStorage.removeItem('nasmd_last_path');
+      localStorage.removeItem('nasmd_last_mount');
     }
   }
   // Fallback: open welcome.md from builtin mount
@@ -50,7 +100,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const entries = state.treeData[builtin.id]?.['/'];
     if (entries) {
       const welcome = entries.find(e => e.name === '欢迎.md');
-      if (welcome) openFile(welcome.path);
+      if (welcome) openFile(welcome.path, builtin.id);
     }
   }
 });
@@ -83,12 +133,6 @@ function showToast(msg) {
   el.style.display = '';
   if (state.toastTimer) clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => el.style.display = 'none', 2500);
-}
-
-// === 侧边栏 ===
-function toggleSidebar() {
-  state.sidebarCollapsed = !state.sidebarCollapsed;
-  $('sidebar').classList.toggle('collapsed', state.sidebarCollapsed);
 }
 
 // === 登录 ===
@@ -381,7 +425,7 @@ function renderSidebar() {
       const isActive = state.currentPath === fullPath;
       const icon = e.isDir ? '📁' : (e.name.endsWith('.md') ? '📝' : '📄');
       const cls = `tree-item builtin-file ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
-      tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}')">
+      tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}','${builtin.id}')">
         <span class="tree-icon">${icon}</span>
         <span>${e.name}</span>
         <span class="mount-builtin-badge" title="内置只读">🔒</span>
@@ -470,7 +514,7 @@ function renderEntries(entries, mountId, parentPath) {
       return html;
     }
 
-    return `<div class="${cls}" onclick="openFile('${fullPath}')">
+    return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')">
       <span class="tree-icon">${icon}</span>
       <span>${e.name}</span>
     </div>`;
@@ -498,8 +542,21 @@ function _treeHasPath(entry, path) {
   return false;
 }
 
-async function openFile(path) {
-  let mount = findMountForPath(path);
+async function openFile(path, preferredMountId) {
+  let mount = null;
+  // 1. Try preferred mount id (from sidebar click or restore)
+  if (preferredMountId) {
+    mount = state.mounts.find(m => m.id === preferredMountId);
+  }
+  // 2. Try current mount
+  if (!mount && state.currentMountId) {
+    mount = state.mounts.find(m => m.id === state.currentMountId);
+  }
+  // 3. Search treeData
+  if (!mount) {
+    mount = findMountForPath(path);
+  }
+  // 4. Fallback to first mount
   if (!mount && state.mounts.length > 0) {
     mount = state.mounts[0];
   }
@@ -571,7 +628,7 @@ function confirmNewFile() {
     clearTreeCache();
     loadTree(mount.id, '/').then(() => {
       renderSidebar();
-      openFile(path);
+      openFile(path, mount.id);
       showToast('已创建');
     });
   }).catch(() => showToast('创建失败'));

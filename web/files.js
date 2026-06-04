@@ -81,7 +81,8 @@ const API = {
 
   async getFile(mountId, path) {
     const r = await this.request(`/api/mounts/${mountId}/file?path=${encodeURIComponent(path)}`);
-    return r ? r.text() : null;
+    if (!r || !r.ok) return null;
+    return r.text();
   },
 
   async putFile(mountId, path, content) {

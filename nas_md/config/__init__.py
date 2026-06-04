@@ -1,16 +1,30 @@
-"""Configuration module - loads from environment variables and .env files."""
+"""Configuration module - loads from config.json, then environment variables override."""
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 
+def _find_project_root() -> Path:
+    """Walk up from this file to find the project root (contains config.json or web/)."""
+    p = Path(__file__).resolve().parent
+    for _ in range(5):
+        if (p / "config.json").exists() or (p / "web").is_dir():
+            return p
+        p = p.parent
+    return Path(__file__).resolve().parent.parent.parent  # fallback
+
+
+PROJECT_ROOT = _find_project_root()
+
+
 @dataclass
 class Config:
-    """Server configuration loaded from environment variables."""
+    """Server configuration loaded from config.json, overridden by environment variables."""
 
     working_dir: str = ""
     storage_dir: str = "./storage"
@@ -18,16 +32,18 @@ class Config:
     config_filename: str = "config.json"
     api_url: str = ""
     app_url: str = ""
-    server_cert_dir: str = "/tmp"
-    tokens_dir: str = "/tmp"
+    server_cert_dir: str = ""
+    tokens_dir: str = "./tokens"
     tokens_salt: str = ""
-    server_log_file: str = "/tmp/server.log"
+    server_log_file: str = ""
     storage_quota_kb: int = 1024  # 1MB
     unlimited_quota_ids: str = ""
     mount_dirs: str = ""
-    web_root: str = ""
+    web_root: str = "./web"
     web_port: int = 8080
+    web_host: str = "127.0.0.1"
     web_auth_token: str = ""
+    open_browser: bool = True
 
     def api_host(self) -> str:
         return _host_of(self.api_url)
@@ -80,33 +96,55 @@ server_cfg = Config()
 
 
 def load_bot_config() -> None:
-    """Load configuration from environment variables into server_cfg."""
+    """Load configuration: config.json first, then environment variables override."""
     cfg = Config()
 
-    cfg.storage_dir = os.environ.get("STORAGE_DIR", cfg.storage_dir)
-    cfg.bot_api_token = os.environ.get("BOT_API_TOKEN", cfg.bot_api_token)
-    cfg.config_filename = os.environ.get("CONFIG_FILENAME", cfg.config_filename)
-    cfg.api_url = os.environ.get("API_URL", cfg.api_url)
-    cfg.app_url = os.environ.get("APP_URL", cfg.app_url)
-    cfg.server_cert_dir = os.environ.get("CERT_DIR", cfg.server_cert_dir)
-    cfg.tokens_dir = os.environ.get("TOKENS_DIR", cfg.tokens_dir)
-    cfg.tokens_salt = os.environ.get("TOKENS_SALT", cfg.tokens_salt)
-    cfg.server_log_file = os.environ.get("LOG_FILE", cfg.server_log_file)
-    cfg.storage_quota_kb = int(os.environ.get("STORAGE_QUOTA_KB", cfg.storage_quota_kb))
-    cfg.unlimited_quota_ids = os.environ.get("UNLIMITED_QUOTA_IDS", cfg.unlimited_quota_ids)
-    cfg.mount_dirs = os.environ.get("MOUNT_DIRS", cfg.mount_dirs)
-    cfg.web_root = os.environ.get("WEB_ROOT", cfg.web_root)
-    cfg.web_port = int(os.environ.get("WEB_PORT", cfg.web_port))
-    cfg.web_auth_token = os.environ.get("WEB_AUTH_TOKEN", cfg.web_auth_token)
+    # 1. Load from config.json
+    config_path = PROJECT_ROOT / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                file_cfg = json.load(f)
+            for key, value in file_cfg.items():
+                if hasattr(cfg, key):
+                    setattr(cfg, key, type(getattr(cfg, key))(value))
+        except Exception:
+            pass  # ignore malformed config
 
-    cfg.working_dir = os.getcwd()
-    # Only resolve storage_dir if it's explicitly set via env var
-    storage_dir_env = os.environ.get("STORAGE_DIR")
-    if storage_dir_env and not Path(storage_dir_env).is_absolute():
-        cfg.storage_dir = str(Path(cfg.working_dir) / storage_dir_env)
-    elif not Path(cfg.storage_dir).is_absolute() and storage_dir_env is None:
-        # Keep default relative path as-is
-        pass
+    # 2. Environment variables override config.json
+    env_map = {
+        "STORAGE_DIR": "storage_dir",
+        "BOT_API_TOKEN": "bot_api_token",
+        "CONFIG_FILENAME": "config_filename",
+        "API_URL": "api_url",
+        "APP_URL": "app_url",
+        "CERT_DIR": "server_cert_dir",
+        "TOKENS_DIR": "tokens_dir",
+        "TOKENS_SALT": "tokens_salt",
+        "LOG_FILE": "server_log_file",
+        "STORAGE_QUOTA_KB": ("storage_quota_kb", int),
+        "UNLIMITED_QUOTA_IDS": "unlimited_quota_ids",
+        "MOUNT_DIRS": "mount_dirs",
+        "WEB_ROOT": "web_root",
+        "WEB_PORT": ("web_port", int),
+        "WEB_HOST": "web_host",
+        "WEB_AUTH_TOKEN": "web_auth_token",
+    }
+    for env_key, cfg_key in env_map.items():
+        val = os.environ.get(env_key)
+        if val is not None:
+            if isinstance(cfg_key, tuple):
+                attr_name, conv = cfg_key
+                setattr(cfg, attr_name, conv(val))
+            else:
+                setattr(cfg, cfg_key, val)
+
+    # 3. Resolve relative paths against project root
+    cfg.working_dir = str(PROJECT_ROOT)
+    for attr in ("web_root", "storage_dir", "tokens_dir"):
+        val = getattr(cfg, attr)
+        if val and not Path(val).is_absolute():
+            setattr(cfg, attr, str(PROJECT_ROOT / val))
 
     global server_cfg
     server_cfg = cfg
