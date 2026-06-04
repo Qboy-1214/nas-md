@@ -186,14 +186,34 @@ function setupSVSync() {
   const svEl = _vditor.vditor.sv.element;
   const preview = _vditor.vditor.preview;
 
-  // Wrap preview.render to respect our suppression flag
+  // DEBUG: log render calls to trace the loop
   const origRender = preview.render.bind(preview);
+  let _svRenderCount = 0;
   preview.render = function(vditor) {
-    if (_svRenderSuppress) return;
+    _svRenderCount++;
+    if (_svRenderSuppress) {
+      console.warn('[SV] render SUPPRESSED #' + _svRenderCount + ', pTop:', preview.element.scrollTop, 'eTop:', svEl.scrollTop);
+      return;
+    }
+    console.warn('[SV] render #' + _svRenderCount + ', pTop:', preview.element.scrollTop, 'eTop:', svEl.scrollTop);
     return origRender(vditor);
   };
 
+  let _svTickCount = 0;
+  const _svDebugEl = document.createElement('div');
+  _svDebugEl.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#0f0;font:12px monospace;padding:4px;z-index:9999;max-height:60px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
+  document.body.appendChild(_svDebugEl);
+
+  const _svLog = (msg) => {
+    _svDebugEl.textContent = msg;
+    // Also keep a ring buffer
+    _svDebugRing = _svDebugRing.slice(-5);
+    _svDebugRing.push(msg);
+  };
+  let _svDebugRing = [];
+
   const tick = () => {
+    _svTickCount++;
     const eTop = svEl.scrollTop;
     const pTop = preview.element.scrollTop;
 
@@ -204,6 +224,7 @@ function setupSVSync() {
       if (eMax > 0 && pMax > 0) {
         preview.element.scrollTop = eTop * pMax / eMax;
       }
+      _svLog('e→p e:' + Math.round(eTop) + ' p:' + Math.round(preview.element.scrollTop) + ' render:' + _svRenderCount);
       _svLastEditorTop = eTop;
       _svLastPreviewTop = preview.element.scrollTop;
     }
@@ -213,7 +234,7 @@ function setupSVSync() {
       const pMax = preview.element.scrollHeight - preview.element.clientHeight;
       if (eMax > 0 && pMax > 0) {
         const target = pTop * eMax / pMax;
-        // Suppress Vditor's render-on-scroll while we set scrollTop
+        _svLog('p→e p:' + Math.round(pTop) + ' t:' + Math.round(target) + ' r:' + _svRenderCount);
         _svRenderSuppress = true;
         svEl.scrollTop = target;
         _svRenderSuppress = false;
@@ -222,7 +243,6 @@ function setupSVSync() {
       _svLastPreviewTop = pTop;
     }
     else {
-      // Drift or echo — just update tracking
       _svLastEditorTop = eTop;
       _svLastPreviewTop = pTop;
     }
