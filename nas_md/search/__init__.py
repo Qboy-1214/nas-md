@@ -408,9 +408,33 @@ def get_stats() -> dict:
         for row in conn.execute("SELECT key, value FROM index_meta"):
             meta[row[0]] = row[1]
 
+        # Task stats
+        task_total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        task_done = conn.execute("SELECT COUNT(*) FROM tasks WHERE done = 1").fetchone()[0]
+
+        # Tag count
+        tag_count = conn.execute("SELECT COUNT(DISTINCT name) FROM tags").fetchone()[0]
+
+        # Link count
+        link_count = conn.execute("SELECT COUNT(*) FROM links").fetchone()[0]
+
+        # Recent pages (last 10)
+        recent_rows = conn.execute(
+            "SELECT path, title, updated_at FROM pages ORDER BY updated_at DESC LIMIT 10"
+        ).fetchall()
+        recent = [
+            {"path": r[0], "title": r[1] or r[0], "updated_at": r[2]}
+            for r in recent_rows
+        ]
+
         return {
             "file_count": count,
+            "task_total": task_total,
+            "task_done": task_done,
+            "tag_count": tag_count,
+            "link_count": link_count,
             "last_rebuild": meta.get("last_rebuild", ""),
+            "recent_pages": recent,
         }
     finally:
         conn.close()
@@ -577,5 +601,62 @@ def query_backlinks(page_path: str) -> list[dict]:
             }
             for r in rows
         ]
+    finally:
+        conn.close()
+
+
+def get_graph_data() -> dict:
+    """Get graph data for knowledge graph visualization.
+
+    Returns {"nodes": [...], "edges": [...]}.
+    Nodes are pages, edges are links between them.
+    """
+    conn = get_connection()
+    try:
+        # Nodes: all pages
+        page_rows = conn.execute(
+            "SELECT id, path, title FROM pages"
+        ).fetchall()
+        nodes = [
+            {"id": r[0], "path": r[1], "title": r[2] or r[1]}
+            for r in page_rows
+        ]
+
+        # Build path->id map for resolving link targets
+        path_to_id = {r[1]: r[0] for r in page_rows}
+        stem_to_id = {}
+        for r in page_rows:
+            stem = Path(r[1]).stem
+            if stem not in stem_to_id:
+                stem_to_id[stem] = r[0]
+        title_to_id = {}
+        for r in page_rows:
+            if r[2]:
+                title_to_id[r[2]] = r[0]
+
+        # Edges: links with resolved targets
+        link_rows = conn.execute(
+            """
+            SELECT l.page_id, l.target
+            FROM links l
+        """
+        ).fetchall()
+
+        edges = []
+        seen = set()
+        for source_id, target in link_rows:
+            # Resolve target to page id
+            target_id = (
+                path_to_id.get(target)
+                or title_to_id.get(target)
+                or stem_to_id.get(target)
+            )
+            if target_id and target_id != source_id:
+                key = (source_id, target_id)
+                if key not in seen:
+                    seen.add(key)
+                    edges.append({"source": source_id, "target": target_id})
+
+        return {"nodes": nodes, "edges": edges}
     finally:
         conn.close()

@@ -125,6 +125,8 @@ function showPage(page) {
   $('welcome-page').style.display = page === 'welcome' ? '' : 'none';
   $('editor-container').style.display = page === 'editor' ? '' : 'none';
   $('settings-page').style.display = page === 'settings' ? '' : 'none';
+  $('graph-page').style.display = page === 'graph' ? '' : 'none';
+  $('dashboard-page').style.display = page === 'dashboard' ? '' : 'none';
 }
 
 function showToast(msg) {
@@ -704,6 +706,146 @@ function showSettings() {
     `<div class="mount-info"><strong>${m.name}</strong>: ${m.path}${m.public ? ' <span class="public-badge">公开</span>' : ''}</div>`
   ).join('');
   showPage('settings');
+}
+
+async function showGraph() {
+  state.showSettings = false;
+  $('breadcrumb').textContent = '知识图谱';
+  showPage('graph');
+  try {
+    const data = await API.getGraph();
+    renderGraph(data);
+  } catch (e) {
+    console.error('Graph failed:', e);
+    $('graph-container').innerHTML = '<p style="padding:20px;color:#999">加载图谱失败</p>';
+  }
+}
+
+function renderGraph(data) {
+  const container = $('graph-container');
+  container.innerHTML = '';
+  if (!data.nodes || data.nodes.length === 0) {
+    container.innerHTML = '<p style="padding:20px;color:#999">暂无数据，请先打开目录并创建笔记</p>';
+    return;
+  }
+
+  const width = container.clientWidth;
+  const height = container.clientHeight || 500;
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', width)
+    .attr('height', height);
+
+  const zoom = d3.zoom()
+    .scaleExtent([0.3, 4])
+    .on('zoom', (event) => g.attr('transform', event.transform));
+  svg.call(zoom);
+
+  const g = svg.append('g');
+
+  // Build node id map
+  const nodeMap = {};
+  data.nodes.forEach(n => { nodeMap[n.id] = n; });
+
+  // Build links for d3
+  const links = data.edges.map(e => ({
+    source: e.source,
+    target: e.target
+  }));
+
+  const simulation = d3.forceSimulation(data.nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(80))
+    .force('charge', d3.forceManyBody().strength(-200))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(30));
+
+  const link = g.append('g')
+    .selectAll('line')
+    .data(links)
+    .join('line')
+    .attr('class', 'graph-link');
+
+  const node = g.append('g')
+    .selectAll('g')
+    .data(data.nodes)
+    .join('g')
+    .attr('class', 'graph-node')
+    .call(d3.drag()
+      .on('start', dragstarted)
+      .on('drag', dragged)
+      .on('end', dragended));
+
+  // Count connections per node for sizing
+  const connCount = {};
+  links.forEach(l => {
+    const sid = typeof l.source === 'object' ? l.source.id : l.source;
+    const tid = typeof l.target === 'object' ? l.target.id : l.target;
+    connCount[sid] = (connCount[sid] || 0) + 1;
+    connCount[tid] = (connCount[tid] || 0) + 1;
+  });
+
+  node.append('circle')
+    .attr('r', d => 6 + (connCount[d.id] || 0) * 2)
+    .attr('fill', d => (connCount[d.id] || 0) > 0 ? '#4a90d9' : '#ccc');
+
+  node.append('text')
+    .attr('dx', 12)
+    .attr('dy', 4)
+    .text(d => d.title.length > 20 ? d.title.slice(0, 20) + '...' : d.title);
+
+  node.on('click', (event, d) => {
+    event.stopPropagation();
+    openFile(d.path);
+  });
+
+  simulation.on('tick', () => {
+    link
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
+    node.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+
+  function dragstarted(event, d) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y;
+  }
+  function dragged(event, d) {
+    d.fx = event.x; d.fy = event.y;
+  }
+  function dragended(event, d) {
+    if (!event.active) simulation.alphaTarget(0);
+    d.fx = null; d.fy = null;
+  }
+}
+
+async function showDashboard() {
+  state.showSettings = false;
+  $('breadcrumb').textContent = '数据看板';
+  showPage('dashboard');
+  try {
+    const stats = await API.getStats();
+    $('dash-files').textContent = stats.file_count || 0;
+    $('dash-tasks-total').textContent = stats.task_total || 0;
+    $('dash-tasks-done').textContent = stats.task_done || 0;
+    const rate = stats.task_total ? Math.round(stats.task_done / stats.task_total * 100) : 0;
+    $('dash-task-rate').textContent = rate + '%';
+    $('dash-tags').textContent = stats.tag_count || 0;
+    $('dash-links').textContent = stats.link_count || 0;
+
+    const recent = stats.recent_pages || [];
+    $('dash-recent').innerHTML = recent.length === 0
+      ? '<p style="color:#999">暂无数据</p>'
+      : recent.map(p =>
+        `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
+          <span class="dash-recent-title">${p.title || p.path}</span>
+          <span class="dash-recent-time">${p.path}</span>
+        </div>`
+      ).join('');
+  } catch (e) {
+    console.error('Dashboard failed:', e);
+  }
 }
 
 // === 搜索 ===

@@ -262,6 +262,8 @@ links          — 链接索引（target, display_text, line_number）
 - `GET /api/search?q=keyword` — 全文搜索
 - `GET /api/query?type=task|tag|heading|link` — 结构化查询
 - `GET /api/backlinks?page=xxx` — 反链查询
+- `GET /api/stats` — 统计数据（文件数、任务完成率、标签数等）
+- `GET /api/graph` — 图谱数据（节点+边，用于 D3.js 可视化）
 
 ## Web 前端架构
 

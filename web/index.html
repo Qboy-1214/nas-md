@@ -28,6 +28,8 @@
   <!-- 底部按钮 -->
   <div class="sidebar-footer">
     <button class="nav-btn" onclick="navigateHome()">🏠 首页</button>
+    <button class="nav-btn" onclick="showGraph()">🔗 图谱</button>
+    <button class="nav-btn" onclick="showDashboard()">📊 看板</button>
     <button class="nav-btn" id="btn-settings" onclick="showSettings()">⚙️ 设置</button>
     <button class="nav-btn" id="btn-login" onclick="showLogin()">登录</button>
     <button class="nav-btn" id="btn-logout" onclick="logout()" style="display:none">退出</button>
@@ -93,6 +95,45 @@
       </div>
     </div>
 
+    <!-- 知识图谱页 -->
+    <div id="graph-page" class="graph-page" style="display:none">
+      <h1>知识图谱</h1>
+      <div id="graph-container" class="graph-container"></div>
+    </div>
+
+    <!-- 数据看板页 -->
+    <div id="dashboard-page" class="dashboard-page" style="display:none">
+      <h1>数据看板</h1>
+      <div class="dashboard-grid">
+        <div class="dash-card">
+          <div class="dash-value" id="dash-files">0</div>
+          <div class="dash-label">笔记总数</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-value" id="dash-tasks-done">0</div>
+          <div class="dash-label">已完成任务</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-value" id="dash-tasks-total">0</div>
+          <div class="dash-label">任务总数</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-value" id="dash-task-rate">0%</div>
+          <div class="dash-label">完成率</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-value" id="dash-tags">0</div>
+          <div class="dash-label">标签数</div>
+        </div>
+        <div class="dash-card">
+          <div class="dash-value" id="dash-links">0</div>
+          <div class="dash-label">链接数</div>
+        </div>
+      </div>
+      <h2>最近修改</h2>
+      <div id="dash-recent" class="dash-recent"></div>
+    </div>
+
     <!-- 设置页 -->
     <div class="settings-page" id="settings-page" style="display:none">
       <h1>设置</h1>
@@ -144,6 +185,7 @@
 <div class="toast" id="toast" style="display:none"></div>
 
 <script src="lib/vditor/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script src="files.js"></script>
 <script src="editor.js"></script>
 <script src="app.js"></script>

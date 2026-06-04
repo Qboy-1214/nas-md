@@ -567,6 +567,50 @@ GET /api/backlinks?page=notes/a.md
 
 **响应 400：** 缺少 `page` 参数。
 
+### 统计数据
+
+```
+GET /api/stats
+```
+
+获取索引统计信息。需要认证。
+
+**响应 200：**
+```json
+{
+  "file_count": 42,
+  "task_total": 15,
+  "task_done": 8,
+  "tag_count": 12,
+  "link_count": 30,
+  "last_rebuild": "2026-06-04T10:00:00",
+  "recent_pages": [
+    {"path": "notes/a.md", "title": "Note A", "updated_at": 1749000000000}
+  ]
+}
+```
+
+### 图谱数据
+
+```
+GET /api/graph
+```
+
+获取知识图谱数据（节点+边），用于前端 D3.js 力导向图渲染。需要认证。
+
+**响应 200：**
+```json
+{
+  "nodes": [
+    {"id": 1, "path": "notes/a.md", "title": "Note A"},
+    {"id": 2, "path": "notes/b.md", "title": "Note B"}
+  ],
+  "edges": [
+    {"source": 1, "target": 2}
+  ]
+}
+```
+
 ---
 
 ## 错误响应

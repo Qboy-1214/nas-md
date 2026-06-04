@@ -445,6 +445,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_backlinks(qs)
                 return
 
+            # Stats API
+            if path == "/api/stats":
+                self._handle_stats()
+                return
+
+            # Graph API
+            if path == "/api/graph":
+                self._handle_graph()
+                return
+
             # Public mounts endpoint (no auth: returns public + visitor mounts)
             if path == "/api/mounts/public":
                 self._handle_public_mounts()
@@ -844,6 +854,30 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             logger.error("Backlinks error: %s", e)
             self._send_json({"error": str(e)}, 500)
 
+    def _handle_stats(self):
+        """Handle GET /api/stats"""
+        from nas_md.search import init_db, get_stats
+
+        try:
+            init_db()
+            stats = get_stats()
+            self._send_json(stats)
+        except Exception as e:
+            logger.error("Stats error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_graph(self):
+        """Handle GET /api/graph"""
+        from nas_md.search import init_db, get_graph_data
+
+        try:
+            init_db()
+            data = get_graph_data()
+            self._send_json(data)
+        except Exception as e:
+            logger.error("Graph error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
     # --- Search index update ---
 
     def _is_public_mount(self, mount_id: str) -> bool:
@@ -1132,6 +1166,8 @@ def serve(
     logger.info("    GET  /api/search?q=keyword")
     logger.info("    GET  /api/query?type=task|tag|heading|link")
     logger.info("    GET  /api/backlinks?page=xxx")
+    logger.info("    GET  /api/stats")
+    logger.info("    GET  /api/graph")
     logger.info("    GET  /api/mounts")
     logger.info("    GET  /api/mounts/public")
     logger.info("    PUT  /api/mounts/{id}")

@@ -123,6 +123,16 @@ const API = {
     const r = await this.request(`/api/backlinks?page=${encodeURIComponent(page)}`);
     return r ? r.json() : { backlinks: [] };
   },
+
+  async getStats() {
+    const r = await this.request('/api/stats');
+    return r ? r.json() : {};
+  },
+
+  async getGraph() {
+    const r = await this.request('/api/graph');
+    return r ? r.json() : { nodes: [], edges: [] };
+  },
 };
 
 // 全局变量

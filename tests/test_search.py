@@ -8,6 +8,7 @@ import pytest
 
 from nas_md.search import (
     get_connection,
+    get_graph_data,
     get_stats,
     index_file,
     init_db,
@@ -333,3 +334,53 @@ class TestLinksIndexing:
         index_file("/c.md", "# C\n[[D]]")
         links = query_links()
         assert len(links) == 2
+
+
+class TestStatsAndGraph:
+    def test_get_stats_basic(self, search_db):
+        index_file("/a.md", "# A\n- [x] Task1\n- [ ] Task2\n#tag1")
+        stats = get_stats()
+        assert stats["file_count"] == 1
+        assert stats["task_total"] == 2
+        assert stats["task_done"] == 1
+        assert stats["tag_count"] == 1
+
+    def test_get_stats_recent_pages(self, search_db):
+        index_file("/a.md", "# Page A")
+        index_file("/b.md", "# Page B")
+        stats = get_stats()
+        assert len(stats["recent_pages"]) == 2
+
+    def test_get_stats_empty(self, search_db):
+        stats = get_stats()
+        assert stats["file_count"] == 0
+        assert stats["task_total"] == 0
+        assert stats["tag_count"] == 0
+        assert stats["link_count"] == 0
+
+    def test_get_graph_data_basic(self, search_db):
+        index_file("/a.md", "# A\nSee [[B]]")
+        index_file("/b.md", "# B\nContent")
+        data = get_graph_data()
+        assert len(data["nodes"]) == 2
+        assert len(data["edges"]) == 1
+        assert data["edges"][0]["source"] != data["edges"][0]["target"]
+
+    def test_get_graph_data_no_links(self, search_db):
+        index_file("/a.md", "# A\nNo links")
+        data = get_graph_data()
+        assert len(data["nodes"]) == 1
+        assert len(data["edges"]) == 0
+
+    def test_get_graph_data_empty(self, search_db):
+        data = get_graph_data()
+        assert data["nodes"] == []
+        assert data["edges"] == []
+
+    def test_get_graph_data_multiple_links(self, search_db):
+        index_file("/a.md", "# A\n[[B]] and [[C]]")
+        index_file("/b.md", "# B\n[[C]]")
+        index_file("/c.md", "# C\nContent")
+        data = get_graph_data()
+        assert len(data["nodes"]) == 3
+        assert len(data["edges"]) == 3  # A->B, A->C, B->C
