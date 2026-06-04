@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           state.searchResults = [];
           $('breadcrumb').textContent = lastPath + (mount.readonly ? ' 🔒' : '');
           $('editor-modes').style.display = mount.readonly ? 'none' : (lastPath.endsWith('.md') ? '' : 'none');
-          $('save-group').style.display = mount.readonly ? 'none' : '';
+          $('save-group').style.display = (mount.readonly || !state.isAdmin) ? 'none' : '';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
@@ -372,7 +372,6 @@ function renderSidebar() {
     html += `<div class="mount-name" onclick="toggleMount('${mount.id}')">`;
     html += `<span class="mount-icon">${chevron}</span>`;
     html += `<span>${mount.name}</span>`;
-    if (mount.public) html += ` <span class="public-badge">公开</span>`;
     html += `</div>`;
     if (state.isAdmin) {
       html += `<span class="mount-path-hint" title="${mount.path}">${svgFolder} ${mount.path}</span>`;
@@ -641,6 +640,11 @@ if (localStorage.getItem('nasmd_dark') === '1') {
 function toggleDarkMode() {
   const isDark = document.documentElement.classList.toggle('dark');
   localStorage.setItem('nasmd_dark', isDark ? '1' : '0');
+  // Sync Vditor content theme
+  if (window._vditor) {
+    window._vditor.setContentTheme(isDark ? 'dark' : 'light', '/lib/vditor-cdn/dist/css/content-theme');
+    window._vditor.setTheme(isDark ? 'dark' : 'classic', isDark ? 'dark' : 'classic', isDark ? 'dracula' : 'github');
+  }
 }
 
 async function loadBacklinks(page) {
@@ -705,7 +709,10 @@ async function saveFile({ silent = false } = {}) {
   }
 
   try {
-    await API.putFile(state.currentMountId, state.currentPath, content);
+    const resp = await API.putFile(state.currentMountId, state.currentPath, content);
+    if (resp && resp.error) {
+      throw new Error(resp.error);
+    }
     window._originalContent = content;
     markClean();
     clearLocalStorage(state.currentPath);
@@ -717,6 +724,7 @@ async function saveFile({ silent = false } = {}) {
     // Fallback to localStorage on error
     saveToLocalStorage(state.currentPath, content);
     if (!silent) showToast('保存失败，已缓存到本地');
+    else showToast('自动保存失败');
     console.error(e);
   } finally {
     if (!silent && btn) {
@@ -937,11 +945,7 @@ async function showDashboard() {
 
 // === 同步 ===
 function updateSyncIndicator() {
-  const el = $('sync-indicator');
-  if (!el) return;
-  el.className = 'sync-indicator ' + state.syncStatus;
-  const labels = { offline: '离线', synced: '已同步', syncing: '同步中...', conflict: '有冲突' };
-  el.title = labels[state.syncStatus] || state.syncStatus;
+  // sync-indicator element removed from UI
 }
 
 function startSyncPolling() {

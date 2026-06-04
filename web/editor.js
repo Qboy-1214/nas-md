@@ -21,7 +21,14 @@ window._getVditor = () => _vditor;
 // Toggle outline panel visibility, persist to localStorage
 window._toggleOutline = () => {
   if (!_vditor) return;
+  // Find and click Vditor's built-in outline toolbar button
   const vditorEl = document.getElementById('vditor');
+  const outlineBtn = vditorEl?.querySelector('.vditor-toolbar [data-type="outline"]');
+  if (outlineBtn) {
+    outlineBtn.click();
+    return;
+  }
+  // Fallback: toggle outline element directly
   const outlineEl = vditorEl?.querySelector('.vditor-outline');
   if (!outlineEl) return;
   const isCurrentlyVisible = outlineEl.style.display !== 'none';
@@ -163,7 +170,7 @@ function initEditor(content, mode, readonly) {
     height: '100%',
     width: '100%',
     placeholder: '开始写作...',
-    theme: 'classic',
+    theme: document.documentElement.classList.contains('dark') ? 'dark' : 'classic',
     icon: 'ant',
     cdn: '/lib/vditor-cdn',
     lang: 'zh_CN',
@@ -179,8 +186,15 @@ function initEditor(content, mode, readonly) {
     preview: {
       mode: 'both',
       markdown: { toc: true, autoSpace: true, fixTermTypo: true },
-      hljs: { enable: true, style: 'github', lineNumber: false },
-      theme: { current: 'light', path: '/lib/vditor-cdn/dist/css/content-theme' },
+      hljs: {
+        enable: true,
+        style: document.documentElement.classList.contains('dark') ? 'dracula' : 'github',
+        lineNumber: false
+      },
+      theme: {
+        current: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+        path: '/lib/vditor-cdn/dist/css/content-theme'
+      },
     },
     hint: {
       extend: [

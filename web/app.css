@@ -519,15 +519,6 @@ body.admin .admin-only { display: block; }
 .dash-recent-title { color: var(--c-link); font-weight: var(--fw-medium); }
 .dash-recent-time { color: var(--c-muted); font-size: var(--f-micro); }
 
-/* === Sync Indicator === */
-.sync-indicator { font-size: var(--f-micro); margin-left: var(--s-xs); cursor: default; }
-.sync-indicator.synced { color: var(--c-success); }
-.sync-indicator.syncing { color: var(--c-warning); animation: pulse 1s infinite; }
-.sync-indicator.offline { color: var(--c-danger); }
-.sync-indicator.conflict { color: var(--c-brand-purple); }
-
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-
 /* === Welcome Page === */
 .welcome-page {
   padding: var(--s-section); max-width: 640px;
@@ -689,14 +680,6 @@ body.admin .admin-only { display: block; }
 }
 
 .mount-card-toggle:hover { background: var(--c-bg-hover); }
-
-/* Public Badge */
-.public-badge {
-  display: inline-flex; align-items: center;
-  padding: 1px var(--s-xs); background: var(--c-tint-lavender);
-  color: var(--c-brand-purple-800); border-radius: var(--r-full);
-  font-size: var(--f-micro); font-weight: var(--fw-semibold);
-}
 
 /* Recent Files */
 .recent-files { margin-bottom: var(--s-section-sm); }
