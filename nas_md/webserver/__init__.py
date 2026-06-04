@@ -10,6 +10,7 @@ import mimetypes
 import os
 import shutil
 import stat
+import time
 import traceback
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from io import BytesIO
@@ -396,9 +397,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if "/admin" in referer:
             return True
         # Check custom header set by frontend
-        if self.headers.get("X-Admin", "") == "1":
-            return True
-        return False
+        return self.headers.get("X-Admin", "") == "1"
 
     def _require_admin(self) -> bool:
         """Return 403 if not admin. Returns True if OK."""
@@ -465,11 +464,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
             # Sync API
             if path == "/api/sync" and self.command == "POST":
-                self._handle_sync(mount_id, qs)
+                sync_mount_id = qs.get("mount_id", [None])[0] or ""
+                self._handle_sync(sync_mount_id, qs)
                 return
 
             if path == "/api/sync/status":
-                self._handle_sync_status(mount_id)
+                sync_mount_id = qs.get("mount_id", [None])[0] or ""
+                self._handle_sync_status(sync_mount_id)
                 return
 
             # Plugin API
@@ -746,11 +747,20 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             if actual_mtime != int(expected_mtime):
                 # Conflict! Create a .conflict.md copy
                 conflict_path = abs_path.rsplit(".", 1)
-                conflict_path = conflict_path[0] + ".conflict." + conflict_path[1] if len(conflict_path) > 1 else abs_path + ".conflict"
+                conflict_path = (
+                    conflict_path[0] + ".conflict." + conflict_path[1]
+                    if len(conflict_path) > 1
+                    else abs_path + ".conflict"
+                )
                 try:
                     import shutil
+
                     shutil.copy2(abs_path, conflict_path)
-                    logger.warning("Sync conflict detected for %s, created %s", rel_path, os.path.basename(conflict_path))
+                    logger.warning(
+                        "Sync conflict detected for %s, created %s",
+                        rel_path,
+                        os.path.basename(conflict_path),
+                    )
                 except OSError:
                     pass
 
@@ -864,7 +874,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             mount_path_norm = os.path.normcase(m.path.replace("\\", "/")).rstrip("/")
             fp_norm = os.path.normcase(file_path_norm)
             if fp_norm.startswith(mount_path_norm + "/") or fp_norm == mount_path_norm:
-                rel = file_path_norm[len(mount_path_norm):].lstrip("/")
+                rel = file_path_norm[len(mount_path_norm) :].lstrip("/")
                 return {"mount_id": m.id, "rel_path": rel}
             # Try as relative path — check if file exists under mount root
             abs_candidate = os.path.join(m.path, file_path)
@@ -935,8 +945,12 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             if self.mount_manager and not self.mount_manager.is_empty():
                 mount_paths = [m.path.lower().rstrip("\\/") for m in self.mount_manager.mounts]
                 stats["recent_pages"] = [
-                    p for p in stats.get("recent_pages", [])
-                    if any(p["path"].lower().startswith(mp + os.sep) or p["path"].lower() == mp for mp in mount_paths)
+                    p
+                    for p in stats.get("recent_pages", [])
+                    if any(
+                        p["path"].lower().startswith(mp + os.sep) or p["path"].lower() == mp
+                        for mp in mount_paths
+                    )
                 ]
             self._send_json(stats)
         except Exception as e:
@@ -1040,17 +1054,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         download.append({"path": rel_path, "mtime": server_mtime})
 
             # Files on client but not on server = deleted on server
-            delete = [
-                {"path": p} for p in client_files
-                if p not in server_files
-            ]
+            delete = [{"path": p} for p in client_files if p not in server_files]
 
-            self._send_json({
-                "download": download,
-                "upload": upload,
-                "delete": delete,
-                "server_time": int(time.time() * 1000),
-            })
+            self._send_json(
+                {
+                    "download": download,
+                    "upload": upload,
+                    "delete": delete,
+                    "server_time": int(time.time() * 1000),
+                }
+            )
         except Exception as e:
             logger.error("Sync error: %s", e)
             self._send_json({"error": str(e)}, 500)
@@ -1081,12 +1094,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     if mtime > latest_mtime:
                         latest_mtime = mtime
 
-            self._send_json({
-                "mount_id": mount_id,
-                "file_count": file_count,
-                "total_size": total_size,
-                "latest_mtime": latest_mtime,
-            })
+            self._send_json(
+                {
+                    "mount_id": mount_id,
+                    "file_count": file_count,
+                    "total_size": total_size,
+                    "latest_mtime": latest_mtime,
+                }
+            )
         except Exception as e:
             logger.error("Sync status error: %s", e)
             self._send_json({"error": str(e)}, 500)
@@ -1096,7 +1111,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         from nas_md.plugins import PluginManager
 
         try:
-            pm = getattr(self.__class__, '_plugin_manager', None)
+            pm = getattr(self.__class__, "_plugin_manager", None)
             if pm is None:
                 pm = PluginManager()
                 pm.load_all()

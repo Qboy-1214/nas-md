@@ -511,10 +511,7 @@ def get_stats() -> dict:
         recent_rows = conn.execute(
             "SELECT path, title, updated_at FROM pages ORDER BY updated_at DESC LIMIT 10"
         ).fetchall()
-        recent = [
-            {"path": r[0], "title": r[1] or r[0], "updated_at": r[2]}
-            for r in recent_rows
-        ]
+        recent = [{"path": r[0], "title": r[1] or r[0], "updated_at": r[2]} for r in recent_rows]
 
         return {
             "file_count": count,
@@ -631,9 +628,7 @@ def query_links(page_path: str | None = None) -> list[dict]:
             """,
                 (page_path,),
             ).fetchall()
-            return [
-                {"target": r[0], "display_text": r[1], "line": r[2]} for r in rows
-            ]
+            return [{"target": r[0], "display_text": r[1], "line": r[2]} for r in rows]
         else:
             rows = conn.execute("""
                 SELECT l.target, l.display_text, l.line_number, p.path
@@ -642,8 +637,7 @@ def query_links(page_path: str | None = None) -> list[dict]:
                 LIMIT 500
             """).fetchall()
             return [
-                {"target": r[0], "display_text": r[1], "line": r[2], "page": r[3]}
-                for r in rows
+                {"target": r[0], "display_text": r[1], "line": r[2], "page": r[3]} for r in rows
             ]
     finally:
         conn.close()
@@ -703,13 +697,8 @@ def get_graph_data() -> dict:
     conn = get_connection()
     try:
         # Nodes: all pages
-        page_rows = conn.execute(
-            "SELECT id, path, title FROM pages"
-        ).fetchall()
-        nodes = [
-            {"id": r[0], "path": r[1], "title": r[2] or r[1]}
-            for r in page_rows
-        ]
+        page_rows = conn.execute("SELECT id, path, title FROM pages").fetchall()
+        nodes = [{"id": r[0], "path": r[1], "title": r[2] or r[1]} for r in page_rows]
 
         # Build path->id map for resolving link targets
         path_to_id = {r[1]: r[0] for r in page_rows}
@@ -724,22 +713,16 @@ def get_graph_data() -> dict:
                 title_to_id[r[2]] = r[0]
 
         # Edges: links with resolved targets
-        link_rows = conn.execute(
-            """
+        link_rows = conn.execute("""
             SELECT l.page_id, l.target
             FROM links l
-        """
-        ).fetchall()
+        """).fetchall()
 
         edges = []
         seen = set()
         for source_id, target in link_rows:
             # Resolve target to page id
-            target_id = (
-                path_to_id.get(target)
-                or title_to_id.get(target)
-                or stem_to_id.get(target)
-            )
+            target_id = path_to_id.get(target) or title_to_id.get(target) or stem_to_id.get(target)
             if target_id and target_id != source_id:
                 key = (source_id, target_id)
                 if key not in seen:

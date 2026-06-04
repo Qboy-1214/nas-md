@@ -108,7 +108,7 @@ class TestServerCommand:
 
 class TestServerFileOperations:
     def test_done_task(self, bot):
-        server, tg, _db, user_fs = bot
+        server, _tg, _db, user_fs = bot
         user_fs.write(DIR_USER_ROOT, "Task.md", "content")
         from nas_md.fs import hash_filename
 
@@ -121,7 +121,7 @@ class TestServerFileOperations:
         assert exists
 
     def test_delete_task(self, bot):
-        server, tg, _db, user_fs = bot
+        server, _tg, _db, user_fs = bot
         user_fs.write(DIR_USER_ROOT, "Task.md", "content")
         from nas_md.fs import hash_filename
 

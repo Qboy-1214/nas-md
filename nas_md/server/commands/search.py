@@ -23,6 +23,7 @@ def cmd_search_notes(server, upd, cmd):
 
     try:
         from nas_md.search import init_db, search as fts_search
+
         init_db()
         results = fts_search(query, limit=10)
         if not results:
@@ -54,6 +55,7 @@ def cmd_backlink(server, upd, cmd):
 
     try:
         from nas_md.search import init_db, query_backlinks
+
         init_db()
         backlinks = query_backlinks(page)
         if not backlinks:
@@ -81,6 +83,7 @@ def cmd_inline_query(server, upd, cmd):
 
     try:
         from nas_md.search import init_db, search as fts_search
+
         init_db()
         results = fts_search(query, limit=5)
         # Return as inline results
@@ -93,6 +96,7 @@ def cmd_inline_query(server, upd, cmd):
 def cmd_web_app(server, upd, cmd):
     """Open web app."""
     from nas_md.config import server_cfg
+
     url = f"http://{server_cfg.host}:{server_cfg.port}"
     server.tg.send(server.user_id, f"Open web app: {url}")
 

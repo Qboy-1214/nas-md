@@ -13,6 +13,7 @@ def cmd_notes(server, upd, cmd):
         server.tg.send(server.user_id, "No notes found.")
         return
     from nas_md.pkg.tg.types import new_btn, new_row, new_keyboard, new_cmd
+
     rows = []
     for d in dirs:
         name = server.user_fs.display_name(d)
@@ -29,6 +30,7 @@ def cmd_file(server, upd, cmd):
     content = server.user_fs.read_file(path)
     if content:
         from nas_md.pkg.txt.md import markdown_to_html
+
         html = markdown_to_html(content)
         server.tg.send(server.user_id, html, None, "HTML")
     else:

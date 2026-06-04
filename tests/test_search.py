@@ -326,7 +326,7 @@ class TestLinksIndexing:
         index_file("/a.md", "# A\nSee [[C]] and [[D]].")
         links = query_links("/a.md")
         assert len(links) == 2
-        targets = {l["target"] for l in links}
+        targets = {link["target"] for link in links}
         assert targets == {"C", "D"}
 
     def test_query_links_all(self, search_db):

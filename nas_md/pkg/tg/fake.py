@@ -30,7 +30,9 @@ class FakeTG:
         self.messages: list[FakeMessage] = []
         self.edited_messages: list[FakeMessage] = []
 
-    def send(self, user_id: int, text: str, kb: Keyboard | None = None, markup: str = "") -> tuple[int, None]:
+    def send(
+        self, user_id: int, text: str, kb: Keyboard | None = None, markup: str = ""
+    ) -> tuple[int, None]:
         self.last_sent_text = text
         self.sent_texts.append(text)
         self.last_sent_keyboard = kb

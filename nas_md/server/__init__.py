@@ -293,6 +293,7 @@ class Server:
         self.world_clock = WorldClockPlugin()
         # Initialize modular command router
         from nas_md.server.router import register_all_modules
+
         register_all_modules()
 
     def handle(self, upd) -> None:
@@ -315,6 +316,7 @@ class Server:
         """Route a command to its handler."""
         # Try modular router first
         from nas_md.server.router import get_handler
+
         handler = get_handler(cmd.name)
         if handler:
             handler(self, upd, cmd)
@@ -410,8 +412,9 @@ class Server:
     def _auto_index_content(self, text: str) -> None:
         """Auto-create pages for [[wiki-links]] and index #tags in message text."""
         import re
+
         # Auto-create pages for [[wiki-links]]
-        wiki_links = re.findall(r'\[\[([^\]]+)\]\]', text)
+        wiki_links = re.findall(r"\[\[([^\]]+)\]\]", text)
         for link in wiki_links:
             self._ensure_page_exists(link)
 
@@ -419,9 +422,10 @@ class Server:
         """Create a page if it doesn't exist (for wiki-link auto-creation)."""
         import os
         from nas_md.fs import sanitize_filename
+
         filename = sanitize_filename(page_name) + ".md"
         # Check in notes directory
-        notes_dir = self.user_fs.notes_dir() if hasattr(self.user_fs, 'notes_dir') else ""
+        notes_dir = self.user_fs.notes_dir() if hasattr(self.user_fs, "notes_dir") else ""
         if not notes_dir:
             return
         filepath = os.path.join(notes_dir, filename)

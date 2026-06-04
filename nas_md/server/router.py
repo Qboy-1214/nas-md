@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +22,11 @@ def command(name: str):
         def handle_search(server, upd, cmd):
             ...
     """
+
     def decorator(func: Callable) -> Callable:
         _registry[name] = func
         return func
+
     return decorator
 
 
@@ -44,6 +49,7 @@ def register_module(module_name: str) -> int:
     try:
         import importlib
         import sys
+
         full_name = f"nas_md.server.commands.{module_name}"
         # Force reload to re-trigger decorators
         if full_name in sys.modules:

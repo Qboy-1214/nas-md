@@ -20,10 +20,12 @@ class TestCommandRouter:
 
     def test_all_commands(self):
         @command("cmd1")
-        def h1(server, upd, cmd): pass
+        def h1(server, upd, cmd):
+            pass
 
         @command("cmd2")
-        def h2(server, upd, cmd): pass
+        def h2(server, upd, cmd):
+            pass
 
         cmds = all_commands()
         assert "cmd1" in cmds
@@ -37,6 +39,7 @@ class TestCommandRouter:
 
     def test_register_all_modules(self):
         from nas_md.server.router import register_all_modules
+
         _registry.clear()
         total = register_all_modules()
         assert total > 0

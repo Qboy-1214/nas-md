@@ -88,7 +88,9 @@ class PluginManager:
             module_name = fname[:-3]
             filepath = os.path.join(self._plugins_dir, fname)
             try:
-                spec = importlib.util.spec_from_file_location(f"nas_md.plugins.ext.{module_name}", filepath)
+                spec = importlib.util.spec_from_file_location(
+                    f"nas_md.plugins.ext.{module_name}", filepath
+                )
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(mod)
@@ -99,11 +101,15 @@ class PluginManager:
                             isinstance(attr, type)
                             and issubclass(attr, Plugin)
                             and attr is not Plugin
+                            and self._is_enabled(
+                                attr.name if hasattr(attr, "name") else attr.__name__
+                            )
                         ):
-                            if self._is_enabled(attr.name if hasattr(attr, "name") else attr.__name__):
-                                plugin = attr()
-                                self._plugins.append(plugin)
-                                logger.info("Loaded external plugin: %s v%s", plugin.name, plugin.version)
+                            plugin = attr()
+                            self._plugins.append(plugin)
+                            logger.info(
+                                "Loaded external plugin: %s v%s", plugin.name, plugin.version
+                            )
             except Exception as e:
                 logger.error("Failed to load external plugin %s: %s", fname, e)
 
@@ -111,9 +117,7 @@ class PluginManager:
         """Check if a plugin is enabled."""
         if name in self._disabled:
             return False
-        if self._enabled and name not in self._enabled:
-            return False
-        return True
+        return not (self._enabled and name not in self._enabled)
 
     def dispatch(self, event: str, *args, **kwargs) -> None:
         """Dispatch an event to all loaded plugins."""

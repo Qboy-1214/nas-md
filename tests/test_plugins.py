@@ -106,7 +106,9 @@ class TestDailyTemplatePlugin:
         assert not self.plugin._is_journal_path("random.md")
 
     def test_on_file_created_empty_journal(self):
-        with tempfile.NamedTemporaryFile(suffix=".md", prefix="2025-01-01", delete=False, mode="w") as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".md", prefix="2025-01-01", delete=False, mode="w"
+        ) as f:
             path = f.name
         try:
             self.plugin.on_file_created(path, "")
@@ -117,7 +119,9 @@ class TestDailyTemplatePlugin:
             os.unlink(path)
 
     def test_on_file_created_non_empty(self):
-        with tempfile.NamedTemporaryFile(suffix=".md", prefix="2025-01-01", delete=False, mode="w") as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".md", prefix="2025-01-01", delete=False, mode="w"
+        ) as f:
             f.write("existing content")
             path = f.name
         try:
@@ -130,7 +134,9 @@ class TestDailyTemplatePlugin:
 
     def test_custom_template(self):
         self.plugin.set_template("# {date}\nCustom template\n")
-        with tempfile.NamedTemporaryFile(suffix=".md", prefix="2025-01-01", delete=False, mode="w") as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".md", prefix="2025-01-01", delete=False, mode="w"
+        ) as f:
             path = f.name
         try:
             self.plugin.on_file_created(path, "")
@@ -247,14 +253,14 @@ class TestPluginManager:
     def test_external_plugin_loading(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a simple external plugin
-            plugin_code = '''
+            plugin_code = """
 from nas_md.plugins import Plugin
 
 class TestExternalPlugin(Plugin):
     name = "test_external"
     version = "0.1.0"
     description = "Test external plugin"
-'''
+"""
             with open(os.path.join(tmpdir, "test_ext.py"), "w") as f:
                 f.write(plugin_code)
 

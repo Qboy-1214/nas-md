@@ -167,7 +167,5 @@ def extract_links(content: str) -> list[dict]:
         if display_text:
             display_text = display_text.strip()
         line_number = body_no_code[: match.start()].count("\n") + fm_lines + 1
-        results.append(
-            {"target": target, "display_text": display_text, "line_number": line_number}
-        )
+        results.append({"target": target, "display_text": display_text, "line_number": line_number})
     return results
