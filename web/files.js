@@ -151,6 +151,11 @@ const API = {
     const r = await this.request(`/api/sync/status?mount=${encodeURIComponent(mountId)}`);
     return r ? r.json() : {};
   },
+
+  async getPlugins() {
+    const r = await this.request('/api/plugins');
+    return r ? r.json() : { plugins: [] };
+  },
 };
 
 // 全局变量

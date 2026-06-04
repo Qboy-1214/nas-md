@@ -464,6 +464,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_sync_status(mount_id)
                 return
 
+            # Plugin API
+            if path == "/api/plugins":
+                self._handle_plugins()
+                return
+
             # Public mounts endpoint (no auth: returns public + visitor mounts)
             if path == "/api/mounts/public":
                 self._handle_public_mounts()
@@ -1002,6 +1007,25 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             logger.error("Sync status error: %s", e)
             self._send_json({"error": str(e)}, 500)
 
+    def _handle_plugins(self):
+        """Handle GET /api/plugins — list loaded plugins."""
+        from nas_md.plugins import PluginManager
+
+        try:
+            pm = getattr(self.__class__, '_plugin_manager', None)
+            if pm is None:
+                pm = PluginManager()
+                pm.load_all()
+                self.__class__._plugin_manager = pm
+            plugins = [
+                {"name": p.name, "version": p.version, "description": p.description}
+                for p in pm.plugins
+            ]
+            self._send_json({"plugins": plugins})
+        except Exception as e:
+            logger.error("Plugins error: %s", e)
+            self._send_json({"error": str(e)}, 500)
+
     def _is_public_mount(self, mount_id: str) -> bool:
         """Check if a mount point is publicly accessible (no auth needed)."""
         if not self.mount_manager:
@@ -1292,6 +1316,7 @@ def serve(
     logger.info("    GET  /api/graph")
     logger.info("    POST /api/sync")
     logger.info("    GET  /api/sync/status")
+    logger.info("    GET  /api/plugins")
     logger.info("    GET  /api/mounts")
     logger.info("    GET  /api/mounts/public")
     logger.info("    PUT  /api/mounts/{id}")
