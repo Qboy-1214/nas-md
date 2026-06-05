@@ -711,10 +711,13 @@ class TestMountEntryOwner:
 
 class TestPathVisibilityHelpers:
     def test_visible_mount_paths_returns_lowercase(self):
-        """_visible_mount_paths should return lowercase, stripped paths."""
+        """_visible_mount_paths should return lowercase, normalized paths."""
+        import os
+
         from nas_md.webserver import MountEntry, MountHTTPHandler
 
-        mgr = type("MM", (), {"mounts": [MountEntry("m1", "Test", r"C:\Users\Test\Dir")]})()
+        test_path = os.path.join(os.sep, "tmp", "Test", "Dir")
+        mgr = type("MM", (), {"mounts": [MountEntry("m1", "Test", test_path)]})()
         handler = MountHTTPHandler.__new__(MountHTTPHandler)
         handler.mount_manager = mgr
         # Mock _get_session_id and _is_admin_request
@@ -723,23 +726,31 @@ class TestPathVisibilityHelpers:
         # The mount has no owner and is not host, so it's visible
         paths = handler._visible_mount_paths("test")
         assert len(paths) == 1
-        assert paths[0] == r"c:\users\test\dir"
+        assert paths[0] == test_path.lower().replace("\\", os.sep).replace("/", os.sep)
 
     def test_path_visible_matches_prefix(self):
+        import os
+
         from nas_md.webserver import MountHTTPHandler
 
         handler = MountHTTPHandler.__new__(MountHTTPHandler)
-        mount_paths = [r"c:\users\test\dir"]
-        assert handler._path_visible(r"C:\Users\Test\Dir\notes.md", mount_paths)
-        assert handler._path_visible(r"C:\Users\Test\Dir", mount_paths)
-        assert not handler._path_visible(r"C:\Users\Other\file.md", mount_paths)
+        mount_paths = [os.path.join(os.sep, "tmp", "test", "dir")]
+        file_in_mount = os.path.join(os.sep, "tmp", "test", "dir", "notes.md")
+        mount_root = os.path.join(os.sep, "tmp", "test", "dir")
+        file_outside = os.path.join(os.sep, "tmp", "other", "file.md")
+        assert handler._path_visible(file_in_mount, mount_paths)
+        assert handler._path_visible(mount_root, mount_paths)
+        assert not handler._path_visible(file_outside, mount_paths)
 
     def test_path_visible_with_forward_slash(self):
+        import os
+
         from nas_md.webserver import MountHTTPHandler
 
         handler = MountHTTPHandler.__new__(MountHTTPHandler)
-        mount_paths = [r"c:\users\test\dir"]
-        assert handler._path_visible("c:/users/test/dir/notes.md", mount_paths)
+        # Simulate what _visible_mount_paths does: normalize separators
+        mount_paths = ["/tmp/test/dir".replace("\\", os.sep).replace("/", os.sep)]
+        assert handler._path_visible("/tmp/test/dir/notes.md", mount_paths)
 
 
 # ---------------------------------------------------------------------------

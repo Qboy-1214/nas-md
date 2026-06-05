@@ -495,11 +495,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     def _visible_mount_paths(self, session_id: str) -> list[str]:
         """Return lowercased, normalized path prefixes of mounts visible to this session."""
         visible = self._visible_mounts(session_id)
-        return [m.path.lower().rstrip("\\/") for m in visible]
+        return [
+            m.path.lower().rstrip("\\/").replace("\\", os.sep).replace("/", os.sep) for m in visible
+        ]
 
     def _path_visible(self, file_path: str, mount_paths: list[str]) -> bool:
         """Check if a file path falls under any of the given mount path prefixes."""
-        fp = file_path.lower().replace("/", os.sep)
+        fp = file_path.lower().replace("\\", os.sep).replace("/", os.sep)
         return any(fp == mp or fp.startswith(mp + os.sep) for mp in mount_paths)
 
     def _read_body(self) -> bytes:
