@@ -9,6 +9,7 @@ import logging
 import mimetypes
 import os
 import shutil
+import socket
 import stat
 import time
 import traceback
@@ -1440,7 +1441,7 @@ def serve(
     # Initialize search index
     _init_search_index(all_dirs)
 
-    server = HTTPServer((host, port), MountHTTPHandler)
+    server = _create_server(host, port, MountHTTPHandler)
 
     mounts_str = (
         ", ".join(f"{m.name} ({m.id})={m.path}" for m in mgr.mounts)
@@ -1479,6 +1480,24 @@ def serve(
     except KeyboardInterrupt:
         logger.info("Server stopped.")
         server.server_close()
+
+
+def _create_server(host: str, port: int, handler: type) -> HTTPServer:
+    """Create HTTPServer with SO_REUSEADDR to avoid port-in-use errors on restart."""
+
+    class ReusableHTTPServer(HTTPServer):
+        allow_reuse_address = True
+
+        def server_bind(self) -> None:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            super().server_bind()
+
+    try:
+        return ReusableHTTPServer((host, port), handler)
+    except OSError as e:
+        logger.error("Failed to bind %s:%s — %s", host, port, e)
+        logger.error("Port may be in use. Try: netstat -ano | findstr %s", port)
+        raise SystemExit(1) from e
 
 
 def _init_search_index(mount_dirs: list[str]) -> None:
