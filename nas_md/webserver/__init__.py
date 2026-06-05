@@ -13,7 +13,9 @@ import socket
 import stat
 import time
 import traceback
+import uuid
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.cookies import SimpleCookie
 from io import BytesIO
 from urllib.parse import parse_qs, urlparse
 
@@ -99,6 +101,7 @@ class MountEntry:
         public: bool = False,
         readonly: bool = False,
         host: bool = False,
+        owner: str = "",
     ):
         self.id = id
         self.name = name
@@ -106,6 +109,7 @@ class MountEntry:
         self.public = public  # visible to visitors without auth
         self.readonly = readonly  # files in this mount cannot be modified
         self.host = host  # True = host-mounted (from MOUNT_DIRS), only visible to admin
+        self.owner = owner  # session UUID of the user who created this mount (empty for host/builtin)
 
     def to_dict(self) -> dict:
         return {
@@ -115,6 +119,7 @@ class MountEntry:
             "public": self.public,
             "readonly": self.readonly,
             "host": self.host,
+            "owner": self.owner,
         }
 
     @staticmethod
@@ -126,6 +131,7 @@ class MountEntry:
             d.get("public", False),
             d.get("readonly", False),
             d.get("host", False),
+            d.get("owner", ""),
         )
 
 
@@ -158,26 +164,45 @@ class DirEntry:
 _MOUNTS_FILE = ""  # Set by serve() to storage_dir/mounts.json
 
 
-def _load_saved_mounts() -> list[dict]:
-    """Load dynamic mount entries from disk."""
+def _load_saved_mounts() -> dict[str, list[dict]]:
+    """Load dynamic mount entries from disk, grouped by owner.
+
+    Returns dict like {"_host": [...], "uuid-user-a": [...], ...}
+    """
     if not _MOUNTS_FILE or not os.path.isfile(_MOUNTS_FILE):
-        return []
+        return {}
     try:
         with open(_MOUNTS_FILE, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # Support old format (flat list) and new format (grouped by owner)
+        if isinstance(data, list):
+            # Old format: migrate to new format
+            result: dict[str, list[dict]] = {}
+            for entry_dict in data:
+                owner = entry_dict.get("owner", "")
+                key = owner if owner else "_host"
+                result.setdefault(key, []).append(entry_dict)
+            return result
+        return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
-        return []
+        return {}
 
 
 def _save_mounts_to_disk(mounts: list[MountEntry]) -> None:
-    """Persist dynamic mount entries to disk (excluding builtin)."""
+    """Persist dynamic mount entries to disk, grouped by owner (excluding builtin)."""
     if not _MOUNTS_FILE:
         return
-    data = [m.to_dict() for m in mounts if m.id != "builtin-storage"]
+    # Group by owner
+    grouped: dict[str, list[dict]] = {}
+    for m in mounts:
+        if m.id == "builtin-storage":
+            continue
+        owner = m.owner if m.owner else "_host"
+        grouped.setdefault(owner, []).append(m.to_dict())
     try:
         tmp = _MOUNTS_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(grouped, f, ensure_ascii=False, indent=2)
         os.replace(tmp, _MOUNTS_FILE)
     except OSError as e:
         logger.warning(f"Failed to save mounts: {e}")
@@ -207,7 +232,7 @@ class MountManager:
     def is_empty(self) -> bool:
         return len(self.mounts) == 0
 
-    def add_mount(self, path: str, name: str | None = None) -> MountEntry:
+    def add_mount(self, path: str, name: str | None = None, owner: str = "") -> MountEntry:
         """Add a new mount point at runtime."""
         path = os.path.abspath(path.strip())
         if not os.path.isdir(path):
@@ -217,7 +242,14 @@ class MountManager:
             if os.path.normpath(m.path) == os.path.normpath(path):
                 return m
         display_name = name or (os.path.basename(path) or path)
-        entry = MountEntry(f"mount-{len(self.mounts)}", display_name, path)
+        # Generate a unique ID avoiding collisions
+        existing_ids = {m.id for m in self.mounts}
+        idx = len(self.mounts)
+        mount_id = f"mount-{idx}"
+        while mount_id in existing_ids:
+            idx += 1
+            mount_id = f"mount-{idx}"
+        entry = MountEntry(mount_id, display_name, path, owner=owner)
         self.mounts.append(entry)
         _save_mounts_to_disk(self.mounts)
         return entry
@@ -375,17 +407,41 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         logger.info(f"{self.client_address[0]} - {format % args}")
 
+    def _flush_session_cookie(self):
+        """Send pending Set-Cookie header if a new session was created."""
+        if hasattr(self, "_pending_cookie") and self._pending_cookie:
+            self.send_header("Set-Cookie", self._pending_cookie)
+            self._pending_cookie = None
+
     def _send_json(self, data: dict | list, status: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self._flush_session_cookie()
         self.end_headers()
         self.wfile.write(body)
 
     def _send_error(self, msg: str, status: int = 400):
         self._send_json({"error": msg}, status)
+
+    def _get_session_id(self) -> str:
+        """Get or create a session ID from Cookie.
+
+        Returns the session UUID. Queues Set-Cookie header if new.
+        """
+        cookie_header = self.headers.get("Cookie", "")
+        cookie = SimpleCookie()
+        if cookie_header:
+            cookie.load(cookie_header)
+        sid = ""
+        if "nasmd_sid" in cookie:
+            sid = cookie["nasmd_sid"].value
+        if not sid:
+            sid = str(uuid.uuid4())
+            self._pending_cookie = f"nasmd_sid={sid}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
+        return sid
 
     def _is_admin_request(self) -> bool:
         """Check if this request comes from the /admin path."""
@@ -393,6 +449,57 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if "/admin" in referer:
             return True
         return self.headers.get("X-Admin", "") == "1"
+
+    def _visible_mounts(self, session_id: str) -> list[MountEntry]:
+        """Return mounts visible to the current user session.
+
+        - Builtin storage: visible to everyone
+        - Host mounts (MOUNT_DIRS): visible only to admin
+        - User mounts with owner: visible only to the owner (matched by session_id)
+        - Legacy mounts (no owner, not host): visible to everyone (backward compat)
+        - Admin also sees their own user mounts + host mounts
+        """
+        if not self.mount_manager:
+            return []
+        is_admin = self._is_admin_request()
+        result = []
+        for m in self.mount_manager.mounts:
+            if m.id == "builtin-storage":
+                result.append(m)
+            elif m.host:
+                if is_admin:
+                    result.append(m)
+            elif m.owner:
+                # User mount: visible only to owner
+                if m.owner == session_id:
+                    result.append(m)
+            else:
+                # Legacy mount (no owner, not host): visible to everyone
+                result.append(m)
+        return result
+
+    def _owns_mount(self, mount: MountEntry, session_id: str) -> bool:
+        """Check if the current session owns this mount."""
+        if mount.id == "builtin-storage":
+            return False  # nobody "owns" builtin
+        if mount.host:
+            return False  # host mounts are not owned by users
+        if not mount.owner:
+            return True  # legacy mount (no owner): anyone can operate
+        return mount.owner == session_id
+
+    def _visible_mount_paths(self, session_id: str) -> list[str]:
+        """Return lowercased, normalized path prefixes of mounts visible to this session."""
+        visible = self._visible_mounts(session_id)
+        return [m.path.lower().rstrip("\\/") for m in visible]
+
+    def _path_visible(self, file_path: str, mount_paths: list[str]) -> bool:
+        """Check if a file path falls under any of the given mount path prefixes."""
+        fp = file_path.lower()
+        for mp in mount_paths:
+            if fp == mp or fp.startswith(mp + os.sep) or fp.startswith(mp + "/"):
+                return True
+        return False
 
     def _read_body(self) -> bytes:
         content_length = int(self.headers.get("Content-Length", 0))
@@ -485,14 +592,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_plugins()
                 return
 
-            # Mounts endpoint (admin sees all, non-admin sees only non-host mounts)
+            # Mounts endpoint (filtered by user session)
             if path == "/api/mounts":
                 if self.mount_manager and not self.mount_manager.is_empty():
-                    if self._is_admin_request():
-                        mounts = self.mount_manager.mounts
-                    else:
-                        # Non-admin: only see local (non-host) mounts
-                        mounts = [m for m in self.mount_manager.mounts if not m.host]
+                    session_id = self._get_session_id()
+                    mounts = self._visible_mounts(session_id)
                     self._send_json([m.to_dict() for m in mounts])
                 else:
                     self._send_json([])
@@ -639,6 +743,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
             return self._send_error("Mount not found", 404)
+        # Check visibility
+        session_id = self._get_session_id()
+        visible = self._visible_mounts(session_id)
+        if mount not in visible:
+            return self._send_error("Mount not found", 404)
         rel_path = qs.get("path", ["/"])[0]
         entries = self.mount_manager.list_dir(mount, rel_path)
         self._send_json([e.to_dict() for e in entries])
@@ -648,6 +757,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            return self._send_error("Mount not found", 404)
+        # Check visibility
+        session_id = self._get_session_id()
+        visible = self._visible_mounts(session_id)
+        if mount not in visible:
             return self._send_error("Mount not found", 404)
         rel_path = qs.get("path", ["/"])[0]
         tree = self.mount_manager.build_tree(mount, rel_path)
@@ -660,6 +774,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            return self._send_error("Mount not found", 404)
+        # Check visibility
+        session_id = self._get_session_id()
+        visible = self._visible_mounts(session_id)
+        if mount not in visible:
             return self._send_error("Mount not found", 404)
         rel_path = qs.get("path", [None])[0]
         if not rel_path:
@@ -676,6 +795,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(data)))
+            self._flush_session_cookie()
             self.end_headers()
             self.wfile.write(data)
         except OSError as e:
@@ -686,6 +806,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            return self._send_error("Mount not found", 404)
+        # Check ownership (only owner can write to their mounts; admin can write to host mounts)
+        session_id = self._get_session_id()
+        if mount.host:
+            if not self._is_admin_request():
+                return self._send_error("Mount not found", 404)
+        elif not self._owns_mount(mount, session_id):
             return self._send_error("Mount not found", 404)
         if mount.readonly:
             return self._send_error("Mount is read-only", 403)
@@ -735,6 +862,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
             return self._send_error("Mount not found", 404)
+        # Check ownership
+        session_id = self._get_session_id()
+        if mount.host:
+            if not self._is_admin_request():
+                return self._send_error("Mount not found", 404)
+        elif not self._owns_mount(mount, session_id):
+            return self._send_error("Mount not found", 404)
         if mount.readonly:
             return self._send_error("Mount is read-only", 403)
         old_path = qs.get("oldPath", [None])[0]
@@ -755,6 +889,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
             return self._send_error("Mount not found", 404)
+        # Check ownership
+        session_id = self._get_session_id()
+        if mount.host:
+            if not self._is_admin_request():
+                return self._send_error("Mount not found", 404)
+        elif not self._owns_mount(mount, session_id):
+            return self._send_error("Mount not found", 404)
         if mount.readonly:
             return self._send_error("Mount is read-only", 403)
         rel_path = qs.get("path", [None])[0]
@@ -771,6 +912,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            return self._send_error("Mount not found", 404)
+        # Check ownership
+        session_id = self._get_session_id()
+        if mount.host:
+            if not self._is_admin_request():
+                return self._send_error("Mount not found", 404)
+        elif not self._owns_mount(mount, session_id):
             return self._send_error("Mount not found", 404)
         if mount.readonly:
             return self._send_error("Mount is read-only", 403)
@@ -802,16 +950,28 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             init_db()  # Ensure DB exists
             results = search(query.strip(), limit=limit)
-            # Enrich results with mount_id and relative path
+            # Get visible mount paths for this session
+            session_id = self._get_session_id()
+            visible = self._visible_mounts(session_id)
+            visible_paths = {os.path.normcase(os.path.normpath(m.path)).rstrip("\\/") for m in visible}
+            # Enrich results with mount_id and relative path, filter by visibility
+            filtered = []
             for r in results:
                 mount_info = self._find_mount_for_path(r["path"])
                 if mount_info:
                     r["mount_id"] = mount_info["mount_id"]
                     r["rel_path"] = mount_info["rel_path"]
+                    # Check if this mount is visible to the user
+                    mount = self.mount_manager.find_mount(mount_info["mount_id"]) if self.mount_manager else None
+                    if mount and mount in visible:
+                        filtered.append(r)
                 else:
                     r["mount_id"] = None
                     r["rel_path"] = r["path"]
-            self._send_json(results)
+                    # No mount found — skip if we have mounts configured
+                    if not self.mount_manager or self.mount_manager.is_empty():
+                        filtered.append(r)
+            self._send_json(filtered)
         except Exception as e:
             logger.error("Search error: %s", e)
             self._send_json({"error": str(e)}, 500)
@@ -846,15 +1006,19 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         try:
             init_db()  # Ensure DB exists
+            session_id = self._get_session_id()
+            mount_paths = self._visible_mount_paths(session_id)
 
             if query_type == "task":
                 status = qs.get("status", [None])[0]
                 tasks = query_tasks(status=status)
+                tasks = [t for t in tasks if self._path_visible(t.get("page", ""), mount_paths)]
                 self._send_json({"tasks": tasks})
             elif query_type == "tag":
                 name = qs.get("name", [None])[0]
                 if name:
                     pages = query_tags(name=name)
+                    pages = [p for p in pages if self._path_visible(p.get("path", p.get("page", "")), mount_paths)]
                     self._send_json({"pages": pages})
                 else:
                     tags = query_tags()
@@ -862,10 +1026,12 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             elif query_type == "heading":
                 page = qs.get("page", [None])[0]
                 headings = query_headings(page_path=page)
+                headings = [h for h in headings if self._path_visible(h.get("page", ""), mount_paths)]
                 self._send_json({"headings": headings})
             elif query_type == "link":
                 page = qs.get("page", [None])[0]
                 links = query_links(page_path=page)
+                links = [l for l in links if self._path_visible(l.get("page", ""), mount_paths)]
                 self._send_json({"links": links})
             else:
                 self._send_error("Invalid query type. Use: task, tag, heading, link", 400)
@@ -885,28 +1051,27 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             init_db()
             backlinks = query_backlinks(page)
+            session_id = self._get_session_id()
+            mount_paths = self._visible_mount_paths(session_id)
+            backlinks = [b for b in backlinks if self._path_visible(b.get("page", ""), mount_paths)]
             self._send_json({"backlinks": backlinks})
         except Exception as e:
             logger.error("Backlinks error: %s", e)
             self._send_json({"error": str(e)}, 500)
 
     def _handle_stats(self):
-        """Handle GET /api/stats — only count files in user-mounted directories"""
+        """Handle GET /api/stats — only count files in user-visible mount directories"""
         from nas_md.search import init_db, get_stats
 
         try:
             init_db()
             stats = get_stats()
-            # Filter to only include files in user-mounted directories (exclude built-in storage)
-            if self.mount_manager and not self.mount_manager.is_empty():
-                mount_paths = [m.path.lower().rstrip("\\/") for m in self.mount_manager.mounts]
+            # Filter to only include files in user-visible mount directories
+            session_id = self._get_session_id()
+            mount_paths = self._visible_mount_paths(session_id)
+            if mount_paths:
                 stats["recent_pages"] = [
-                    p
-                    for p in stats.get("recent_pages", [])
-                    if any(
-                        p["path"].lower().startswith(mp + os.sep) or p["path"].lower() == mp
-                        for mp in mount_paths
-                    )
+                    p for p in stats.get("recent_pages", []) if self._path_visible(p["path"], mount_paths)
                 ]
                 # Also filter aggregate stats by mount paths
                 from nas_md.search import get_connection
@@ -914,7 +1079,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 conn = get_connection()
                 try:
                     # Build path prefix conditions for each mount
-                    # Each mount produces 3 LIKE patterns: dir\%, dir/%, and exact dir
                     conditions = []
                     params = []
                     for mp in mount_paths:
@@ -963,6 +1127,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             init_db()
             data = get_graph_data()
+            session_id = self._get_session_id()
+            mount_paths = self._visible_mount_paths(session_id)
+            # Filter nodes and edges by visibility
+            if "nodes" in data:
+                data["nodes"] = [n for n in data["nodes"] if self._path_visible(n.get("path", n.get("id", "")), mount_paths)]
+            if "edges" in data:
+                data["edges"] = [e for e in data["edges"] if self._path_visible(e.get("source", ""), mount_paths) and self._path_visible(e.get("target", ""), mount_paths)]
             self._send_json(data)
         except Exception as e:
             logger.error("Graph error: %s", e)
@@ -976,6 +1147,12 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             init_db()
             name = qs.get("name", [None])[0] if qs else None
             result = query_tags(name)
+            session_id = self._get_session_id()
+            mount_paths = self._visible_mount_paths(session_id)
+            if name and isinstance(result, dict) and "pages" in result:
+                result["pages"] = [p for p in result["pages"] if self._path_visible(p.get("path", p.get("page", "")), mount_paths)]
+            elif isinstance(result, list):
+                result = [r for r in result if self._path_visible(r.get("path", r.get("page", "")), mount_paths)]
             self._send_json(result)
         except Exception as e:
             logger.error("Tags error: %s", e)
@@ -997,7 +1174,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                       AND p.id NOT IN (SELECT source_page_id FROM links)
                     ORDER BY p.path
                 """).fetchall()
-                result = [{"path": r[0], "title": r[1] or r[0]} for r in rows]
+                session_id = self._get_session_id()
+                mount_paths = self._visible_mount_paths(session_id)
+                result = [{"path": r[0], "title": r[1] or r[0]} for r in rows if self._path_visible(r[0], mount_paths)]
                 self._send_json(result)
             finally:
                 conn.close()
@@ -1018,6 +1197,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            return self._send_error("Mount not found", 404)
+        # Check visibility
+        session_id = self._get_session_id()
+        visible = self._visible_mounts(session_id)
+        if mount not in visible:
             return self._send_error("Mount not found", 404)
 
         try:
@@ -1073,6 +1257,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            return self._send_error("Mount not found", 404)
+        # Check visibility
+        session_id = self._get_session_id()
+        visible = self._visible_mounts(session_id)
+        if mount not in visible:
             return self._send_error("Mount not found", 404)
 
         try:
@@ -1172,8 +1361,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         """Handle POST /api/mounts to add a new mount point.
 
         No auth required — both visitors and admin users can mount.
-        Visitors are limited to 1 mount. Admin users limited to 1 dynamic mount.
+        Mount is bound to the current session (owner = session_id).
         """
+        session_id = self._get_session_id()
         body = self._read_body()
         try:
             data = json.loads(body)
@@ -1183,16 +1373,12 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         dir_path = data.get("path", "").strip()
         if not dir_path:
             return self._send_error("Missing path", 400)
-        logger.info(f"ADD MOUNT request: path={dir_path!r}")
+        logger.info(f"ADD MOUNT request: path={dir_path!r}, owner={session_id!r}")
 
         display_name = data.get("name", "").strip() or None
 
         if not self.mount_manager:
             return self._send_error("Mount manager not configured", 500)
-
-        # Count dynamic (non-pre-configured) mounts
-        # Pre-configured mounts have IDs like "mount-0", "mount-1" from startup
-        # Dynamic mounts get IDs after those
 
         # Check if this is a new path (not duplicate)
         is_duplicate = False
@@ -1202,9 +1388,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 break
 
         if not is_duplicate:
-            # Visitor limit: max 1 dynamic mount
-            # For now we allow the mount; frontend enforces the limit
-            entry = self.mount_manager.add_mount(dir_path, name=display_name)
+            entry = self.mount_manager.add_mount(dir_path, name=display_name, owner=session_id)
             if entry:
                 entry.public = True
             if entry is None:
@@ -1212,7 +1396,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         else:
             entry = self.mount_manager.find_mount_by_path(dir_path)
             if entry is None:
-                entry = self.mount_manager.add_mount(dir_path, name=display_name)
+                entry = self.mount_manager.add_mount(dir_path, name=display_name, owner=session_id)
                 if entry is None:
                     return self._send_error("Not a valid directory: " + dir_path, 400)
 
@@ -1261,6 +1445,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         # Cannot delete builtin mount
         if mount.id == "builtin-storage":
             return self._send_error("Cannot delete built-in mount", 403)
+
+        # Check ownership: only the owner can delete their mount
+        session_id = self._get_session_id()
+        if not self._owns_mount(mount, session_id):
+            return self._send_error("Mount not found", 404)
 
         # Remove from mount manager
         self.mount_manager.mounts = [m for m in self.mount_manager.mounts if m.id != mount_id]
@@ -1329,6 +1518,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(data)))
+            self._flush_session_cookie()
             self.end_headers()
             self.wfile.write(data)
         except OSError:
@@ -1360,18 +1550,20 @@ def serve(
     saved = _load_saved_mounts()
     if saved:
         existing_paths = {os.path.normpath(m.path) for m in mgr.mounts}
-        for entry_dict in saved:
-            try:
-                entry = MountEntry.from_dict(entry_dict)
-                if os.path.isdir(entry.path) and os.path.normpath(entry.path) not in existing_paths:
-                    entry.public = True  # All dynamic mounts are public by default
-                    mgr.mounts.append(entry)
-                    existing_paths.add(os.path.normpath(entry.path))
-                    logger.info(f"Restored mount: {entry.name} ({entry.id})={entry.path}")
-                elif not os.path.isdir(entry.path):
-                    logger.warning(f"Skipping restored mount, directory missing: {entry.path}")
-            except (KeyError, TypeError) as e:
-                logger.warning(f"Skipping invalid mount entry: {e}")
+        # saved is now a dict grouped by owner: {"_host": [...], "uuid-xxx": [...]}
+        for owner_key, entry_list in saved.items():
+            for entry_dict in entry_list:
+                try:
+                    entry = MountEntry.from_dict(entry_dict)
+                    if os.path.isdir(entry.path) and os.path.normpath(entry.path) not in existing_paths:
+                        entry.public = True  # All dynamic mounts are public by default
+                        mgr.mounts.append(entry)
+                        existing_paths.add(os.path.normpath(entry.path))
+                        logger.info(f"Restored mount: {entry.name} ({entry.id})={entry.path} owner={entry.owner}")
+                    elif not os.path.isdir(entry.path):
+                        logger.warning(f"Skipping restored mount, directory missing: {entry.path}")
+                except (KeyError, TypeError) as e:
+                    logger.warning(f"Skipping invalid mount entry: {e}")
 
     MountHTTPHandler.mount_manager = mgr
     MountHTTPHandler.web_root = web_root
