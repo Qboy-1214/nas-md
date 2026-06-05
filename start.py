@@ -127,7 +127,7 @@ def run_server():
     # 检查端口是否已被占用
     if check_port(WEB_HOST, WEB_PORT):
         print(f"⚠️  端口 {WEB_PORT} 已被占用")
-        answer = input(f"   是否终止占用进程并继续？(y/N) ").strip().lower()
+        answer = input("   是否终止占用进程并继续？(y/N) ").strip().lower()
         if answer == "y":
             if kill_port_process(WEB_PORT):
                 import time
@@ -137,7 +137,7 @@ def run_server():
                     print(f"❌ 端口 {WEB_PORT} 仍被占用，无法启动")
                     sys.exit(1)
             else:
-                print(f"❌ 无法终止占用端口的进程")
+                print("❌ 无法终止占用端口的进程")
                 sys.exit(1)
         else:
             print("已取消启动")
