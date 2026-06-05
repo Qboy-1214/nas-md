@@ -48,12 +48,6 @@ def setup_env():
         if key not in os.environ and value:
             os.environ[key] = value
 
-    # Token must be set via environment variable or config file
-    # No random generation — operator must configure it explicitly
-    if not os.environ.get("WEB_AUTH_TOKEN"):
-        print("⚠️  未设置 WEB_AUTH_TOKEN，Web 端将无认证保护")
-        print("   设置方式: export WEB_AUTH_TOKEN=your-token")
-
 
 def print_banner():
     """打印启动横幅"""
@@ -66,11 +60,6 @@ def print_banner():
     mount_dirs = os.environ.get("MOUNT_DIRS", "")
     print(f"  挂载目录: {mount_dirs or '(none)'}")
     print(f"  存储目录: {os.environ.get('STORAGE_DIR', '(none)')}")
-
-    auth_status = (
-        "已启用" if os.environ.get("WEB_AUTH_TOKEN") else "已禁用（未设置 WEB_AUTH_TOKEN）"
-    )
-    print(f"  认证: {auth_status}")
     print("=" * 50)
     print("  按 Ctrl+C 停止服务")
     print()
@@ -84,6 +73,49 @@ def open_browser():
     webbrowser.open(url)
 
 
+def check_port(host: str, port: int) -> bool:
+    """检查端口是否已被占用"""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.settimeout(1)
+            s.connect((host, port))
+            return True  # 端口已被占用
+        except OSError:
+            return False  # 端口可用
+
+
+def kill_port_process(port: int) -> bool:
+    """杀掉占用指定端口的进程"""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        pids = set()
+        for line in result.stdout.splitlines():
+            if f":{port}" in line and "LISTENING" in line:
+                parts = line.strip().split()
+                if parts:
+                    pids.add(int(parts[-1]))
+        if pids:
+            for pid in pids:
+                try:
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], timeout=3)
+                    print(f"  已终止占用端口 {port} 的进程 (PID: {pid})")
+                except Exception:
+                    pass
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def run_server():
     """启动 web 服务器"""
     # 确保存储目录存在
@@ -91,6 +123,25 @@ def run_server():
     tokens_dir = os.environ.get("TOKENS_DIR", str(BASE_DIR / "tokens"))
     os.makedirs(storage_dir, exist_ok=True)
     os.makedirs(tokens_dir, exist_ok=True)
+
+    # 检查端口是否已被占用
+    if check_port(WEB_HOST, WEB_PORT):
+        print(f"⚠️  端口 {WEB_PORT} 已被占用")
+        answer = input(f"   是否终止占用进程并继续？(y/N) ").strip().lower()
+        if answer == "y":
+            if kill_port_process(WEB_PORT):
+                import time
+
+                time.sleep(1)  # 等待端口释放
+                if check_port(WEB_HOST, WEB_PORT):
+                    print(f"❌ 端口 {WEB_PORT} 仍被占用，无法启动")
+                    sys.exit(1)
+            else:
+                print(f"❌ 无法终止占用端口的进程")
+                sys.exit(1)
+        else:
+            print("已取消启动")
+            sys.exit(0)
 
     # 设置 PYTHONPATH
     env = os.environ.copy()
@@ -110,17 +161,38 @@ def run_server():
     # 延迟打开浏览器
     threading.Thread(target=open_browser, daemon=True).start()
 
+    # Windows: 使用 CREATE_NEW_PROCESS_GROUP 以便可靠终止子进程
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x00000200  # CREATE_NEW_PROCESS_GROUP
+
     proc = subprocess.Popen(
         cmd,
         cwd=str(BASE_DIR),
         env=env,
+        **kwargs,
     )
+
+    def _kill_proc():
+        """确保子进程被终止"""
+        if sys.platform == "win32":
+            # Windows: taskkill 杀掉整个进程树
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                timeout=5,
+                capture_output=True,
+            )
+        else:
+            proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
     # 处理 Ctrl+C
     def signal_handler(sig, frame):
         print("\n⏹  正在停止服务...")
-        proc.terminate()
-        proc.wait(timeout=5)
+        _kill_proc()
         print("✅ 服务已停止")
         sys.exit(0)
 
