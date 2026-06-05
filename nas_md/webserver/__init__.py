@@ -935,13 +935,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(e)}, 500)
 
     def _handle_stats(self):
-        """Handle GET /api/stats"""
+        """Handle GET /api/stats — only count files in user-mounted directories"""
         from nas_md.search import init_db, get_stats
 
         try:
             init_db()
             stats = get_stats()
-            # Filter recent_pages to only include files in currently mounted directories
+            # Filter to only include files in user-mounted directories (exclude built-in storage)
             if self.mount_manager and not self.mount_manager.is_empty():
                 mount_paths = [m.path.lower().rstrip("\\/") for m in self.mount_manager.mounts]
                 stats["recent_pages"] = [
@@ -952,6 +952,49 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         for mp in mount_paths
                     )
                 ]
+                # Also filter aggregate stats by mount paths
+                from nas_md.search import get_connection
+
+                conn = get_connection()
+                try:
+                    # Build path prefix conditions for each mount
+                    # Each mount produces 3 LIKE patterns: dir\%, dir/%, and exact dir
+                    conditions = []
+                    params = []
+                    for mp in mount_paths:
+                        conditions.append(
+                            "(LOWER(path) LIKE ? OR LOWER(path) LIKE ? OR LOWER(path) = ?)"
+                        )
+                        params.append(mp + "\\%")
+                        params.append(mp + "/%")
+                        params.append(mp)
+                    where_clause = " OR ".join(conditions)
+                    page_filter = f"SELECT rowid FROM pages WHERE {where_clause}"
+
+                    row = conn.execute(
+                        f"SELECT COUNT(*) FROM pages WHERE {where_clause}", params
+                    ).fetchone()
+                    stats["file_count"] = row[0] if row else 0
+                    task_row = conn.execute(
+                        f"SELECT COUNT(*) FROM tasks WHERE page_id IN ({page_filter})", params
+                    ).fetchone()
+                    stats["task_total"] = task_row[0] if task_row else 0
+                    task_done_row = conn.execute(
+                        f"SELECT COUNT(*) FROM tasks WHERE done = 1 AND page_id IN ({page_filter})",
+                        params,
+                    ).fetchone()
+                    stats["task_done"] = task_done_row[0] if task_done_row else 0
+                    tag_row = conn.execute(
+                        f"SELECT COUNT(DISTINCT name) FROM tags WHERE page_id IN ({page_filter})",
+                        params,
+                    ).fetchone()
+                    stats["tag_count"] = tag_row[0] if tag_row else 0
+                    link_row = conn.execute(
+                        f"SELECT COUNT(*) FROM links WHERE page_id IN ({page_filter})", params
+                    ).fetchone()
+                    stats["link_count"] = link_row[0] if link_row else 0
+                finally:
+                    conn.close()
             self._send_json(stats)
         except Exception as e:
             logger.error("Stats error: %s", e)
