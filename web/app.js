@@ -17,7 +17,6 @@ const state = {
   syncStatus: 'offline', // offline | synced | syncing | conflict
   syncTimer: null,
   lastSyncTime: 0,
-  isAdmin: window.location.pathname.startsWith('/admin') || window.location.hash === '#admin',
 };
 
 // === DOM 引用 ===
@@ -25,9 +24,6 @@ const $ = (id) => document.getElementById(id);
 
 // === 初始化 ===
 document.addEventListener('DOMContentLoaded', async () => {
-  // Set admin class on body for CSS visibility control
-  if (state.isAdmin) document.body.classList.add('admin');
-
   await loadMounts();
   await loadRecentFiles();
   // Restore last opened file, or fall back to welcome.md
@@ -48,7 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             : lastPath.endsWith('.md')
               ? ''
               : 'none';
-          $('save-group').style.display = mount.readonly || !state.isAdmin ? 'none' : '';
+          $('save-group').style.display = mount.readonly ? 'none' : '';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
@@ -138,11 +134,7 @@ async function loadMounts() {
   if (_loadMountsBusy) return;
   _loadMountsBusy = true;
   try {
-    if (state.isAdmin) {
-      state.mounts = await API.getMounts();
-    } else {
-      state.mounts = await API.getPublicMounts();
-    }
+    state.mounts = await API.getMounts();
     renderSidebar();
   } catch (_e) {
     showToast('加载挂载点失败');
@@ -393,10 +385,8 @@ function renderSidebar() {
     html += `<span class="mount-icon">${chevron}</span>`;
     html += `<span>${mount.name}</span>`;
     html += `</div>`;
-    if (state.isAdmin) {
-      html += `<span class="mount-path-hint" title="${mount.path}">${svgFolder} ${mount.path}</span>`;
-      html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
-    }
+    html += `<span class="mount-path-hint" title="${mount.path}">${svgFolder} ${mount.path}</span>`;
+    html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
     html += `</div>`;
 
     if (isExpanded) {
@@ -1187,19 +1177,6 @@ async function doSearch() {
     console.error('Search failed:', e);
   }
 }
-
-// === Admin mode (URL hash #admin) ===
-function checkAdminMode() {
-  const wasAdmin = state.isAdmin;
-  state.isAdmin =
-    window.location.pathname.startsWith('/admin') || window.location.hash === '#admin';
-  if (wasAdmin !== state.isAdmin) {
-    document.body.classList.toggle('admin', state.isAdmin);
-    renderSidebar();
-    loadMounts();
-  }
-}
-window.addEventListener('hashchange', checkAdminMode);
 
 // === 编辑器模式 ===
 function setEditorMode(mode) {

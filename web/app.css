@@ -634,14 +634,6 @@ a:hover {
   margin-left: var(--s-xs);
 }
 
-/* Admin-only elements */
-.admin-only {
-  display: none;
-}
-body.admin .admin-only {
-  display: block;
-}
-
 /* Editor Area */
 .editor-area {
   flex: 1;

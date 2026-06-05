@@ -390,23 +390,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if hasattr(self, "_gzip_writer"):
             self._gzip_writer.close()
 
-    # --- Admin check (URL-based, no token) ---
-    def _is_admin_request(self) -> bool:
-        """Check if this request comes from the /admin path."""
-        # Check Referer header (browser sends this for API calls from /admin page)
-        referer = self.headers.get("Referer", "")
-        if "/admin" in referer:
-            return True
-        # Check custom header set by frontend
-        return self.headers.get("X-Admin", "") == "1"
-
-    def _require_admin(self) -> bool:
-        """Return 403 if not admin. Returns True if OK."""
-        if self._is_admin_request():
-            return True
-        self._send_json({"error": "Admin access required"}, 403)
-        return False
-
+    # --- Request handling ---
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -425,7 +409,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
             # Public health check
             if path == "/api/health":
-                self._send_json({"status": "ok", "admin": self._is_admin_request()})
+                self._send_json({"status": "ok"})
                 return
 
             # Search API (public for all visitors)
@@ -479,6 +463,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_plugins()
                 return
 
+            # Mounts endpoint (returns all mounts)
+            if path == "/api/mounts":
+                if self.mount_manager and not self.mount_manager.is_empty():
+                    self._send_json([m.to_dict() for m in self.mount_manager.mounts])
+                else:
+                    self._send_json([])
+                return
+
             # Public mounts endpoint (returns public + visitor mounts)
             if path == "/api/mounts/public":
                 self._handle_public_mounts()
@@ -490,63 +482,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._serve_static(path)
                 return
 
-            # GET /api/find-path?name=xxx — search for directory by name (no auth)
+            # GET /api/find-path?name=xxx
             if path == "/api/find-path":
                 qs = parse_qs(parsed.query)
                 self._handle_find_path(qs)
                 return
-
-            # Builtin storage tree/file access (no auth needed)
-            if "/api/mounts/builtin-storage/file" in path:
-                mount_id = "builtin-storage"
-                qs = parse_qs(parsed.query)
-                self._handle_file(mount_id, qs)
-                return
-            if "/api/mounts/builtin-storage/tree" in path:
-                mount_id = "builtin-storage"
-                qs = parse_qs(parsed.query)
-                self._handle_tree(mount_id, qs)
-                return
-
-            # Public mount tree/file access (no auth needed)
-            # Use regex-like check: path contains /mounts/{id}/file, /tree, or /tree-recursive
-            mount_file_match = path.split("?")[0]  # Strip query string for matching
-            if (
-                "/api/mounts/" in mount_file_match
-                and (
-                    mount_file_match.endswith("/file")
-                    or mount_file_match.endswith("/tree")
-                    or mount_file_match.endswith("/tree-recursive")
-                )
-                and "/" not in mount_file_match.split("/api/mounts/")[1].split("/")[0]
-            ):
-                mount_id = path.split("/api/mounts/")[1].split("/")[0]
-                if mount_id and self._is_public_mount(mount_id):
-                    qs = parse_qs(parsed.query)
-                    if mount_file_match.endswith("/file"):
-                        self._handle_file(mount_id, qs)
-                    elif mount_file_match.endswith("/tree-recursive"):
-                        self._handle_recursive_tree(mount_id, qs)
-                    else:
-                        self._handle_tree(mount_id, qs)
-                    return
-
-            # All remaining API routes require admin access
-            if not self._require_admin():
-                return
-
-            # Mount API routes (admin required)
-
-            # GET /api/mounts — return ALL mounts (admin only)
-            if path == "/api/mounts":
-                if self.mount_manager and not self.mount_manager.is_empty():
-                    self._send_json([m.to_dict() for m in self.mount_manager.mounts])
-                else:
-                    self._send_json([])
-                return
-
-            # PUT /api/mounts/{id} — update mount (name, public)
-            # Note: PUT on /api/mounts is handled in do_PUT
 
             # /api/mounts/{id}/tree
             if "/api/mounts/" in path and path.endswith("/tree"):
@@ -578,10 +518,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or ""
             qs = parse_qs(parsed.query)
-
-            # Admin check for write operations
-            if not self._require_admin():
-                return
 
             # PUT /api/mounts/{id} — update mount properties
             # Match before /file, /rename, /mkdir which have longer paths
@@ -624,10 +560,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             path = parsed.path.rstrip("/") or ""
             qs = parse_qs(parsed.query)
 
-            # Admin check
-            if not self._require_admin():
-                return
-
             if "/api/mounts/" in path and path.endswith("/file"):
                 mount_id = path.split("/api/mounts/")[1].split("/file")[0]
                 self._handle_delete(mount_id, qs)
@@ -651,13 +583,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or ""
 
-            # POST /api/mounts — add new mount (admin required)
+            # POST /api/mounts — add new mount
             if path == "/api/mounts":
                 self._handle_add_mount()
-                return
-
-            # Admin check for all other POST routes
-            if not self._require_admin():
                 return
 
             # /syncFilenames
@@ -1168,13 +1096,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             logger.error("Plugins error: %s", e)
             self._send_json({"error": str(e)}, 500)
-
-    def _is_public_mount(self, mount_id: str) -> bool:
-        """Check if a mount point is publicly accessible (no auth needed)."""
-        if not self.mount_manager:
-            return False
-        mount = self.mount_manager.find_mount(mount_id)
-        return mount is not None and mount.public
 
     def _handle_find_path(self, qs: dict):
         """Search for a directory by name in common locations."""

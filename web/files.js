@@ -23,31 +23,23 @@ const API = {
     if (options.body && typeof options.body === 'string') {
       headers['Content-Type'] = headers['Content-Type'] || 'text/plain; charset=utf-8';
     }
-    // Add X-Admin header when in admin mode
-    if (
-      window.state?.isAdmin ||
-      window.location.pathname.startsWith('/admin') ||
-      window.location.hash === '#admin'
-    ) {
-      headers['X-Admin'] = '1';
-    }
     const resp = await fetch(`${_apiBase}${path}`, { ...options, headers });
     return resp;
   },
 
-  // 获取挂载点列表（需要认证，返回所有挂载点）
+  // 获取挂载点列表
   async getMounts() {
     const r = await this.request('/api/mounts');
     return r ? r.json() : [];
   },
 
-  // 获取公开挂载点列表（无需认证）
+  // 获取公开挂载点列表
   async getPublicMounts() {
     const r = await this.request('/api/mounts/public');
     return r ? r.json() : [];
   },
 
-  // 添加挂载点（无需认证，游客限 1 个）
+  // 添加挂载点
   async addMount(dirPath, name) {
     const body = { path: dirPath };
     if (name) body.name = name;
