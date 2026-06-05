@@ -102,7 +102,11 @@ class ServerFixture:
     def _request(self, path, method="GET", data=None, headers=None, cookie=None):
         """Make an HTTP request and return (status, headers, body_json_or_raw)."""
         url = f"{self.base}{path}"
-        body = json.dumps(data).encode() if data is not None and not isinstance(data, bytes) and not isinstance(data, str) else (data.encode() if isinstance(data, str) else data)
+        body = (
+            json.dumps(data).encode()
+            if data is not None and not isinstance(data, bytes) and not isinstance(data, str)
+            else (data.encode() if isinstance(data, str) else data)
+        )
         req = urllib.request.Request(url, data=body, method=method)
         if headers:
             for k, v in headers.items():
@@ -180,7 +184,7 @@ class TestSessionManagement:
         srv = ServerFixture()
         srv.start()
         try:
-            status, cookie, data = srv.get("/api/mounts")
+            status, cookie, _data = srv.get("/api/mounts")
             assert status == 200
             sid = _extract_sid(cookie)
             assert len(sid) > 10, "Should get a UUID session ID"
@@ -276,7 +280,7 @@ class TestMountVisibility:
 
             # User B (new session)
             _, cookie_b, data_b = srv.get("/api/mounts")
-            sid_b = _extract_sid(cookie_b)
+            _extract_sid(cookie_b)  # consume cookie to establish session
 
             # User A sees their mount
             _, _, data_a = srv.get("/api/mounts", cookie=_make_cookie(sid_a))
@@ -298,7 +302,6 @@ class TestMountVisibility:
             from nas_md.webserver import MountEntry, _save_mounts_to_disk
 
             legacy = MountEntry("mount-legacy", "LegacyMount", srv.tmpdir, public=True)
-            srv_fixture_mounts = srv._server  # not available, use module-level
             # Use the mount_manager directly
             import nas_md.webserver as ws
 
@@ -360,10 +363,12 @@ class TestMountOwnership:
         try:
             mount_dir = os.path.join(srv.tmpdir, "user_a_dir")
             os.makedirs(mount_dir, exist_ok=True)
-            _, cookie_a, add_data = srv.post("/api/mounts", {"path": mount_dir, "name": "UserA-Mount"})
+            _, _cookie_a, add_data = srv.post(
+                "/api/mounts", {"path": mount_dir, "name": "UserA-Mount"}
+            )
             mount_id = add_data["id"]
 
-            # User B (new session) tries to write
+            # User B tries to write
             _, cookie_b, _ = srv.get("/api/mounts")
             sid_b = _extract_sid(cookie_b)
 
@@ -401,7 +406,9 @@ class TestMountOwnership:
         try:
             mount_dir = os.path.join(srv.tmpdir, "user_a_dir")
             os.makedirs(mount_dir, exist_ok=True)
-            _, cookie_a, add_data = srv.post("/api/mounts", {"path": mount_dir, "name": "UserA-Mount"})
+            _, _cookie_a, add_data = srv.post(
+                "/api/mounts", {"path": mount_dir, "name": "UserA-Mount"}
+            )
             mount_id = add_data["id"]
 
             # User B tries to delete
@@ -450,7 +457,7 @@ class TestMountOwnership:
             assert host_mounts, "Admin should see host mounts"
             mount_id = host_mounts[0]["id"]
 
-            status, _, wdata = srv._request(
+            _status, _, _wdata = srv._request(
                 f"/api/mounts/{mount_id}/file?path=/admin_test.md",
                 method="PUT",
                 data="Admin wrote this",
@@ -486,18 +493,20 @@ class TestFileOperationIsolation:
             os.makedirs(mount_dir, exist_ok=True)
             with open(os.path.join(mount_dir, "secret.md"), "w") as f:
                 f.write("secret content")
-            _, cookie_a, add_data = srv.post("/api/mounts", {"path": mount_dir, "name": "UserA-Mount"})
+            _, cookie_a, add_data = srv.post(
+                "/api/mounts", {"path": mount_dir, "name": "UserA-Mount"}
+            )
             sid_a = _extract_sid(cookie_a)
             mount_id = add_data["id"]
 
             # User A can access tree
-            status, _, tree_a = srv.get(f"/api/mounts/{mount_id}/tree", cookie=_make_cookie(sid_a))
+            status, _, _tree_a = srv.get(f"/api/mounts/{mount_id}/tree", cookie=_make_cookie(sid_a))
             assert status == 200, "Owner should access tree"
 
             # User B cannot access tree
             _, cookie_b, _ = srv.get("/api/mounts")
             sid_b = _extract_sid(cookie_b)
-            status, _, tree_b = srv.get(f"/api/mounts/{mount_id}/tree", cookie=_make_cookie(sid_b))
+            status, _, _tree_b = srv.get(f"/api/mounts/{mount_id}/tree", cookie=_make_cookie(sid_b))
             assert status == 404, "Non-owner should NOT access tree"
         finally:
             srv.stop()
@@ -511,18 +520,24 @@ class TestFileOperationIsolation:
             os.makedirs(mount_dir, exist_ok=True)
             with open(os.path.join(mount_dir, "secret.md"), "w") as f:
                 f.write("secret content")
-            _, cookie_a, add_data = srv.post("/api/mounts", {"path": mount_dir, "name": "UserA-Mount"})
+            _, cookie_a, add_data = srv.post(
+                "/api/mounts", {"path": mount_dir, "name": "UserA-Mount"}
+            )
             sid_a = _extract_sid(cookie_a)
             mount_id = add_data["id"]
 
             # User A can read file
-            status, _, _ = srv.get(f"/api/mounts/{mount_id}/file?path=/secret.md", cookie=_make_cookie(sid_a))
+            status, _, _ = srv.get(
+                f"/api/mounts/{mount_id}/file?path=/secret.md", cookie=_make_cookie(sid_a)
+            )
             assert status == 200, "Owner should read file"
 
             # User B cannot read file
             _, cookie_b, _ = srv.get("/api/mounts")
             sid_b = _extract_sid(cookie_b)
-            status, _, _ = srv.get(f"/api/mounts/{mount_id}/file?path=/secret.md", cookie=_make_cookie(sid_b))
+            status, _, _ = srv.get(
+                f"/api/mounts/{mount_id}/file?path=/secret.md", cookie=_make_cookie(sid_b)
+            )
             assert status == 404, "Non-owner should NOT read file"
         finally:
             srv.stop()
@@ -536,8 +551,10 @@ class TestFileOperationIsolation:
             os.makedirs(mount_dir, exist_ok=True)
             with open(os.path.join(mount_dir, "old.md"), "w") as f:
                 f.write("content")
-            _, cookie_a, add_data = srv.post("/api/mounts", {"path": mount_dir, "name": "UserA-Mount"})
-            sid_a = _extract_sid(cookie_a)
+            _, cookie_a, add_data = srv.post(
+                "/api/mounts", {"path": mount_dir, "name": "UserA-Mount"}
+            )
+            _sid_a = _extract_sid(cookie_a)
             mount_id = add_data["id"]
 
             # User B tries to rename
@@ -558,8 +575,10 @@ class TestFileOperationIsolation:
         try:
             mount_dir = os.path.join(srv.tmpdir, "user_dir")
             os.makedirs(mount_dir, exist_ok=True)
-            _, cookie_a, add_data = srv.post("/api/mounts", {"path": mount_dir, "name": "UserA-Mount"})
-            sid_a = _extract_sid(cookie_a)
+            _, cookie_a, add_data = srv.post(
+                "/api/mounts", {"path": mount_dir, "name": "UserA-Mount"}
+            )
+            _sid_a = _extract_sid(cookie_a)
             mount_id = add_data["id"]
 
             # User B tries to mkdir
@@ -582,8 +601,10 @@ class TestFileOperationIsolation:
             os.makedirs(mount_dir, exist_ok=True)
             with open(os.path.join(mount_dir, "todelete.md"), "w") as f:
                 f.write("delete me")
-            _, cookie_a, add_data = srv.post("/api/mounts", {"path": mount_dir, "name": "UserA-Mount"})
-            sid_a = _extract_sid(cookie_a)
+            _, cookie_a, add_data = srv.post(
+                "/api/mounts", {"path": mount_dir, "name": "UserA-Mount"}
+            )
+            _sid_a = _extract_sid(cookie_a)
             mount_id = add_data["id"]
 
             # User B tries to delete

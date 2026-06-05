@@ -109,7 +109,9 @@ class MountEntry:
         self.public = public  # visible to visitors without auth
         self.readonly = readonly  # files in this mount cannot be modified
         self.host = host  # True = host-mounted (from MOUNT_DIRS), only visible to admin
-        self.owner = owner  # session UUID of the user who created this mount (empty for host/builtin)
+        self.owner = (
+            owner  # session UUID of the user who created this mount (empty for host/builtin)
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -440,7 +442,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             sid = cookie["nasmd_sid"].value
         if not sid:
             sid = str(uuid.uuid4())
-            self._pending_cookie = f"nasmd_sid={sid}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
+            self._pending_cookie = (
+                f"nasmd_sid={sid}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
+            )
         return sid
 
     def _is_admin_request(self) -> bool:
@@ -496,10 +500,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     def _path_visible(self, file_path: str, mount_paths: list[str]) -> bool:
         """Check if a file path falls under any of the given mount path prefixes."""
         fp = file_path.lower().replace("/", os.sep)
-        for mp in mount_paths:
-            if fp == mp or fp.startswith(mp + os.sep):
-                return True
-        return False
+        return any(fp == mp or fp.startswith(mp + os.sep) for mp in mount_paths)
 
     def _read_body(self) -> bytes:
         content_length = int(self.headers.get("Content-Length", 0))
@@ -953,7 +954,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             # Get visible mount paths for this session
             session_id = self._get_session_id()
             visible = self._visible_mounts(session_id)
-            visible_paths = {os.path.normcase(os.path.normpath(m.path)).rstrip("\\/") for m in visible}
             # Enrich results with mount_id and relative path, filter by visibility
             filtered = []
             for r in results:
@@ -962,7 +962,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     r["mount_id"] = mount_info["mount_id"]
                     r["rel_path"] = mount_info["rel_path"]
                     # Check if this mount is visible to the user
-                    mount = self.mount_manager.find_mount(mount_info["mount_id"]) if self.mount_manager else None
+                    mount = (
+                        self.mount_manager.find_mount(mount_info["mount_id"])
+                        if self.mount_manager
+                        else None
+                    )
                     if mount and mount in visible:
                         filtered.append(r)
                 else:
@@ -1018,7 +1022,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 name = qs.get("name", [None])[0]
                 if name:
                     pages = query_tags(name=name)
-                    pages = [p for p in pages if self._path_visible(p.get("path", p.get("page", "")), mount_paths)]
+                    pages = [
+                        p
+                        for p in pages
+                        if self._path_visible(p.get("path", p.get("page", "")), mount_paths)
+                    ]
                     self._send_json({"pages": pages})
                 else:
                     tags = query_tags()
@@ -1026,12 +1034,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             elif query_type == "heading":
                 page = qs.get("page", [None])[0]
                 headings = query_headings(page_path=page)
-                headings = [h for h in headings if self._path_visible(h.get("page", ""), mount_paths)]
+                headings = [
+                    h for h in headings if self._path_visible(h.get("page", ""), mount_paths)
+                ]
                 self._send_json({"headings": headings})
             elif query_type == "link":
                 page = qs.get("page", [None])[0]
                 links = query_links(page_path=page)
-                links = [l for l in links if self._path_visible(l.get("page", ""), mount_paths)]
+                links = [
+                    lnk for lnk in links if self._path_visible(lnk.get("page", ""), mount_paths)
+                ]
                 self._send_json({"links": links})
             else:
                 self._send_error("Invalid query type. Use: task, tag, heading, link", 400)
@@ -1071,7 +1083,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             mount_paths = self._visible_mount_paths(session_id)
             if mount_paths:
                 stats["recent_pages"] = [
-                    p for p in stats.get("recent_pages", []) if self._path_visible(p["path"], mount_paths)
+                    p
+                    for p in stats.get("recent_pages", [])
+                    if self._path_visible(p["path"], mount_paths)
                 ]
                 # Also filter aggregate stats by mount paths
                 from nas_md.search import get_connection
@@ -1131,9 +1145,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             mount_paths = self._visible_mount_paths(session_id)
             # Filter nodes and edges by visibility
             if "nodes" in data:
-                data["nodes"] = [n for n in data["nodes"] if self._path_visible(n.get("path", n.get("id", "")), mount_paths)]
+                data["nodes"] = [
+                    n
+                    for n in data["nodes"]
+                    if self._path_visible(n.get("path", n.get("id", "")), mount_paths)
+                ]
             if "edges" in data:
-                data["edges"] = [e for e in data["edges"] if self._path_visible(e.get("source", ""), mount_paths) and self._path_visible(e.get("target", ""), mount_paths)]
+                data["edges"] = [
+                    e
+                    for e in data["edges"]
+                    if self._path_visible(e.get("source", ""), mount_paths)
+                    and self._path_visible(e.get("target", ""), mount_paths)
+                ]
             self._send_json(data)
         except Exception as e:
             logger.error("Graph error: %s", e)
@@ -1150,9 +1173,17 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             session_id = self._get_session_id()
             mount_paths = self._visible_mount_paths(session_id)
             if name and isinstance(result, dict) and "pages" in result:
-                result["pages"] = [p for p in result["pages"] if self._path_visible(p.get("path", p.get("page", "")), mount_paths)]
+                result["pages"] = [
+                    p
+                    for p in result["pages"]
+                    if self._path_visible(p.get("path", p.get("page", "")), mount_paths)
+                ]
             elif isinstance(result, list):
-                result = [r for r in result if self._path_visible(r.get("path", r.get("page", "")), mount_paths)]
+                result = [
+                    r
+                    for r in result
+                    if self._path_visible(r.get("path", r.get("page", "")), mount_paths)
+                ]
             self._send_json(result)
         except Exception as e:
             logger.error("Tags error: %s", e)
@@ -1176,7 +1207,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 """).fetchall()
                 session_id = self._get_session_id()
                 mount_paths = self._visible_mount_paths(session_id)
-                result = [{"path": r[0], "title": r[1] or r[0]} for r in rows if self._path_visible(r[0], mount_paths)]
+                result = [
+                    {"path": r[0], "title": r[1] or r[0]}
+                    for r in rows
+                    if self._path_visible(r[0], mount_paths)
+                ]
                 self._send_json(result)
             finally:
                 conn.close()
@@ -1551,15 +1586,20 @@ def serve(
     if saved:
         existing_paths = {os.path.normpath(m.path) for m in mgr.mounts}
         # saved is now a dict grouped by owner: {"_host": [...], "uuid-xxx": [...]}
-        for owner_key, entry_list in saved.items():
+        for _owner_key, entry_list in saved.items():
             for entry_dict in entry_list:
                 try:
                     entry = MountEntry.from_dict(entry_dict)
-                    if os.path.isdir(entry.path) and os.path.normpath(entry.path) not in existing_paths:
+                    if (
+                        os.path.isdir(entry.path)
+                        and os.path.normpath(entry.path) not in existing_paths
+                    ):
                         entry.public = True  # All dynamic mounts are public by default
                         mgr.mounts.append(entry)
                         existing_paths.add(os.path.normpath(entry.path))
-                        logger.info(f"Restored mount: {entry.name} ({entry.id})={entry.path} owner={entry.owner}")
+                        logger.info(
+                            f"Restored mount: {entry.name} ({entry.id})={entry.path} owner={entry.owner}"
+                        )
                     elif not os.path.isdir(entry.path):
                         logger.warning(f"Skipping restored mount, directory missing: {entry.path}")
                 except (KeyError, TypeError) as e:
