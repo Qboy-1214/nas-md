@@ -23,6 +23,9 @@ const API = {
     if (options.body && typeof options.body === 'string') {
       headers['Content-Type'] = headers['Content-Type'] || 'text/plain; charset=utf-8';
     }
+    if (window.state?.isAdmin) {
+      headers['X-Admin'] = '1';
+    }
     const resp = await fetch(`${_apiBase}${path}`, { ...options, headers });
     return resp;
   },
@@ -144,6 +147,7 @@ const API = {
 
   async sync(mountId, files) {
     const headers = { 'Content-Type': 'application/json' };
+    if (window.state?.isAdmin) headers['X-Admin'] = '1';
     const resp = await fetch(`${_apiBase}/api/sync?mount=${encodeURIComponent(mountId)}`, {
       method: 'POST',
       headers,

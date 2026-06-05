@@ -17,6 +17,7 @@ const state = {
   syncStatus: 'offline', // offline | synced | syncing | conflict
   syncTimer: null,
   lastSyncTime: 0,
+  isAdmin: window.location.pathname.startsWith('/admin') || window.location.hash === '#admin',
 };
 
 // === DOM 引用 ===
@@ -302,8 +303,11 @@ async function removeMount(mountId) {
     return;
   }
   try {
+    const headers = {};
+    if (state.isAdmin) headers['X-Admin'] = '1';
     const resp = await fetch(`${_apiBase}/api/mounts/${mountId}`, {
       method: 'DELETE',
+      headers,
     });
     if (resp.ok) {
       // Backend successfully deleted

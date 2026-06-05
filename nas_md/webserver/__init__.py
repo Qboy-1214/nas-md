@@ -91,12 +91,21 @@ def _content_type(path: str) -> str:
 class MountEntry:
     """A single mounted directory."""
 
-    def __init__(self, id: str, name: str, path: str, public: bool = False, readonly: bool = False):
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        path: str,
+        public: bool = False,
+        readonly: bool = False,
+        host: bool = False,
+    ):
         self.id = id
         self.name = name
         self.path = path  # absolute path on host
         self.public = public  # visible to visitors without auth
         self.readonly = readonly  # files in this mount cannot be modified
+        self.host = host  # True = host-mounted (from MOUNT_DIRS), only visible to admin
 
     def to_dict(self) -> dict:
         return {
@@ -105,12 +114,18 @@ class MountEntry:
             "path": self.path,
             "public": self.public,
             "readonly": self.readonly,
+            "host": self.host,
         }
 
     @staticmethod
     def from_dict(d: dict) -> MountEntry:
         return MountEntry(
-            d["id"], d["name"], d["path"], d.get("public", False), d.get("readonly", False)
+            d["id"],
+            d["name"],
+            d["path"],
+            d.get("public", False),
+            d.get("readonly", False),
+            d.get("host", False),
         )
 
 
@@ -187,7 +202,7 @@ class MountManager:
                 name = os.path.basename(path) or f"root-{i}"
             if not os.path.isdir(path):
                 continue
-            self.mounts.append(MountEntry(f"mount-{i}", name, path))
+            self.mounts.append(MountEntry(f"mount-{i}", name, path, host=True))
 
     def is_empty(self) -> bool:
         return len(self.mounts) == 0
@@ -372,6 +387,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
     def _send_error(self, msg: str, status: int = 400):
         self._send_json({"error": msg}, status)
 
+    def _is_admin_request(self) -> bool:
+        """Check if this request comes from the /admin path."""
+        referer = self.headers.get("Referer", "")
+        if "/admin" in referer:
+            return True
+        return self.headers.get("X-Admin", "") == "1"
+
     def _read_body(self) -> bytes:
         content_length = int(self.headers.get("Content-Length", 0))
         return self.rfile.read(content_length)
@@ -463,10 +485,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_plugins()
                 return
 
-            # Mounts endpoint (returns all mounts)
+            # Mounts endpoint (admin sees all, non-admin sees only non-host mounts)
             if path == "/api/mounts":
                 if self.mount_manager and not self.mount_manager.is_empty():
-                    self._send_json([m.to_dict() for m in self.mount_manager.mounts])
+                    if self._is_admin_request():
+                        mounts = self.mount_manager.mounts
+                    else:
+                        # Non-admin: only see local (non-host) mounts
+                        mounts = [m for m in self.mount_manager.mounts if not m.host]
+                    self._send_json([m.to_dict() for m in mounts])
                 else:
                     self._send_json([])
                 return
