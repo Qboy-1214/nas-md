@@ -138,6 +138,8 @@ class Cmd:
 
 **挂载 API**：将服务器上的任意目录暴露为 RESTful API，支持完整的 CRUD 操作。路径安全通过 `os.path.realpath()` + 前缀校验保证。
 
+**多用户隔离**：基于 Cookie 自动会话实现免登录多用户隔离。首次访问自动分配 UUID session ID（`nasmd_sid` Cookie，1 年有效期），后续请求浏览器自动携带。每个用户的挂载点完全隔离——普通用户只能看到内置存储和自己添加的挂载点，Admin 额外可见宿主机挂载点（`MOUNT_DIRS` 配置），任何用户都看不到其他用户的挂载点。`MountEntry` 新增 `owner` 字段标识创建者，`mounts.json` 按用户分组存储（`{"_host": [...], "uuid-xxx": [...]}`），升级时自动迁移旧格式。搜索、统计、结构化查询结果均按用户可见性过滤。
+
 **认证模型**：
 - Token 写在配置文件（`WEB_AUTH_TOKEN` 环境变量），非随机生成，禁止注册
 - 公开挂载点（`public=true`）的 tree/file 读取无需认证

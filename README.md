@@ -18,7 +18,8 @@
 - **任务** —— 快速收集到 `Later.md`
 - **Telegram Bot** —— 随时随地访问你的文件
 - **Web 前端** —— 原生 JS + Vditor 编辑器，零框架，零构建，打开即用
-  - 多目录挂载（游客限 1 个，登录用户不限）
+  - 多用户隔离（免登录，Cookie 自动会话，各用户挂载点完全隔离）
+  - 多目录挂载（无数量限制）
   - 目录树智能过滤（只显示包含 md 文件的目录）
   - 访客模式（无需登录即可浏览公开目录）
   - 三种编辑模式（即时渲染 / 分屏预览 / 所见即所得）
@@ -136,6 +137,7 @@ docker run --rm -it -p 80:8080 \
 - 预览媒体文件（图片、音频、视频）
 - 创建、重命名、删除文件和目录
 - 路径穿越保护（无法逃逸出挂载根目录）
+- 多用户隔离（免登录，各用户挂载点完全隔离，Admin 可读写宿主机挂载点）
 
 **API 接口：**
 
@@ -196,6 +198,7 @@ docker run --rm -it -p 80:8080 \
 
 - [部署到自己的服务器](docs/your-own-server.md)
 - [挂载 API 参考](docs/mount-api.md)
+- [多用户隔离设计](docs/multi-user-isolation-design.md)
 - [项目架构梳理](docs/architecture.md)
 - [项目规划](docs/planning.md) — 分阶段实施计划
 - [Web 前端需求](docs/web-frontend-requirements.md) — 前端组件规格
@@ -242,7 +245,7 @@ nas-md/
 │       └── vditor-cdn/   # Vditor 外部资源（lute、i18n、图标、主题）
 │                           # vendored 以防止浏览器 Tracking Prevention 拦截 CDN 请求
 ├── tests/                # 测试套件
-│   ├── test_*.py         # Python 单元测试（384 个）
+│   ├── test_*.py         # Python 单元测试（423 个）
 │   └── e2e/              # Playwright 端到端测试（15 个）
 └── docs/                 # 文档
 ```
@@ -299,7 +302,7 @@ GitHub Actions 自动运行以下检查：
 |-----|------|------|
 | `quality` | ruff + black | Python 代码检查和格式验证 |
 | `frontend-quality` | ESLint + Prettier | 前端代码检查和格式验证 |
-| `test` | pytest | Python 单元测试（384 个） |
+| `test` | pytest | Python 单元测试（423 个） |
 | `frontend-test` | Playwright | 前端端到端测试（15 个） |
 
 ## 后端开发规范

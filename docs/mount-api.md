@@ -2,6 +2,28 @@
 
 挂载 API 允许通过 Web UI 浏览、读取和管理服务器端目录上的文件。挂载点通过 `MOUNT_DIRS` 环境变量配置（分号分隔的绝对路径），也可通过 Web UI 动态挂载。
 
+## 多用户隔离
+
+系统通过 Cookie 自动会话实现免登录多用户隔离。每个用户首次访问时自动分配 UUID session ID，后续请求浏览器自动携带 Cookie 识别身份。
+
+**隔离规则：**
+
+| 挂载点类型 | 可见性 | 操作权限 |
+|-----------|--------|---------|
+| 内置存储（`builtin-storage`） | 所有用户 | 只读 |
+| 宿主机挂载点（`MOUNT_DIRS`） | 仅 Admin | Admin 可读写 |
+| 用户挂载点（Web UI 添加） | 仅创建者 | 仅创建者可操作 |
+| 遗留挂载点（升级前已存在） | 所有用户 | 任何用户可操作 |
+
+- 用户挂载目录无数量限制
+- Admin 只能看到自己的本机挂载点和宿主机挂载点，无法访问其他用户的挂载点
+- 搜索、统计、结构化查询结果均按用户可见性过滤
+
+**会话 Cookie：**
+- 名称：`nasmd_sid`
+- 有效期：1 年（`Max-Age=31536000`）
+- 重启浏览器和电脑后仍然有效
+
 ## 配置
 
 ### 环境变量
@@ -32,9 +54,21 @@ services:
 {
   "id": "mount-0",
   "name": "notes",
-  "path": "/mnt/notes"
+  "path": "/mnt/notes",
+  "host": false,
+  "public": false,
+  "readonly": false,
+  "owner": "uuid-session-id"
 }
 ```
+
+- `id` —— 挂载点唯一标识
+- `name` —— 显示名称
+- `path` —— 服务器上的绝对路径
+- `host` —— 是否为宿主机挂载点（`MOUNT_DIRS` 配置）
+- `public` —— 是否公开可见
+- `readonly` —— 是否只读
+- `owner` —— 创建者的 session UUID，空字符串表示遗留或宿主机挂载点
 
 ### DirEntry（目录项）
 
@@ -75,7 +109,7 @@ services:
 GET /api/mounts
 ```
 
-返回所有已配置的挂载点。
+返回当前用户可见的挂载点。基于 Cookie 会话自动过滤，每个用户只能看到自己拥有的挂载点、内置存储、宿主机挂载点（仅 Admin）和遗留挂载点。
 
 **响应 200：**
 ```json
@@ -116,7 +150,7 @@ GET /api/mounts/public
 POST /api/mounts
 ```
 
-动态添加新的挂载点。游客可挂载 1 个目录，登录用户不限。游客挂载的目录自动设为 `public=true`。
+动态添加新的挂载点。新挂载点自动绑定当前用户的 session（`owner` = 当前 session ID），无数量限制。
 
 **请求体：**
 ```json
@@ -138,15 +172,14 @@ POST /api/mounts
 DELETE /api/mounts/{id}
 ```
 
-删除挂载点。内置挂载点（`builtin-storage`）不能删除。需要认证。
+删除挂载点。只能删除自己拥有的挂载点（`owner` 匹配当前 session）。内置挂载点（`builtin-storage`）不能删除。
 
 **响应 200：**
 ```json
 { "status": "ok" }
 ```
 
-**响应 401：** 未认证。
-**响应 403：** 内置挂载点不能删除。
+**响应 403：** 内置挂载点不能删除，或非挂载点所有者。
 
 ---
 
