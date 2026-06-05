@@ -55,7 +55,7 @@
       <main class="main">
         <!-- 顶部栏 -->
         <header class="topbar">
-          <button class="menu-toggle" id="menu-toggle" onclick="toggleSidebar()">
+          <button class="menu-toggle" id="menu-toggle" onclick="toggleSidebar()" title="菜单">
             <svg
               width="20"
               height="20"
@@ -77,7 +77,7 @@
               <button onclick="setEditorMode('wysiwyg')">所见即所得</button>
             </div>
             <div class="save-group" id="save-group" style="display: none">
-              <button class="save-btn" id="btn-save" onclick="saveFile()">保存</button>
+              <button class="save-btn" id="btn-save" onclick="saveFile()" title="保存 (Ctrl+S)">保存</button>
               <label class="autosave-toggle" title="自动保存">
                 <input
                   type="checkbox"

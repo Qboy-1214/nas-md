@@ -284,6 +284,24 @@ function initEditor(content, mode, readonly) {
       _restoreOutlineVisibility();
       _watchOutlineToggle();
 
+      // Add native title tooltips to all Vditor toolbar buttons
+      // Vditor sets aria-label on buttons with vditor-tooltipped class
+      vditorEl.querySelectorAll('[class*="vditor-tooltipped"]').forEach((btn) => {
+        if (btn.getAttribute('title')) return;
+        const ariaLabel = btn.getAttribute('aria-label');
+        if (ariaLabel) {
+          btn.setAttribute('title', ariaLabel);
+        }
+      });
+      // Also handle toolbar items that might not have vditor-tooltipped
+      vditorEl.querySelectorAll('.vditor-toolbar__item').forEach((btn) => {
+        if (btn.getAttribute('title')) return;
+        const ariaLabel = btn.getAttribute('aria-label');
+        if (ariaLabel) {
+          btn.setAttribute('title', ariaLabel);
+        }
+      });
+
       const needsRestore = _pendingRestore !== null;
       if (needsRestore) {
         const doRestore = () => {

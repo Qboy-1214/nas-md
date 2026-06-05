@@ -97,9 +97,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!state.treeData[builtin.id]) {
       await loadTree(builtin.id, '/');
     }
-    const entries = state.treeData[builtin.id]?.['/'];
-    if (entries) {
-      const welcome = entries.find((e) => e.name === '欢迎.md');
+    const root = state.treeData[builtin.id]?.['/'];
+    if (root) {
+      const welcome = (root.children || []).find((e) => e.name === '欢迎.md');
       if (welcome) openFile(welcome.path, builtin.id);
     }
   }
@@ -355,7 +355,8 @@ function renderSidebar() {
 
   // Built-in files shown at root level (not nested under a mount point)
   const builtin = state.mounts.find((m) => m.id === 'builtin-storage');
-  const builtinEntries = builtin ? state.treeData[builtin.id]?.['/'] : null;
+  const builtinRoot = builtin ? state.treeData[builtin.id]?.['/'] : null;
+  const builtinEntries = builtinRoot?.children || null;
   if (builtinEntries) {
     const items = builtinEntries
       .filter((e) => !e.name.startsWith('.') && e.name !== 'mounts.json')
@@ -371,7 +372,7 @@ function renderSidebar() {
       const cls = `tree-item builtin-file ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
       tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}','${builtin.id}')">
         <span class="tree-icon">${icon}</span>
-        <span>${e.name}</span>
+        <span title="${e.name}">${e.name}</span>
         <span class="mount-builtin-badge" title="内置只读">${svgLock}</span>
       </div>`;
     }
@@ -449,7 +450,7 @@ function renderEntries(entries, mountId, _parentPath) {
         let html = `<div>`;
         html += `<div class="${cls}" onclick="toggleDir('${mountId}','${fullPath}')">`;
         html += `<span class="tree-icon">${chevron}</span>`;
-        html += `<span class="tree-folder">${e.name}</span>`;
+        html += `<span class="tree-folder" title="${e.name}">${e.name}</span>`;
         html += `</div>`;
 
         if (isDirExpanded) {
@@ -467,7 +468,7 @@ function renderEntries(entries, mountId, _parentPath) {
 
       return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')">
       <span class="tree-icon">${icon}</span>
-      <span>${e.name}</span>
+      <span title="${e.name}">${e.name}</span>
     </div>`;
     })
     .join('');

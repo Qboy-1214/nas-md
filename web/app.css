@@ -408,6 +408,14 @@ a:hover {
   margin: 1px var(--s-xs) 1px 0;
   color: var(--c-ink);
   transition: background-color 0.15s ease;
+  overflow: hidden;
+}
+
+.tree-item > span:not(.tree-icon):not(.mount-builtin-badge) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tree-item:hover {
@@ -1264,15 +1272,8 @@ a:hover {
   color: #bbb8b1 !important;
 }
 
-/* Tooltip */
-.vditor-tooltipped::after {
-  background: #37352f !important;
-  color: #ffffff !important;
-}
-.vditor-tooltipped--hover::before,
-.vditor-tooltipped:hover::before {
-  border-bottom-color: #37352f !important;
-}
+/* Vditor toolbar tooltips are handled by Vditor's built-in CSS (vditor-tooltipped class + aria-label attr) */
+/* We only override colors for dark mode compatibility */
 
 /* Horizontal rule */
 .vditor-ir hr,
@@ -1551,16 +1552,6 @@ a:hover {
   background-color: #333333 !important;
 }
 
-.dark .vditor-tooltipped::after {
-  background: #e0e0e0 !important;
-  color: #191919 !important;
-}
-
-.dark .vditor-tooltipped--hover::before,
-.dark .vditor-tooltipped:hover::before {
-  border-bottom-color: #e0e0e0 !important;
-}
-
 .dark .vditor-outline li > span {
   color: #a0a0a0;
 }
@@ -1791,15 +1782,6 @@ a:hover {
   color: #bbb8b1 !important;
 }
 
-.vditor-tooltipped::after {
-  background: #37352f !important;
-  color: #ffffff !important;
-}
-.vditor-tooltipped--hover::before,
-.vditor-tooltipped:hover::before {
-  border-bottom-color: #37352f !important;
-}
-
 .vditor-ir hr,
 .vditor-wysiwyg hr {
   background-color: #e5e3df !important;
@@ -2001,16 +1983,6 @@ a:hover {
 .dark .vditor-ir hr,
 .dark .vditor-wysiwyg hr {
   background-color: #333333 !important;
-}
-
-.dark .vditor-tooltipped::after {
-  background: #e0e0e0 !important;
-  color: #191919 !important;
-}
-
-.dark .vditor-tooltipped--hover::before,
-.dark .vditor-tooltipped:hover::before {
-  border-bottom-color: #e0e0e0 !important;
 }
 
 .dark .vditor-outline li > span {
