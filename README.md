@@ -208,6 +208,10 @@ nas-md/
 ├── compose.yaml          # Docker Compose 配置
 ├── Dockerfile            # Docker 镜像定义
 ├── pyproject.toml        # Python 项目配置（black、ruff、pytest）
+├── package.json          # 前端工具配置（ESLint、Prettier、Playwright）
+├── eslint.config.js      # ESLint 配置
+├── .prettierrc           # Prettier 配置
+├── playwright.config.js  # Playwright 配置
 ├── nas_md/               # Python 包
 │   ├── cli/              # CLI 入口
 │   │   ├── __init__.py   # 命令实现
@@ -237,11 +241,15 @@ nas-md/
 │       ├── vditor/       # Vditor 编辑器核心（vendored）
 │       └── vditor-cdn/   # Vditor 外部资源（lute、i18n、图标、主题）
 │                           # vendored 以防止浏览器 Tracking Prevention 拦截 CDN 请求
-├── tests/                # 测试套件（384 个测试）
+├── tests/                # 测试套件
+│   ├── test_*.py         # Python 单元测试（384 个）
+│   └── e2e/              # Playwright 端到端测试（15 个）
 └── docs/                 # 文档
 ```
 
 ## 运行测试
+
+### 后端测试（pytest）
 
 ```bash
 # 运行全部测试
@@ -250,6 +258,49 @@ PYTHONPATH=. python3 -m pytest tests/ -v
 # 带覆盖率运行
 PYTHONPATH=. python3 -m pytest tests/ -v --cov=nas_md --cov-report=term-missing
 ```
+
+### 前端代码质量（ESLint + Prettier）
+
+```bash
+# 安装前端依赖（首次）
+npm install
+
+# 代码检查
+npm run lint
+
+# 自动修复 lint 问题
+npm run lint:fix
+
+# 格式化代码
+npm run format
+
+# 格式检查（CI 用）
+npm run format:check
+```
+
+### 前端端到端测试（Playwright）
+
+```bash
+# 安装 Playwright 浏览器（首次）
+npx playwright install --with-deps chromium
+
+# 运行 e2e 测试
+npm test
+
+# 运行 e2e 测试（带浏览器界面）
+npm run test:headed
+```
+
+## CI 流程
+
+GitHub Actions 自动运行以下检查：
+
+| Job | 工具 | 说明 |
+|-----|------|------|
+| `quality` | ruff + black | Python 代码检查和格式验证 |
+| `frontend-quality` | ESLint + Prettier | 前端代码检查和格式验证 |
+| `test` | pytest | Python 单元测试（384 个） |
+| `frontend-test` | Playwright | 前端端到端测试（15 个） |
 
 ## 后端开发规范
 
@@ -267,6 +318,9 @@ PYTHONPATH=. python3 -m pytest tests/ -v --cov=nas_md --cov-report=term-missing
 - 所有前端库都 vendored 在 `web/lib/` 中
 - 前端使用原生 JavaScript，无框架依赖
 - 避免脆弱的测试 —— 竞态条件是最常见的 bug 来源
+- 代码质量工具：ESLint（检查）+ Prettier（格式化），配置见 `eslint.config.js` 和 `.prettierrc`
+- 端到端测试：Playwright，测试用例在 `tests/e2e/`
+- 提交前运行 `npm run lint && npm run format:check` 确保代码质量
 
 ## 许可证
 
