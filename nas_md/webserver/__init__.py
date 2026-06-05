@@ -495,9 +495,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     def _path_visible(self, file_path: str, mount_paths: list[str]) -> bool:
         """Check if a file path falls under any of the given mount path prefixes."""
-        fp = file_path.lower()
+        fp = file_path.lower().replace("/", os.sep)
         for mp in mount_paths:
-            if fp == mp or fp.startswith(mp + os.sep) or fp.startswith(mp + "/"):
+            if fp == mp or fp.startswith(mp + os.sep):
                 return True
         return False
 
