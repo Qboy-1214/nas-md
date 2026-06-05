@@ -24,13 +24,14 @@ extend-exclude = '''
   | \.pytest_cache
   | \.egg-info
   | web
+  | node_modules
 )/
 '''
 
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-exclude = [".venv", ".git", "__pycache__", ".pytest_cache", ".egg-info", "web"]
+exclude = [".venv", ".git", "__pycache__", ".pytest_cache", ".egg-info", "web", "node_modules"]
 src = ["nas_md", "tests"]
 
 [tool.ruff.lint]

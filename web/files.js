@@ -11,7 +11,7 @@ const _apiBase = (() => {
   const pathname = window.location.pathname;
   if (pathname && pathname !== '/') {
     // 去掉末尾的文件名部分（如果有）
-    const base = pathname.replace(/\/[^\/]*$/, '');
+    const base = pathname.replace(/\/[^/]*$/, '');
     return origin + (base.endsWith('/') ? base.slice(0, -1) : base);
   }
   return origin;
@@ -24,7 +24,11 @@ const API = {
       headers['Content-Type'] = headers['Content-Type'] || 'text/plain; charset=utf-8';
     }
     // Add X-Admin header when in admin mode
-    if (window.state?.isAdmin || window.location.pathname.startsWith('/admin') || window.location.hash === '#admin') {
+    if (
+      window.state?.isAdmin ||
+      window.location.pathname.startsWith('/admin') ||
+      window.location.hash === '#admin'
+    ) {
       headers['X-Admin'] = '1';
     }
     const resp = await fetch(`${_apiBase}${path}`, { ...options, headers });
@@ -66,7 +70,9 @@ const API = {
   },
 
   async getTree(mountId, path) {
-    const r = await this.request(`/api/mounts/${mountId}/tree-recursive?path=${encodeURIComponent(path || '/')}`);
+    const r = await this.request(
+      `/api/mounts/${mountId}/tree-recursive?path=${encodeURIComponent(path || '/')}`,
+    );
     return r ? r.json() : null;
   },
 
@@ -98,9 +104,12 @@ const API = {
   },
 
   async rename(mountId, oldPath, newPath) {
-    const r = await this.request(`/api/mounts/${mountId}/rename?oldPath=${encodeURIComponent(oldPath)}&newPath=${encodeURIComponent(newPath)}`, {
-      method: 'PUT',
-    });
+    const r = await this.request(
+      `/api/mounts/${mountId}/rename?oldPath=${encodeURIComponent(oldPath)}&newPath=${encodeURIComponent(newPath)}`,
+      {
+        method: 'PUT',
+      },
+    );
     return r ? r.json() : null;
   },
 
@@ -164,7 +173,7 @@ const API = {
 
 // 全局变量
 let _mounts = [];
-let _treeCache = {};  // { "mountId:path": [entries] }
+let _treeCache = {}; // { "mountId:path": [entries] }
 
 async function loadMounts() {
   _mounts = await API.getMounts();

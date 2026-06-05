@@ -1,0 +1,158 @@
+import { test, expect } from '@playwright/test';
+
+test.describe('应用加载', () => {
+  test('首页正常加载', async ({ page }) => {
+    await page.goto('/admin');
+    await expect(page).toHaveTitle(/nas-md/);
+    await expect(page.locator('#sidebar')).toBeVisible();
+    await expect(page.locator('#search-input')).toBeVisible();
+  });
+
+  test('顶部栏元素完整', async ({ page }) => {
+    await page.goto('/admin');
+    // breadcrumb 存在（可能为空文本）
+    await expect(page.locator('#breadcrumb')).toBeAttached();
+    // 暗色模式切换按钮
+    const darkBtn = page.locator('button[title="切换暗色模式"]');
+    await expect(darkBtn).toBeVisible();
+    // 大纲按钮
+    const outlineBtn = page.locator('#btn-outline');
+    await expect(outlineBtn).toBeVisible();
+  });
+
+  test('侧边栏底部导航按钮', async ({ page }) => {
+    await page.goto('/admin');
+    const footer = page.locator('.sidebar-footer');
+    await expect(footer).toBeVisible();
+    await expect(footer.getByText('首页')).toBeVisible();
+    await expect(footer.getByText('图谱')).toBeVisible();
+    await expect(footer.getByText('看板')).toBeVisible();
+  });
+
+  test('欢迎页内容', async ({ page }) => {
+    await page.goto('/admin');
+    // 点击首页按钮确保显示欢迎页
+    await page.locator('.sidebar-footer').getByText('首页').click();
+    await expect(page.locator('#welcome-page')).toBeVisible();
+    await expect(page.locator('.welcome-logo')).toContainText('nas-md');
+  });
+});
+
+test.describe('暗色模式', () => {
+  test('切换暗色模式', async ({ page }) => {
+    await page.goto('/admin');
+    const darkBtn = page.locator('button[title="切换暗色模式"]');
+    await expect(page.locator('html')).not.toHaveClass(/dark/);
+    await darkBtn.click();
+    await expect(page.locator('html')).toHaveClass(/dark/);
+    await darkBtn.click();
+    await expect(page.locator('html')).not.toHaveClass(/dark/);
+  });
+
+  test('暗色模式持久化到 localStorage', async ({ page }) => {
+    await page.goto('/admin');
+    const darkBtn = page.locator('button[title="切换暗色模式"]');
+    await darkBtn.click();
+    const theme = await page.evaluate(() => localStorage.getItem('nasmd_dark'));
+    expect(theme).toBe('1');
+  });
+});
+
+test.describe('侧边栏', () => {
+  test('移动端侧边栏折叠和展开', async ({ page }) => {
+    await page.goto('/admin');
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.waitForTimeout(500);
+    const sidebar = page.locator('#sidebar');
+    // 移动端侧边栏默认隐藏
+    await expect(sidebar).not.toHaveClass(/open/);
+    // 通过 JS 直接调用 toggleSidebar
+    await page.evaluate(() => toggleSidebar());
+    await expect(sidebar).toHaveClass(/open/);
+    await page.evaluate(() => toggleSidebar());
+    await expect(sidebar).not.toHaveClass(/open/);
+  });
+});
+
+test.describe('搜索功能', () => {
+  test('搜索框输入触发搜索', async ({ page }) => {
+    await page.goto('/admin');
+    const searchInput = page.locator('#search-input');
+    await searchInput.fill('test');
+    await page.waitForTimeout(500);
+    const resultsEl = page.locator('#search-results');
+    await expect(resultsEl).toBeVisible();
+  });
+
+  test('搜索框清空后隐藏结果', async ({ page }) => {
+    await page.goto('/admin');
+    const searchInput = page.locator('#search-input');
+    await searchInput.fill('test');
+    await page.waitForTimeout(500);
+    await searchInput.clear();
+    await page.waitForTimeout(300);
+    await expect(page.locator('#search-results')).not.toBeVisible();
+  });
+});
+
+test.describe('Toast 提示', () => {
+  test('Toast 显示和自动消失', async ({ page }) => {
+    await page.goto('/admin');
+    await page.evaluate(() => window.showToast('测试提示'));
+    const toast = page.locator('#toast');
+    await expect(toast).toBeVisible();
+    await expect(toast).toContainText('测试提示');
+    await expect(toast).not.toBeVisible({ timeout: 4000 });
+  });
+});
+
+test.describe('新建文件对话框', () => {
+  test('打开和关闭新建文件对话框', async ({ page }) => {
+    await page.goto('/admin');
+    await page.locator('.sidebar-footer').getByText('首页').click();
+    const newFileCard = page.locator('.quick-action-card').nth(1);
+    await newFileCard.click();
+    const modal = page.locator('#new-file-modal');
+    await expect(modal).toBeVisible();
+    await expect(page.locator('#new-file-name')).toBeVisible();
+    await page.locator('#new-file-modal button', { hasText: '取消' }).click();
+    await expect(modal).not.toBeVisible();
+  });
+});
+
+test.describe('知识图谱页', () => {
+  test('点击图谱按钮显示图谱页', async ({ page }) => {
+    await page.goto('/admin');
+    await page.locator('.sidebar-footer').getByText('图谱').click();
+    await expect(page.locator('#graph-page')).toBeVisible();
+    await expect(page.locator('#graph-page h1')).toContainText('知识图谱');
+  });
+});
+
+test.describe('数据看板页', () => {
+  test('点击看板按钮显示看板页', async ({ page }) => {
+    await page.goto('/admin');
+    await page.locator('.sidebar-footer').getByText('看板').click();
+    await expect(page.locator('#dashboard-page')).toBeVisible();
+    await expect(page.locator('#dashboard-page h1')).toContainText('数据看板');
+    await expect(page.locator('#dash-files')).toBeVisible();
+    await expect(page.locator('#dash-tasks-done')).toBeVisible();
+  });
+});
+
+test.describe('键盘快捷键', () => {
+  test('Ctrl+K 聚焦搜索框', async ({ page }) => {
+    await page.goto('/admin');
+    await page.keyboard.press('Control+k');
+    await expect(page.locator('#search-input')).toBeFocused();
+  });
+});
+
+test.describe('API 健康检查', () => {
+  test('health API 返回正常', async ({ request }) => {
+    const resp = await request.get('/api/health');
+    expect(resp.ok()).toBeTruthy();
+    const data = await resp.json();
+    expect(data.status).toBe('ok');
+  });
+});

@@ -65,7 +65,10 @@ function _watchOutlineToggle() {
     const isVisible = outlineEl.style.display !== 'none';
     localStorage.setItem('nasmd_outline_visible', isVisible ? '1' : '0');
   });
-  _outlineToggleObserver.observe(outlineEl, { attributes: true, attributeFilter: ['style', 'class'] });
+  _outlineToggleObserver.observe(outlineEl, {
+    attributes: true,
+    attributeFilter: ['style', 'class'],
+  });
 }
 
 // Get the scrollable element for the current editor mode
@@ -124,7 +127,10 @@ window._reinitEditor = (mode) => {
       const lines = before.split('\n');
       for (let i = lines.length - 1; i >= 0; i--) {
         const m = lines[i].match(/^#{1,6}\s+(.+)/);
-        if (m) { restore.headingText = m[1].trim(); break; }
+        if (m) {
+          restore.headingText = m[1].trim();
+          break;
+        }
       }
     } else {
       // IR / WYSIWYG mode
@@ -149,7 +155,7 @@ window._reinitEditor = (mode) => {
         }
       }
     }
-  } catch (_) {}
+  } catch (_err) {}
 
   teardownSVSync();
   teardownOutlineHighlight();
@@ -175,13 +181,32 @@ function initEditor(content, mode, readonly) {
     cdn: '/lib/vditor-cdn',
     lang: 'zh_CN',
     toolbar: [
-      'outline', 'emoji', 'headings', 'bold', 'italic', 'strike', 'link',
-      '|', 'list', 'ordered-list', 'check',
-      '|', 'quote', 'line', 'code', 'inline-code',
-      '|', 'table',
-      '|', 'undo', 'redo',
-      '|', 'fullscreen', 'record',
-      '|', { name: 'more', toolbar: ['edit-mode', 'preview', 'info', 'help'] },
+      'outline',
+      'emoji',
+      'headings',
+      'bold',
+      'italic',
+      'strike',
+      'link',
+      '|',
+      'list',
+      'ordered-list',
+      'check',
+      '|',
+      'quote',
+      'line',
+      'code',
+      'inline-code',
+      '|',
+      'table',
+      '|',
+      'undo',
+      'redo',
+      '|',
+      'fullscreen',
+      'record',
+      '|',
+      { name: 'more', toolbar: ['edit-mode', 'preview', 'info', 'help'] },
     ],
     preview: {
       mode: 'both',
@@ -189,11 +214,11 @@ function initEditor(content, mode, readonly) {
       hljs: {
         enable: true,
         style: document.documentElement.classList.contains('dark') ? 'dracula' : 'github',
-        lineNumber: false
+        lineNumber: false,
       },
       theme: {
         current: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
-        path: '/lib/vditor-cdn/dist/css/content-theme'
+        path: '/lib/vditor-cdn/dist/css/content-theme',
       },
     },
     hint: {
@@ -228,16 +253,20 @@ function initEditor(content, mode, readonly) {
                 resolve([]);
                 return;
               }
-              API.searchPages(searchQuery).then(results => {
-                if (!results || results.length === 0) {
-                  resolve([]);
-                  return;
-                }
-                resolve(results.map(r => ({
-                  value: `[[${r.title || r.path}]]`,
-                  html: `<span style="color:var(--text-primary)">${r.title || r.path}</span> <span style="color:var(--text-secondary);font-size:0.85em">${r.path || ''}</span>`,
-                })));
-              }).catch(() => resolve([]));
+              API.searchPages(searchQuery)
+                .then((results) => {
+                  if (!results || results.length === 0) {
+                    resolve([]);
+                    return;
+                  }
+                  resolve(
+                    results.map((r) => ({
+                      value: `[[${r.title || r.path}]]`,
+                      html: `<span style="color:var(--text-primary)">${r.title || r.path}</span> <span style="color:var(--text-secondary);font-size:0.85em">${r.path || ''}</span>`,
+                    })),
+                  );
+                })
+                .catch(() => resolve([]));
             });
           },
         },
@@ -328,15 +357,25 @@ function initEditor(content, mode, readonly) {
         setTimeout(doRestore, 400);
 
         // Cleanup
-        setTimeout(() => { _pendingRestore = null; }, 500);
+        setTimeout(() => {
+          _pendingRestore = null;
+        }, 500);
       } else {
-        setTimeout(() => { const el = getActiveEditorEl(); if (el) el.focus(); }, 50);
+        setTimeout(() => {
+          const el = getActiveEditorEl();
+          if (el) el.focus();
+        }, 50);
       }
       if (readonly) {
         const tb = vditorEl.querySelector('.vditor-toolbar');
         if (tb) tb.style.display = 'none';
-        const ed = vditorEl.querySelector('.vditor-ir .vditor-reset, .vditor-sv .vditor-reset, .vditor-wysiwyg .vditor-reset');
-        if (ed) { ed.setAttribute('contenteditable', 'false'); ed.style.userSelect = 'text'; }
+        const ed = vditorEl.querySelector(
+          '.vditor-ir .vditor-reset, .vditor-sv .vditor-reset, .vditor-wysiwyg .vditor-reset',
+        );
+        if (ed) {
+          ed.setAttribute('contenteditable', 'false');
+          ed.style.userSelect = 'text';
+        }
       }
       window._vditor = _vditor;
     },
@@ -368,13 +407,13 @@ function setupSVSync() {
   const pvEl = _vditor.vditor.preview.element;
 
   // Sync preview→editor on wheel scroll
-  _svWheelHandler = (e) => {
+  _svWheelHandler = (_e) => {
     // Let the browser handle the wheel event first, then sync
     requestAnimationFrame(() => {
       const pTop = pvEl.scrollTop;
       const eMax = svEl.scrollHeight - svEl.clientHeight;
       const pMax = pvEl.scrollHeight - pvEl.clientHeight;
-      if (eMax > 0 && pMax > 0) svEl.scrollTop = pTop * eMax / pMax;
+      if (eMax > 0 && pMax > 0) svEl.scrollTop = (pTop * eMax) / pMax;
     });
   };
   pvEl.addEventListener('wheel', _svWheelHandler, { passive: true });
@@ -401,7 +440,10 @@ function teardownSVSync() {
     if (pvEl && _svWheelHandler) pvEl.removeEventListener('wheel', _svWheelHandler);
   }
   _svWheelHandler = null;
-  if (_svCursorHandler) { document.removeEventListener('selectionchange', _svCursorHandler); _svCursorHandler = null; }
+  if (_svCursorHandler) {
+    document.removeEventListener('selectionchange', _svCursorHandler);
+    _svCursorHandler = null;
+  }
 }
 
 // ─── Outline highlight ──────────────────────────────────────────────────
@@ -431,7 +473,9 @@ function _doUpdateOutlineHighlight() {
   try {
     const outlineStyle = getComputedStyle(outlineEl);
     if (outlineStyle.display === 'none') return;
-  } catch (_) { return; }
+  } catch (_err) {
+    return;
+  }
 
   const mode = _vditor.getCurrentMode();
   const scrollEl = _getScrollEl(_vditor.vditor, mode);
@@ -449,7 +493,10 @@ function _doUpdateOutlineHighlight() {
         const cursorNode = sel.getRangeAt(0).startContainer;
         const headings = scrollEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
         for (let i = 0; i < headings.length; i++) {
-          if (headings[i].contains(cursorNode)) { cursorHeadingIndex = i; break; }
+          if (headings[i].contains(cursorNode)) {
+            cursorHeadingIndex = i;
+            break;
+          }
           const cmp = cursorNode.compareDocumentPosition(headings[i]);
           if (cmp & Node.DOCUMENT_POSITION_PRECEDING) {
             cursorHeadingIndex = i;
@@ -459,7 +506,7 @@ function _doUpdateOutlineHighlight() {
         }
       }
     }
-  } catch (_) {}
+  } catch (_err) {}
 
   try {
     const items = outlineEl.querySelectorAll('li > span');
@@ -470,7 +517,7 @@ function _doUpdateOutlineHighlight() {
         item.classList.remove('outline-active');
       }
     });
-  } catch (_) {}
+  } catch (_err) {}
 }
 
 function setupOutlineHighlight() {
@@ -492,7 +539,11 @@ function setupOutlineHighlight() {
         }
       }
     });
-    _outlineObserver.observe(vditorEl, { childList: true, attributes: true, attributeFilter: ['style', 'class'] });
+    _outlineObserver.observe(vditorEl, {
+      childList: true,
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    });
     _outlineClickHandler = (e) => {
       if (!e.target.closest('.vditor-outline')) return;
       setTimeout(() => _updateOutlineHighlight(), 200);
@@ -502,7 +553,10 @@ function setupOutlineHighlight() {
 }
 
 function teardownOutlineHighlight() {
-  if (_outlineUpdateRAF) { cancelAnimationFrame(_outlineUpdateRAF); _outlineUpdateRAF = null; }
+  if (_outlineUpdateRAF) {
+    cancelAnimationFrame(_outlineUpdateRAF);
+    _outlineUpdateRAF = null;
+  }
   if (_outlineHighlightHandler) {
     document.removeEventListener('selectionchange', _outlineHighlightHandler);
     _outlineHighlightHandler = null;
@@ -533,7 +587,10 @@ function restoreCursorPosition(offset, scrollToFocus = true) {
   const mode = _vditor.getCurrentMode();
   if (mode === 'sv') {
     const ta = vd.sv.element;
-    if (ta) { ta.focus({ preventScroll: !scrollToFocus }); ta.setSelectionRange(offset, offset); }
+    if (ta) {
+      ta.focus({ preventScroll: !scrollToFocus });
+      ta.setSelectionRange(offset, offset);
+    }
     return;
   }
   const el = mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
@@ -549,19 +606,33 @@ function restoreCursorPosition(offset, scrollToFocus = true) {
       const s = window.getSelection();
       r.setStart(n, Math.min(offset - cc, nl));
       r.collapse(true);
-      s.removeAllRanges(); s.addRange(r);
+      s.removeAllRanges();
+      s.addRange(r);
       return;
     }
     cc += nl;
   }
   const r = document.createRange();
   const s = window.getSelection();
-  r.selectNodeContents(el); r.collapse(false);
-  s.removeAllRanges(); s.addRange(r);
+  r.selectNodeContents(el);
+  r.collapse(false);
+  s.removeAllRanges();
+  s.addRange(r);
 }
 
-function getEditorContent() { return _vditor ? _vditor.getValue() : ''; }
-function isDirty() { return _vditor ? _vditor.getValue() !== _originalContent : false; }
-function markSaved() { _originalContent = getEditorContent(); }
-function getCurrentFileInfo() { return { mountId: _currentMountId, relPath: _currentRelPath }; }
-function setFileInfo(mountId, relPath) { _currentMountId = mountId; _currentRelPath = relPath; }
+function getEditorContent() {
+  return _vditor ? _vditor.getValue() : '';
+}
+function isDirty() {
+  return _vditor ? _vditor.getValue() !== _originalContent : false;
+}
+function markSaved() {
+  _originalContent = getEditorContent();
+}
+function getCurrentFileInfo() {
+  return { mountId: _currentMountId, relPath: _currentRelPath };
+}
+function setFileInfo(mountId, relPath) {
+  _currentMountId = mountId;
+  _currentRelPath = relPath;
+}

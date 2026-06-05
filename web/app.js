@@ -14,14 +14,14 @@ const state = {
   searchResults: [],
   recentFiles: [],
   toastTimer: null,
-  syncStatus: 'offline',  // offline | synced | syncing | conflict
+  syncStatus: 'offline', // offline | synced | syncing | conflict
   syncTimer: null,
   lastSyncTime: 0,
   isAdmin: window.location.pathname.startsWith('/admin') || window.location.hash === '#admin',
 };
 
 // === DOM 引用 ===
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
 // === 初始化 ===
 document.addEventListener('DOMContentLoaded', async () => {
@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const lastPath = localStorage.getItem('nasmd_last_path');
   const lastMountId = localStorage.getItem('nasmd_last_mount');
   if (lastPath && lastMountId) {
-    const mount = state.mounts.find(m => m.id === lastMountId);
+    const mount = state.mounts.find((m) => m.id === lastMountId);
     if (mount) {
       try {
         const content = await API.getFile(mount.id, lastPath);
@@ -43,8 +43,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           state.currentMountId = mount.id;
           state.searchResults = [];
           $('breadcrumb').textContent = lastPath + (mount.readonly ? ' 🔒' : '');
-          $('editor-modes').style.display = mount.readonly ? 'none' : (lastPath.endsWith('.md') ? '' : 'none');
-          $('save-group').style.display = (mount.readonly || !state.isAdmin) ? 'none' : '';
+          $('editor-modes').style.display = mount.readonly
+            ? 'none'
+            : lastPath.endsWith('.md')
+              ? ''
+              : 'none';
+          $('save-group').style.display = mount.readonly || !state.isAdmin ? 'none' : '';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
@@ -66,7 +70,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           (async () => {
             await loadTree(mount.id, '/');
             // Also load builtin-storage tree so welcome.md shows in sidebar
-            const builtin = state.mounts.find(m => m.id === 'builtin-storage');
+            const builtin = state.mounts.find((m) => m.id === 'builtin-storage');
             if (builtin && !state.treeData[builtin.id]) {
               await loadTree(builtin.id, '/');
             }
@@ -91,14 +95,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
   // Fallback: open welcome.md from builtin mount
-  const builtin = state.mounts.find(m => m.id === 'builtin-storage');
+  const builtin = state.mounts.find((m) => m.id === 'builtin-storage');
   if (builtin) {
     if (!state.treeData[builtin.id]) {
       await loadTree(builtin.id, '/');
     }
     const entries = state.treeData[builtin.id]?.['/'];
     if (entries) {
-      const welcome = entries.find(e => e.name === '欢迎.md');
+      const welcome = entries.find((e) => e.name === '欢迎.md');
       if (welcome) openFile(welcome.path, builtin.id);
     }
   }
@@ -140,7 +144,7 @@ async function loadMounts() {
       state.mounts = await API.getPublicMounts();
     }
     renderSidebar();
-  } catch (e) {
+  } catch (_e) {
     showToast('加载挂载点失败');
   } finally {
     _loadMountsBusy = false;
@@ -186,18 +190,21 @@ function onDirPicked(event) {
       $('new-dir-path').placeholder = `正在定位 "${dirName}"...`;
       $('new-dir-name').value = dirName;
       // 后端搜索目录
-      API.findMountPath(dirName).then(result => {
-        if (result && result.path) {
-          $('new-dir-path').value = result.path;
-          showToast(`已定位: ${result.path}`);
-        } else {
+      API.findMountPath(dirName)
+        .then((result) => {
+          if (result && result.path) {
+            $('new-dir-path').value = result.path;
+            showToast(`已定位: ${result.path}`);
+          } else {
+            $('new-dir-path').placeholder =
+              `无法自动定位，请输入完整路径（如 D:\\xxx\\${dirName}）`;
+            showToast(`无法自动定位 "${dirName}"，请手动输入完整路径`);
+          }
+        })
+        .catch(() => {
           $('new-dir-path').placeholder = `无法自动定位，请输入完整路径（如 D:\\xxx\\${dirName}）`;
           showToast(`无法自动定位 "${dirName}"，请手动输入完整路径`);
-        }
-      }).catch(() => {
-        $('new-dir-path').placeholder = `无法自动定位，请输入完整路径（如 D:\\xxx\\${dirName}）`;
-        showToast(`无法自动定位 "${dirName}"，请手动输入完整路径`);
-      });
+        });
     }
   }
 
@@ -215,7 +222,10 @@ function onDirPicked(event) {
 
 async function openDirectory() {
   const dirPath = $('new-dir-path').value.trim();
-  if (!dirPath) { showToast('请点击输入框选择目录，或手动输入路径'); return; }
+  if (!dirPath) {
+    showToast('请点击输入框选择目录，或手动输入路径');
+    return;
+  }
   try {
     const resp = await API.addMount(dirPath, $('new-dir-name').value.trim());
     if (resp && resp.id) {
@@ -241,12 +251,12 @@ async function toggleMountPublic(mountId, isPublic) {
   try {
     const resp = await API.updateMount(mountId, { public: isPublic });
     if (resp && resp.id) {
-      const idx = state.mounts.findIndex(m => m.id === mountId);
+      const idx = state.mounts.findIndex((m) => m.id === mountId);
       if (idx >= 0) state.mounts[idx].public = isPublic;
       renderSidebar();
       showToast(isPublic ? '已设为公开' : '已设为私有');
     }
-  } catch (e) {
+  } catch (_e) {
     showToast('操作失败');
   }
 }
@@ -294,8 +304,11 @@ async function loadTree(mountId, path) {
 // 卸载挂载点
 async function removeMount(mountId) {
   // Cannot delete builtin mount
-  const mount = state.mounts.find(m => m.id === mountId);
-  if (mount && mount.id === 'builtin-storage') { showToast('内置目录不能卸载'); return; }
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (mount && mount.id === 'builtin-storage') {
+    showToast('内置目录不能卸载');
+    return;
+  }
   try {
     const resp = await fetch(`${_apiBase}/api/mounts/${mountId}`, {
       method: 'DELETE',
@@ -307,22 +320,29 @@ async function removeMount(mountId) {
       return;
     }
     // 404 / 401 handled: always clean up frontend state
-    state.mounts = state.mounts.filter(m => m.id !== mountId);
+    state.mounts = state.mounts.filter((m) => m.id !== mountId);
     delete state.treeData[mountId];
-    state.expandedMounts = state.expandedMounts.filter(id => id !== mountId && !id.startsWith(`${mountId}:`));
+    state.expandedMounts = state.expandedMounts.filter(
+      (id) => id !== mountId && !id.startsWith(`${mountId}:`),
+    );
     if (state.currentMountId === mountId) {
       state.currentPath = null;
       state.currentMountId = null;
-      if (window._vditor) { window._vditor.destroy(); window._vditor = null; }
+      if (window._vditor) {
+        window._vditor.destroy();
+        window._vditor = null;
+      }
       showPage('welcome');
     }
     renderSidebar();
     showToast('已卸载');
-  } catch (e) {
+  } catch (_e) {
     // Network error: still clean up frontend
-    state.mounts = state.mounts.filter(m => m.id !== mountId);
+    state.mounts = state.mounts.filter((m) => m.id !== mountId);
     delete state.treeData[mountId];
-    state.expandedMounts = state.expandedMounts.filter(id => id !== mountId && !id.startsWith(`${mountId}:`));
+    state.expandedMounts = state.expandedMounts.filter(
+      (id) => id !== mountId && !id.startsWith(`${mountId}:`),
+    );
     renderSidebar();
     showToast('已卸载（本地）');
   }
@@ -338,11 +358,11 @@ function renderSidebar() {
   const svgLock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
 
   // Built-in files shown at root level (not nested under a mount point)
-  const builtin = state.mounts.find(m => m.id === 'builtin-storage');
+  const builtin = state.mounts.find((m) => m.id === 'builtin-storage');
   const builtinEntries = builtin ? state.treeData[builtin.id]?.['/'] : null;
   if (builtinEntries) {
     const items = builtinEntries
-      .filter(e => !e.name.startsWith('.') && e.name !== 'mounts.json')
+      .filter((e) => !e.name.startsWith('.') && e.name !== 'mounts.json')
       .sort((a, b) => {
         if (a.isDir && !b.isDir) return -1;
         if (!a.isDir && b.isDir) return 1;
@@ -362,7 +382,7 @@ function renderSidebar() {
   }
 
   // Regular mount points
-  const regularMounts = state.mounts.filter(m => m.id !== 'builtin-storage');
+  const regularMounts = state.mounts.filter((m) => m.id !== 'builtin-storage');
   for (const mount of regularMounts) {
     const isExpanded = state.expandedMounts.includes(mount.id);
     const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
@@ -398,9 +418,9 @@ function renderSidebar() {
   }
 }
 
-function renderEntries(entries, mountId, parentPath) {
+function renderEntries(entries, mountId, _parentPath) {
   const items = entries
-    .filter(e => {
+    .filter((e) => {
       if (e.name.startsWith('.')) return false;
       // Always show if hasMd flag is set (contains .md files in subtree)
       if (e.hasMd) return true;
@@ -419,42 +439,44 @@ function renderEntries(entries, mountId, parentPath) {
   const svgFolder = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
   const svgFile = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
 
-  return items.map(e => {
-    const fullPath = e.path;
-    const isActive = state.currentPath === fullPath;
-    const icon = e.isDir ? svgFolder : svgFile;
-    const cls = `tree-item ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
+  return items
+    .map((e) => {
+      const fullPath = e.path;
+      const isActive = state.currentPath === fullPath;
+      const icon = e.isDir ? svgFolder : svgFile;
+      const cls = `tree-item ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
 
-    if (e.isDir) {
-      const dirKey = `${mountId}:${fullPath}`;
-      const isDirExpanded = state.expandedMounts.includes(dirKey);
-      const subEntries = state.treeData[mountId]?.[fullPath];
-      const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isDirExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
+      if (e.isDir) {
+        const dirKey = `${mountId}:${fullPath}`;
+        const isDirExpanded = state.expandedMounts.includes(dirKey);
+        const subEntries = state.treeData[mountId]?.[fullPath];
+        const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isDirExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
 
-      let html = `<div>`;
-      html += `<div class="${cls}" onclick="toggleDir('${mountId}','${fullPath}')">`;
-      html += `<span class="tree-icon">${chevron}</span>`;
-      html += `<span class="tree-folder">${e.name}</span>`;
-      html += `</div>`;
+        let html = `<div>`;
+        html += `<div class="${cls}" onclick="toggleDir('${mountId}','${fullPath}')">`;
+        html += `<span class="tree-icon">${chevron}</span>`;
+        html += `<span class="tree-folder">${e.name}</span>`;
+        html += `</div>`;
 
-      if (isDirExpanded) {
-        if (subEntries) {
-          html += `<div class="tree-sub">${renderEntries(subEntries.children || [], mountId, fullPath)}</div>`;
-        } else {
-          html += '<div class="tree-loading">加载中...</div>';
-          loadTree(mountId, fullPath).then(() => renderSidebar());
+        if (isDirExpanded) {
+          if (subEntries) {
+            html += `<div class="tree-sub">${renderEntries(subEntries.children || [], mountId, fullPath)}</div>`;
+          } else {
+            html += '<div class="tree-loading">加载中...</div>';
+            loadTree(mountId, fullPath).then(() => renderSidebar());
+          }
         }
+
+        html += `</div>`;
+        return html;
       }
 
-      html += `</div>`;
-      return html;
-    }
-
-    return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')">
+      return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')">
       <span class="tree-icon">${icon}</span>
       <span>${e.name}</span>
     </div>`;
-  }).join('');
+    })
+    .join('');
 }
 
 // === 文件操作 ===
@@ -482,11 +504,11 @@ async function openFile(path, preferredMountId, searchKeyword) {
   let mount = null;
   // 1. Try preferred mount id (from sidebar click or restore)
   if (preferredMountId) {
-    mount = state.mounts.find(m => m.id === preferredMountId);
+    mount = state.mounts.find((m) => m.id === preferredMountId);
   }
   // 2. Try current mount
   if (!mount && state.currentMountId) {
-    mount = state.mounts.find(m => m.id === state.currentMountId);
+    mount = state.mounts.find((m) => m.id === state.currentMountId);
   }
   // 3. Search treeData
   if (!mount) {
@@ -496,11 +518,17 @@ async function openFile(path, preferredMountId, searchKeyword) {
   if (!mount && state.mounts.length > 0) {
     mount = state.mounts[0];
   }
-  if (!mount) { showToast('无法确定文件的挂载点'); return; }
+  if (!mount) {
+    showToast('无法确定文件的挂载点');
+    return;
+  }
 
   try {
     const content = await API.getFile(mount.id, path);
-    if (content === null) { showToast('文件不存在'); return; }
+    if (content === null) {
+      showToast('文件不存在');
+      return;
+    }
     state.currentPath = path;
     state.currentMountId = mount.id;
     state.searchResults = [];
@@ -508,7 +536,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
     localStorage.setItem('nasmd_last_mount', mount.id);
 
     $('breadcrumb').textContent = path + (mount.readonly ? ' (只读)' : '');
-    $('editor-modes').style.display = mount.readonly ? 'none' : (path.endsWith('.md') ? '' : 'none');
+    $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
     showPage('editor');
 
@@ -547,7 +575,8 @@ function _scrollToKeyword(keyword) {
       const vditorEl = document.getElementById('vditor');
       if (!vditorEl) return;
       // In WYSIWYG mode, search the DOM for the keyword
-      const contentEl = vditorEl.querySelector('.vditor-wysiwyg') || vditorEl.querySelector('.vditor-sv');
+      const contentEl =
+        vditorEl.querySelector('.vditor-wysiwyg') || vditorEl.querySelector('.vditor-sv');
       if (!contentEl) return;
       const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT);
       let firstMatch = null;
@@ -563,7 +592,9 @@ function _scrollToKeyword(keyword) {
         firstMatch.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
         // Highlight the match briefly
         firstMatch.parentElement.style.backgroundColor = '#fff3b0';
-        setTimeout(() => { firstMatch.parentElement.style.backgroundColor = ''; }, 3000);
+        setTimeout(() => {
+          firstMatch.parentElement.style.backgroundColor = '';
+        }, 3000);
       }
     } catch (e) {
       console.warn('Scroll to keyword failed:', e);
@@ -575,7 +606,7 @@ function startDirtyCheck() {
   if (window._dirtyTimer) clearInterval(window._dirtyTimer);
   window._dirtyTimer = setInterval(() => {
     if (window._vditor) {
-      const isDirty = (window._vditor.getValue() !== window._originalContent);
+      const isDirty = window._vditor.getValue() !== window._originalContent;
       if (isDirty !== state.dirty) {
         state.dirty = isDirty;
         const btn = $('btn-save');
@@ -642,8 +673,15 @@ function toggleDarkMode() {
   localStorage.setItem('nasmd_dark', isDark ? '1' : '0');
   // Sync Vditor content theme
   if (window._vditor) {
-    window._vditor.setContentTheme(isDark ? 'dark' : 'light', '/lib/vditor-cdn/dist/css/content-theme');
-    window._vditor.setTheme(isDark ? 'dark' : 'classic', isDark ? 'dark' : 'classic', isDark ? 'dracula' : 'github');
+    window._vditor.setContentTheme(
+      isDark ? 'dark' : 'light',
+      '/lib/vditor-cdn/dist/css/content-theme',
+    );
+    window._vditor.setTheme(
+      isDark ? 'dark' : 'classic',
+      isDark ? 'dark' : 'classic',
+      isDark ? 'dracula' : 'github',
+    );
   }
 }
 
@@ -663,12 +701,15 @@ async function loadBacklinks(page) {
       return;
     }
     title.textContent = `反向链接 (${bls.length})`;
-    content.innerHTML = bls.map(bl =>
-      `<div class="backlink-item" onclick="openFile('${bl.path.replace(/'/g, "\\'")}')">
+    content.innerHTML = bls
+      .map(
+        (bl) =>
+          `<div class="backlink-item" onclick="openFile('${bl.path.replace(/'/g, "\\'")}')">
         <span class="backlink-page">${bl.title || bl.path}</span>
         <span class="backlink-line">第 ${bl.line} 行</span>
-      </div>`
-    ).join('');
+      </div>`,
+      )
+      .join('');
     panel.style.display = '';
     panel.classList.remove('collapsed');
   } catch (e) {
@@ -685,8 +726,11 @@ function toggleBacklinks() {
 async function saveFile({ silent = false } = {}) {
   if (!state.currentPath || !state.currentMountId || !window._vditor) return;
   // Check if current mount is readonly
-  const mount = state.mounts.find(m => m.id === state.currentMountId);
-  if (mount && mount.readonly) { if (!silent) showToast('此文件不允许修改'); return; }
+  const mount = state.mounts.find((m) => m.id === state.currentMountId);
+  if (mount && mount.readonly) {
+    if (!silent) showToast('此文件不允许修改');
+    return;
+  }
   const content = window._vditor.getValue();
 
   // Show saving state on button (only for manual save)
@@ -740,17 +784,22 @@ function confirmNewFile() {
   hideNewFile();
   // 简化：在第一个挂载点根目录创建
   const mount = state.mounts[0];
-  if (!mount) { showToast('请先打开一个目录'); return; }
+  if (!mount) {
+    showToast('请先打开一个目录');
+    return;
+  }
   const fileName = name.endsWith('.md') ? name : name + '.md';
   const path = `/${fileName}`;
-  API.putFile(mount.id, path, '').then(() => {
-    clearTreeCache();
-    loadTree(mount.id, '/').then(() => {
-      renderSidebar();
-      openFile(path, mount.id);
-      showToast('已创建');
-    });
-  }).catch(() => showToast('创建失败'));
+  API.putFile(mount.id, path, '')
+    .then(() => {
+      clearTreeCache();
+      loadTree(mount.id, '/').then(() => {
+        renderSidebar();
+        openFile(path, mount.id);
+        showToast('已创建');
+      });
+    })
+    .catch(() => showToast('创建失败'));
 }
 
 function showNewFile() {
@@ -782,9 +831,18 @@ function navigateHome() {
   $('breadcrumb').textContent = '';
   $('editor-modes').style.display = 'none';
   $('save-group').style.display = 'none';
-  if (window._vditor) { window._vditor.destroy(); window._vditor = null; }
-  if (window._dirtyTimer) { clearInterval(window._dirtyTimer); window._dirtyTimer = null; }
-  if (window._autoSaveTimer) { clearTimeout(window._autoSaveTimer); window._autoSaveTimer = null; }
+  if (window._vditor) {
+    window._vditor.destroy();
+    window._vditor = null;
+  }
+  if (window._dirtyTimer) {
+    clearInterval(window._dirtyTimer);
+    window._dirtyTimer = null;
+  }
+  if (window._autoSaveTimer) {
+    clearTimeout(window._autoSaveTimer);
+    window._autoSaveTimer = null;
+  }
   showPage('welcome');
   renderSidebar();
 }
@@ -797,7 +855,8 @@ async function showGraph() {
     renderGraph(data);
   } catch (e) {
     console.error('Graph failed:', e);
-    $('graph-container').innerHTML = '<p style="padding:20px;color:var(--c-muted)">加载图谱失败</p>';
+    $('graph-container').innerHTML =
+      '<p style="padding:20px;color:var(--c-muted)">加载图谱失败</p>';
   }
 }
 
@@ -805,18 +864,18 @@ function renderGraph(data) {
   const container = $('graph-container');
   container.innerHTML = '';
   if (!data.nodes || data.nodes.length === 0) {
-    container.innerHTML = '<p style="padding:20px;color:var(--c-muted)">暂无数据，请先打开目录并创建笔记</p>';
+    container.innerHTML =
+      '<p style="padding:20px;color:var(--c-muted)">暂无数据，请先打开目录并创建笔记</p>';
     return;
   }
 
   const width = container.clientWidth;
   const height = container.clientHeight || 500;
 
-  const svg = d3.select(container).append('svg')
-    .attr('width', width)
-    .attr('height', height);
+  const svg = d3.select(container).append('svg').attr('width', width).attr('height', height);
 
-  const zoom = d3.zoom()
+  const zoom = d3
+    .zoom()
     .scaleExtent([0.3, 4])
     .on('zoom', (event) => g.attr('transform', event.transform));
   svg.call(zoom);
@@ -825,53 +884,60 @@ function renderGraph(data) {
 
   // Build node id map
   const nodeMap = {};
-  data.nodes.forEach(n => { nodeMap[n.id] = n; });
+  data.nodes.forEach((n) => {
+    nodeMap[n.id] = n;
+  });
 
   // Build links for d3
-  const links = data.edges.map(e => ({
+  const links = data.edges.map((e) => ({
     source: e.source,
-    target: e.target
+    target: e.target,
   }));
 
-  const simulation = d3.forceSimulation(data.nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(80))
+  const simulation = d3
+    .forceSimulation(data.nodes)
+    .force(
+      'link',
+      d3
+        .forceLink(links)
+        .id((d) => d.id)
+        .distance(80),
+    )
     .force('charge', d3.forceManyBody().strength(-200))
     .force('center', d3.forceCenter(width / 2, height / 2))
     .force('collision', d3.forceCollide().radius(30));
 
-  const link = g.append('g')
-    .selectAll('line')
-    .data(links)
-    .join('line')
-    .attr('class', 'graph-link');
+  const link = g.append('g').selectAll('line').data(links).join('line').attr('class', 'graph-link');
 
-  const node = g.append('g')
+  const node = g
+    .append('g')
     .selectAll('g')
     .data(data.nodes)
     .join('g')
     .attr('class', 'graph-node')
-    .call(d3.drag()
-      .on('start', dragstarted)
-      .on('drag', dragged)
-      .on('end', dragended));
+    .call(d3.drag().on('start', dragstarted).on('drag', dragged).on('end', dragended));
 
   // Count connections per node for sizing
   const connCount = {};
-  links.forEach(l => {
+  links.forEach((l) => {
     const sid = typeof l.source === 'object' ? l.source.id : l.source;
     const tid = typeof l.target === 'object' ? l.target.id : l.target;
     connCount[sid] = (connCount[sid] || 0) + 1;
     connCount[tid] = (connCount[tid] || 0) + 1;
   });
 
-  node.append('circle')
-    .attr('r', d => 6 + (connCount[d.id] || 0) * 2)
-    .attr('fill', d => (connCount[d.id] || 0) > 0 ? 'var(--c-primary, #5645d4)' : 'var(--c-border, #e5e3df)');
+  node
+    .append('circle')
+    .attr('r', (d) => 6 + (connCount[d.id] || 0) * 2)
+    .attr('fill', (d) =>
+      (connCount[d.id] || 0) > 0 ? 'var(--c-primary, #5645d4)' : 'var(--c-border, #e5e3df)',
+    );
 
-  node.append('text')
+  node
+    .append('text')
     .attr('dx', 12)
     .attr('dy', 4)
-    .text(d => d.title.length > 20 ? d.title.slice(0, 20) + '...' : d.title);
+    .text((d) => (d.title.length > 20 ? d.title.slice(0, 20) + '...' : d.title));
 
   node.on('click', (event, d) => {
     event.stopPropagation();
@@ -880,23 +946,26 @@ function renderGraph(data) {
 
   simulation.on('tick', () => {
     link
-      .attr('x1', d => d.source.x)
-      .attr('y1', d => d.source.y)
-      .attr('x2', d => d.target.x)
-      .attr('y2', d => d.target.y);
-    node.attr('transform', d => `translate(${d.x},${d.y})`);
+      .attr('x1', (d) => d.source.x)
+      .attr('y1', (d) => d.source.y)
+      .attr('x2', (d) => d.target.x)
+      .attr('y2', (d) => d.target.y);
+    node.attr('transform', (d) => `translate(${d.x},${d.y})`);
   });
 
   function dragstarted(event, d) {
     if (!event.active) simulation.alphaTarget(0.3).restart();
-    d.fx = d.x; d.fy = d.y;
+    d.fx = d.x;
+    d.fy = d.y;
   }
   function dragged(event, d) {
-    d.fx = event.x; d.fy = event.y;
+    d.fx = event.x;
+    d.fy = event.y;
   }
   function dragended(event, d) {
     if (!event.active) simulation.alphaTarget(0);
-    d.fx = null; d.fy = null;
+    d.fx = null;
+    d.fy = null;
   }
 }
 
@@ -908,36 +977,44 @@ async function showDashboard() {
     $('dash-files').textContent = stats.file_count || 0;
     $('dash-tasks-total').textContent = stats.task_total || 0;
     $('dash-tasks-done').textContent = stats.task_done || 0;
-    const rate = stats.task_total ? Math.round(stats.task_done / stats.task_total * 100) : 0;
+    const rate = stats.task_total ? Math.round((stats.task_done / stats.task_total) * 100) : 0;
     $('dash-task-rate').textContent = rate + '%';
     $('dash-tags').textContent = stats.tag_count || 0;
     $('dash-links').textContent = stats.link_count || 0;
 
     const recent = stats.recent_pages || [];
-    $('dash-recent').innerHTML = recent.length === 0
-      ? '<p style="color:var(--c-muted)">暂无数据</p>'
-      : recent.map(p =>
-        `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
+    $('dash-recent').innerHTML =
+      recent.length === 0
+        ? '<p style="color:var(--c-muted)">暂无数据</p>'
+        : recent
+            .map(
+              (p) =>
+                `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
           <span class="dash-recent-title">${p.title || p.path}</span>
           <span class="dash-recent-time">${p.path}</span>
-        </div>`
-      ).join('');
+        </div>`,
+            )
+            .join('');
 
     // Load orphan pages
     try {
       const orphans = await API.getOrphans();
       const orphansEl = $('dash-orphans');
       if (orphansEl) {
-        orphansEl.innerHTML = (!orphans || orphans.length === 0)
-          ? '<p style="color:var(--c-muted)">无孤立页面</p>'
-          : orphans.map(p =>
-            `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
+        orphansEl.innerHTML =
+          !orphans || orphans.length === 0
+            ? '<p style="color:var(--c-muted)">无孤立页面</p>'
+            : orphans
+                .map(
+                  (p) =>
+                    `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
               <span class="dash-recent-title">${p.title || p.path}</span>
               <span class="dash-recent-time">孤立页面</span>
-            </div>`
-          ).join('');
+            </div>`,
+                )
+                .join('');
       }
-    } catch (_) {}
+    } catch (_err) {}
   } catch (e) {
     console.error('Dashboard failed:', e);
   }
@@ -989,7 +1066,7 @@ async function performSync() {
         await refreshTree();
       }
 
-      state.syncStatus = (dl > 0 || ul > 0 || del > 0) ? 'synced' : 'synced';
+      state.syncStatus = dl > 0 || ul > 0 || del > 0 ? 'synced' : 'synced';
       state.lastSyncTime = Date.now();
 
       // Check for conflicts
@@ -1034,7 +1111,9 @@ function saveToLocalStorage(path, content) {
   try {
     const key = 'nasmd_draft_' + path;
     localStorage.setItem(key, JSON.stringify({ content, savedAt: Date.now() }));
-  } catch (e) { /* quota exceeded */ }
+  } catch (_e) {
+    /* quota exceeded */
+  }
 }
 
 function loadFromLocalStorage(path) {
@@ -1043,13 +1122,17 @@ function loadFromLocalStorage(path) {
     const data = localStorage.getItem(key);
     if (!data) return null;
     return JSON.parse(data);
-  } catch (e) { return null; }
+  } catch (_e) {
+    return null;
+  }
 }
 
 function clearLocalStorage(path) {
   try {
     localStorage.removeItem('nasmd_draft_' + path);
-  } catch (e) { /* ignore */ }
+  } catch (_e) {
+    /* ignore */
+  }
 }
 
 // Online/offline event listeners
@@ -1065,24 +1148,28 @@ window.addEventListener('offline', () => {
 async function doSearch() {
   const query = $('search-input').value.trim();
   const resultsEl = $('search-results');
-  if (!query) { resultsEl.innerHTML = ''; return; }
+  if (!query) {
+    resultsEl.innerHTML = '';
+    return;
+  }
   try {
     state.searchResults = await API.search(query);
     if (state.searchResults.length === 0) {
       resultsEl.innerHTML = '<div style="padding:8px;color:var(--c-muted)">无结果</div>';
       return;
     }
-    resultsEl.innerHTML = state.searchResults.map((r, i) => {
-      const mountId = r.mount_id || '';
-      const relPath = r.rel_path || r.path;
-      const displayTitle = r.title || r.filename;
-      const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
-      const snippet = (r.snippet || '').replace(/<[^>]*>/g, ''); // strip HTML tags from snippet
-      return `<div class="search-result-item" data-idx="${i}">
+    resultsEl.innerHTML = state.searchResults
+      .map((r, i) => {
+        const relPath = r.rel_path || r.path;
+        const displayTitle = r.title || r.filename;
+        const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
+        const snippet = (r.snippet || '').replace(/<[^>]*>/g, ''); // strip HTML tags from snippet
+        return `<div class="search-result-item" data-idx="${i}">
         <span class="result-path">${displayTitle} <small style="color:var(--c-muted)">${displayPath}</small></span>
         <span class="result-snippet">${snippet}</span>
       </div>`;
-    }).join('');
+      })
+      .join('');
     // Use event delegation instead of inline onclick to avoid escaping issues
     resultsEl.onclick = (e) => {
       const item = e.target.closest('.search-result-item');
@@ -1104,7 +1191,8 @@ async function doSearch() {
 // === Admin mode (URL hash #admin) ===
 function checkAdminMode() {
   const wasAdmin = state.isAdmin;
-  state.isAdmin = window.location.pathname.startsWith('/admin') || window.location.hash === '#admin';
+  state.isAdmin =
+    window.location.pathname.startsWith('/admin') || window.location.hash === '#admin';
   if (wasAdmin !== state.isAdmin) {
     document.body.classList.toggle('admin', state.isAdmin);
     renderSidebar();
@@ -1126,7 +1214,7 @@ function setEditorMode(mode) {
 // === 最近文件 ===
 async function loadRecentFiles() {
   const allFiles = [];
-  const activeMountIds = new Set(state.mounts.map(m => m.id));
+  const activeMountIds = new Set(state.mounts.map((m) => m.id));
   for (const mount of state.mounts) {
     try {
       // Ensure tree data is loaded (may already be cached)
@@ -1137,7 +1225,7 @@ async function loadRecentFiles() {
   }
   // Filter out files belonging to mounts that no longer exist
   // (treeData may persist briefly after unmount due to async)
-  const filtered = allFiles.filter(f => activeMountIds.has(f.mountId));
+  const filtered = allFiles.filter((f) => activeMountIds.has(f.mountId));
   filtered.sort((a, b) => b.modTime - a.modTime);
   state.recentFiles = filtered.slice(0, 10);
   renderRecentFiles();
@@ -1158,7 +1246,10 @@ function collectFiles(entries, mountId, result) {
 
 function renderRecentFiles() {
   const el = $('recent-files');
-  if (state.recentFiles.length === 0) { el.innerHTML = ''; return; }
+  if (state.recentFiles.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
   let html = '<h3 class="section-title">最近修改</h3>';
   for (const f of state.recentFiles) {
     html += `<div class="recent-item" onclick="openFile('${f.path}')">

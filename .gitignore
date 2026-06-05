@@ -5,9 +5,15 @@ __pycache__/
 .pytest_cache/
 .env
 storage/
+storage-test-e2e/
 tokens/
 *.db
 *.log
 .DS_Store
 web/lib/vditor/index.min.js
 web/lib/vditor/index.css
+node_modules/
+test-results/
+playwright-report/
+playwright-output.txt
+pytest-output.txt
