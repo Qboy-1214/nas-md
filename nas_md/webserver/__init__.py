@@ -242,15 +242,23 @@ class MountManager:
         """Scan /mnt/ for subdirectories and create host mount points."""
         base = self.AUTO_SCAN_DIR
         if not os.path.isdir(base):
+            logger.info(f"Auto-scan: {base} does not exist, skipping")
             return
         try:
             entries = sorted(os.listdir(base))
-        except OSError:
+        except OSError as e:
+            logger.warning(f"Auto-scan: cannot list {base}: {e}")
             return
+        logger.info(f"Auto-scan: found entries in {base}: {entries}")
         for i, name in enumerate(entries):
             path = os.path.join(base, name)
             if os.path.isdir(path):
                 self.mounts.append(MountEntry(f"mount-{i}", name, path, host=True))
+                logger.info(f"Auto-scan: added host mount {name} -> {path}")
+            else:
+                logger.info(f"Auto-scan: skipping non-directory {path}")
+        if not self.mounts:
+            logger.info(f"Auto-scan: no subdirectories found in {base}")
 
     def is_empty(self) -> bool:
         return len(self.mounts) == 0
