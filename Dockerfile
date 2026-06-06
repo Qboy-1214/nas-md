@@ -33,6 +33,10 @@ ENV STORAGE_DIR=/app/storage
 ENV TOKENS_DIR=/app/tokens
 ENV MOUNT_DIRS=""
 ENV WEB_PORT=8080
+ENV DOCKER_MODE=1
+
+# Copy default storage files (e.g. 欢迎.md) so they survive volume mount
+COPY storage/ /app/storage-default/
 
 ENTRYPOINT ["python3", "-m", "nas_md.cli"]
 CMD ["web"]

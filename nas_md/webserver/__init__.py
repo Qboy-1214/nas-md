@@ -24,6 +24,9 @@ logger = logging.getLogger("webserver")
 # --- Admin mode (no token auth; admin access via /admin URL prefix) ---
 _admin_mode: bool = False  # Set True if server started with admin enabled
 
+# --- Docker mode detection ---
+_docker_mode: bool = os.environ.get("DOCKER_MODE", "").strip() == "1"
+
 # --- Content-Type overrides for text files (add charset=utf-8) ---
 
 _TEXT_EXTENSIONS = {
@@ -266,7 +269,8 @@ class MountManager:
     def add_mount(self, path: str, name: str | None = None, owner: str = "") -> MountEntry:
         """Add a new mount point at runtime."""
         path = os.path.abspath(path.strip())
-        if not os.path.isdir(path):
+        # In Docker mode, skip directory validation (container FS differs from host)
+        if not _docker_mode and not os.path.isdir(path):
             return None
         # Check for duplicates
         for m in self.mounts:
@@ -576,6 +580,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             # Public health check
             if path == "/api/health":
                 self._send_json({"status": "ok"})
+                return
+
+            # Config endpoint (returns runtime configuration)
+            if path == "/api/config":
+                self._send_json({"docker_mode": _docker_mode})
                 return
 
             # Search API (public for all visitors)
@@ -1426,6 +1435,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     def _handle_find_path(self, qs: dict):
         """Search for a directory by name in common locations."""
+        # In Docker mode, directory browsing is not available
+        if _docker_mode:
+            return self._send_json({"path": None, "name": None, "docker_mode": True})
+
         name = qs.get("name", [None])[0]
         if not name:
             return self._send_error("Missing name parameter", 400)
@@ -1639,6 +1652,31 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 # --- Server runner ---
 
 
+def _seed_storage(storage_dir: str) -> None:
+    """Copy default files into storage dir if it's empty (Docker first-start)."""
+    default_dir = "/app/storage-default"
+    if not os.path.isdir(default_dir):
+        return
+    # Check if storage already has content
+    try:
+        existing = os.listdir(storage_dir)
+    except OSError:
+        existing = []
+    if existing:
+        logger.info(f"Storage dir already has {len(existing)} files, skipping seed")
+        return
+    # Copy default files
+    try:
+        for name in os.listdir(default_dir):
+            src = os.path.join(default_dir, name)
+            dst = os.path.join(storage_dir, name)
+            if os.path.isfile(src) and not os.path.exists(dst):
+                shutil.copy2(src, dst)
+                logger.info(f"Seeded storage: {name}")
+    except OSError as e:
+        logger.warning(f"Failed to seed storage: {e}")
+
+
 def serve(
     mount_dirs: list[str],
     web_root: str = "",
@@ -1649,6 +1687,10 @@ def serve(
     """Start the HTTP server with mount points and optional static file serving."""
     global _MOUNTS_FILE
     _MOUNTS_FILE = os.path.join(storage_dir, "mounts.json") if storage_dir else ""
+
+    # In Docker mode, seed storage dir with default files if empty
+    if _docker_mode and storage_dir:
+        _seed_storage(storage_dir)
 
     mgr = MountManager(mount_dirs)
 

@@ -42,6 +42,13 @@ const API = {
     return r ? r.json() : [];
   },
 
+  // 获取运行时配置
+  async getConfig() {
+    const r = await this.request('/api/config');
+    if (!r || !r.ok) return null;
+    return r.json();
+  },
+
   // 添加挂载点
   async addMount(dirPath, name) {
     const body = { path: dirPath };

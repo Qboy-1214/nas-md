@@ -19,6 +19,7 @@ const state = {
   syncTimer: null,
   lastSyncTime: 0,
   isAdmin: window.location.pathname.startsWith('/admin') || window.location.hash === '#admin',
+  dockerMode: false,
 };
 
 // === DOM 引用 ===
@@ -26,6 +27,11 @@ const $ = (id) => document.getElementById(id);
 
 // === 初始化 ===
 document.addEventListener('DOMContentLoaded', async () => {
+  // Load runtime config (e.g. Docker mode)
+  try {
+    const cfg = await API.getConfig();
+    if (cfg) state.dockerMode = cfg.docker_mode === true;
+  } catch (_e) { /* ignore */ }
   await loadMounts();
   await loadRecentFiles();
   // Restore last opened file, or fall back to welcome.md
@@ -138,6 +144,15 @@ async function loadMounts() {
   try {
     state.mounts = await API.getMounts();
     renderSidebar();
+    // Docker mode: hide browse button and show hint
+    if (state.dockerMode) {
+      const browseBtn = document.querySelector('.browse-btn');
+      const dirPicker = $('dir-picker');
+      const dirInput = $('new-dir-path');
+      if (browseBtn) browseBtn.style.display = 'none';
+      if (dirPicker) dirPicker.style.display = 'none';
+      if (dirInput) dirInput.placeholder = 'Docker 模式下请通过 compose.yaml 配置挂载';
+    }
   } catch (_e) {
     showToast('加载挂载点失败');
   } finally {
