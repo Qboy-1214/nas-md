@@ -86,7 +86,43 @@ set WEB_PORT=9000 && python start.py
 | `APP_URL` | *(空)* | Web 应用的公开 URL（可选） |
 | `API_URL` | *(空)* | 同步 API 的公开 URL（可选） |
 
-### 方式二：Docker Compose
+### 方式二：Docker Pull（推荐）
+
+直接拉取预构建镜像，无需克隆仓库。
+
+```bash
+# 拉取镜像
+docker pull ghcr.io/qboy-1214/nas-md:latest
+
+# 运行容器
+docker run -d --name nas-md \
+  -p 80:8080 \
+  -v nas-md-storage:/app/storage \
+  -v nas-md-tokens:/app/tokens \
+  -v /path/to/notes:/mnt/notes \
+  -e MOUNT_DIRS="/mnt/notes" \
+  --restart unless-stopped \
+  ghcr.io/qboy-1214/nas-md:latest
+```
+
+服务将在 `http://localhost` 上运行。访问 `/admin` 进入 Admin 模式。
+
+**常用操作：**
+
+```bash
+# 查看日志
+docker logs -f nas-md
+
+# 停止
+docker stop nas-md
+
+# 更新到最新版
+docker pull ghcr.io/qboy-1214/nas-md:latest
+docker stop nas-md && docker rm nas-md
+# 然后重新运行上面的 docker run 命令
+```
+
+### 方式三：Docker Compose
 
 需要 [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)。
 
@@ -127,7 +163,7 @@ services:
 docker compose up -d
 ```
 
-#### 手动构建 Docker 镜像并运行
+### 方式四：本地构建 Docker 镜像
 
 ```bash
 # 构建镜像
