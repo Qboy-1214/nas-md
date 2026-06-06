@@ -81,26 +81,26 @@ set WEB_PORT=9000 && python start.py
 | `WEB_HOST` | `127.0.0.1` | HTTP 服务绑定地址 |
 | `WEB_ROOT` | `./web` | 前端静态文件目录 |
 | `STORAGE_DIR` | `./storage` | 内置存储目录（只读挂载点） |
-| `MOUNT_DIRS` | *(空)* | 分号分隔的绝对路径列表，作为宿主机挂载点（仅 Admin 可见可写） |
+| `MOUNT_DIRS` | *(空)* | 宿主机挂载点（仅 Admin 可见可写）。Docker 部署留空即可，自动扫描 `/mnt/` 子目录 |
 | `BOT_API_TOKEN` | *(空)* | Telegram Bot API 令牌（可选，仅 Bot 模式需要） |
 | `APP_URL` | *(空)* | Web 应用的公开 URL（可选） |
 | `API_URL` | *(空)* | 同步 API 的公开 URL（可选） |
 
 ### 方式二：Docker Pull（推荐）
 
-直接拉取预构建镜像，无需克隆仓库。
+直接拉取预构建镜像，无需克隆仓库。只需在 `volumes` 中挂载宿主机目录到 `/mnt/` 下，应用自动扫描并显示。
 
 ```bash
 # 拉取镜像
 docker pull ghcr.io/qboy-1214/nas-md:latest
 
-# 运行容器
+# 运行容器（挂载宿主机目录到 /mnt/ 下即可）
 docker run -d --name nas-md \
   -p 80:8080 \
   -v nas-md-storage:/app/storage \
   -v nas-md-tokens:/app/tokens \
-  -v /path/to/notes:/mnt/notes \
-  -e MOUNT_DIRS="/mnt/notes" \
+  -v /home/yong/n8n/file:/mnt/n8n \
+  -v /home/yong/docs:/mnt/docs \
   --restart unless-stopped \
   ghcr.io/qboy-1214/nas-md:latest
 ```
@@ -139,9 +139,9 @@ docker compose down
 
 服务将在 `http://localhost` 上运行。数据持久化在 Docker 命名卷（`storage` 和 `tokens`）中。
 
-#### Docker Compose 挂载目录
+#### 挂载宿主机目录
 
-编辑 `compose.yaml` 挂载额外的主机目录：
+编辑 `compose.yaml`，在 `volumes` 中添加宿主机目录到 `/mnt/` 下即可，应用自动扫描并显示：
 
 ```yaml
 services:
@@ -150,11 +150,8 @@ services:
     volumes:
       - storage:/app/storage
       - tokens:/app/tokens
-      - /path/to/notes:/mnt/notes     # 挂载主机目录
-      - /path/to/docs:/mnt/docs       # 挂载主机目录
-    environment:
-      # ... 现有环境变量 ...
-      MOUNT_DIRS: /mnt/notes;/mnt/docs
+      - /home/yong/n8n/file:/mnt/n8n   # 侧边栏显示为 "n8n"
+      - /home/yong/docs:/mnt/docs       # 侧边栏显示为 "docs"
 ```
 
 然后启动：

@@ -7,18 +7,18 @@ services:
     volumes:
       - storage:/app/storage
       - tokens:/app/tokens  # Telegram Bot 令牌存储（Web 模式未使用）
-      # 挂载主机目录（分号分隔，仅 Admin 可见可写）
-      # - /path/to/notes:/mnt/notes
-      # - /path/to/docs:/mnt/docs
+      # 挂载宿主机目录到 /mnt/ 下，应用自动扫描并显示（仅 Admin 可见可写）
+      # 显示名 = 目录名，如 /mnt/n8n 显示为 "n8n"
+      # - /home/yong/n8n/file:/mnt/n8n
+      # - /home/yong/docs:/mnt/docs
     environment:
       APP_URL: http://localhost
       STORAGE_DIR: /app/storage
       TOKENS_DIR: /app/tokens  # Telegram Bot 令牌存储（Web 模式未使用）
       WEB_ROOT: /app/web
       WEB_PORT: "8080"
-      # 宿主机挂载点（分号分隔的容器内路径，仅 Admin 可见可写）
-      # MOUNT_DIRS: /mnt/notes;/mnt/docs
-      MOUNT_DIRS: ""
+      # MOUNT_DIRS: 无需设置，应用自动扫描 /mnt/ 子目录
+      # 如需手动指定，可用 "显示名:路径" 格式，分号分隔
     restart: unless-stopped
 
 volumes:

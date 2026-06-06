@@ -213,23 +213,44 @@ def _save_mounts_to_disk(mounts: list[MountEntry]) -> None:
 class MountManager:
     """Manages configured mount points and serves directory listings."""
 
+    AUTO_SCAN_DIR = "/mnt"
+
     def __init__(self, mount_dirs: list[str]):
         self.mounts: list[MountEntry] = []
-        for i, d in enumerate(mount_dirs):
-            d = d.strip()
-            if not d:
-                continue
-            # Support "显示名:path" format
-            if ":" in d and d[1:2] != ":":  # not a Windows drive letter
-                name, path = d.split(":", 1)
-                name = name.strip()
-                path = os.path.abspath(path.strip())
-            else:
-                path = os.path.abspath(d)
-                name = os.path.basename(path) or f"root-{i}"
-            if not os.path.isdir(path):
-                continue
-            self.mounts.append(MountEntry(f"mount-{i}", name, path, host=True))
+        if mount_dirs:
+            # Explicit MOUNT_DIRS (backward compatible)
+            for i, d in enumerate(mount_dirs):
+                d = d.strip()
+                if not d:
+                    continue
+                # Support "显示名:path" format
+                if ":" in d and d[1:2] != ":":  # not a Windows drive letter
+                    name, path = d.split(":", 1)
+                    name = name.strip()
+                    path = os.path.abspath(path.strip())
+                else:
+                    path = os.path.abspath(d)
+                    name = os.path.basename(path) or f"root-{i}"
+                if not os.path.isdir(path):
+                    continue
+                self.mounts.append(MountEntry(f"mount-{i}", name, path, host=True))
+        else:
+            # Auto-scan /mnt/ subdirectories (Docker-friendly)
+            self._auto_scan()
+
+    def _auto_scan(self) -> None:
+        """Scan /mnt/ for subdirectories and create host mount points."""
+        base = self.AUTO_SCAN_DIR
+        if not os.path.isdir(base):
+            return
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            return
+        for i, name in enumerate(entries):
+            path = os.path.join(base, name)
+            if os.path.isdir(path):
+                self.mounts.append(MountEntry(f"mount-{i}", name, path, host=True))
 
     def is_empty(self) -> bool:
         return len(self.mounts) == 0
