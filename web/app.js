@@ -20,7 +20,12 @@ const state = {
   lastSyncTime: 0,
   isAdmin: window.location.pathname.startsWith('/admin') || window.location.hash === '#admin',
   dockerMode: false,
+  // Local mounts via File System Access API (browser-side only, no server)
+  localMounts: {}, // mountId -> { handle: FileSystemDirectoryHandle, name: string }
 };
+
+// Expose state globally so files.js can access isAdmin
+window.state = state;
 
 // === DOM 引用 ===
 const $ = (id) => document.getElementById(id);
@@ -144,14 +149,12 @@ async function loadMounts() {
   try {
     state.mounts = await API.getMounts();
     renderSidebar();
-    // Docker mode: hide browse button and update placeholder
+    // Docker mode: update placeholder hint for manual input, change browse button text
     if (state.dockerMode) {
-      const browseBtn = document.querySelector('.browse-btn');
-      const dirPicker = $('dir-picker');
       const dirInput = $('new-dir-path');
-      if (browseBtn) browseBtn.style.display = 'none';
-      if (dirPicker) dirPicker.style.display = 'none';
+      const browseBtn = document.querySelector('.browse-btn');
       if (dirInput) dirInput.placeholder = '输入容器内路径，如 /mnt/docs';
+      if (browseBtn) browseBtn.textContent = '本机…';
     }
   } catch (_e) {
     showToast('加载挂载点失败');
@@ -163,7 +166,160 @@ async function loadMounts() {
 // === 目录选择 ===
 
 function chooseDirectory() {
+  // Docker mode: use File System Access API (showDirectoryPicker)
+  if (state.dockerMode) {
+    if (window.showDirectoryPicker) {
+      mountLocalDirectory();
+    } else {
+      showToast('当前浏览器不支持选择本机目录，请使用 Chrome/Edge 浏览器');
+    }
+    return;
+  }
   $('dir-picker').click();
+}
+
+async function mountLocalDirectory() {
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    const name = handle.name;
+    const mountId = 'local-' + Date.now();
+    state.localMounts[mountId] = { handle, name };
+    // Add to mounts list as a virtual mount
+    state.mounts.push({
+      id: mountId,
+      name: name,
+      path: '本机: ' + name,
+      public: false,
+      readonly: false,
+      host: false,
+      owner: 'local',
+      _local: true,
+    });
+    showToast(`已挂载本机目录: ${name}`);
+    await loadLocalTree(mountId);
+    renderSidebar();
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      showToast('挂载本机目录失败: ' + (e.message || '未知错误'));
+    }
+  }
+}
+
+async function loadLocalTree(mountId) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount) return;
+  try {
+    const root = await readLocalDir(localMount.handle, '/');
+    state.treeData[mountId] = { '/': root };
+  } catch (e) {
+    console.error('Failed to load local tree:', e);
+  }
+}
+
+async function readLocalDir(dirHandle, parentPath) {
+  const children = [];
+  for await (const entry of dirHandle.values()) {
+    const entryPath = parentPath === '/' ? '/' + entry.name : parentPath + '/' + entry.name;
+    if (entry.kind === 'directory') {
+      const subChildren = [];
+      let hasMd = false;
+      try {
+        const subHandle = await dirHandle.getDirectoryHandle(entry.name);
+        const subResult = await readLocalDir(subHandle, entryPath);
+        subChildren.push(...(subResult.children || []));
+        hasMd = subResult.hasMd || false;
+      } catch (_e) { /* skip unreadable dirs */ }
+      // Only include dirs that contain .md files
+      if (hasMd) {
+        children.push({
+          name: entry.name,
+          path: entryPath,
+          isDir: true,
+          hasMd: true,
+          children: subChildren,
+        });
+      }
+    } else if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.md')) {
+      children.push({
+        name: entry.name,
+        path: entryPath,
+        isDir: false,
+        hasMd: true,
+        size: 0,
+        modTime: 0,
+      });
+    }
+  }
+  // Sort: dirs first, then files
+  children.sort((a, b) => {
+    if (a.isDir && !b.isDir) return -1;
+    if (!a.isDir && b.isDir) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  const hasMd = children.some((c) => c.hasMd);
+  return { name: dirHandle.name, path: parentPath, isDir: true, children, hasMd };
+}
+
+async function readLocalFile(mountId, path) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount) return null;
+  try {
+    const handle = await getLocalFileHandle(localMount.handle, path);
+    if (!handle) return null;
+    const file = await handle.getFile();
+    return await file.text();
+  } catch (e) {
+    console.error('readLocalFile error:', e);
+    return null;
+  }
+}
+
+async function getLocalFileHandle(dirHandle, path) {
+  // path is like /subdir/file.md or /file.md
+  const parts = path.split('/').filter(Boolean);
+  let current = dirHandle;
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (i === parts.length - 1) {
+      // Last part should be a file
+      try {
+        return await current.getFileHandle(part);
+      } catch {
+        return null;
+      }
+    } else {
+      // Intermediate parts are directories
+      try {
+        current = await current.getDirectoryHandle(part);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+async function writeLocalFile(mountId, path, content) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount) return false;
+  try {
+    const parts = path.split('/').filter(Boolean);
+    let current = localMount.handle;
+    // Navigate to parent directory
+    for (let i = 0; i < parts.length - 1; i++) {
+      current = await current.getDirectoryHandle(parts[i]);
+    }
+    // Create/write file
+    const fileName = parts[parts.length - 1];
+    const fileHandle = await current.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+    return true;
+  } catch (e) {
+    console.error('writeLocalFile error:', e);
+    return false;
+  }
 }
 
 function onDirPicked(event) {
@@ -286,6 +442,20 @@ async function loadTree(mountId, path) {
   if (!state.treeData[mountId]) state.treeData[mountId] = {};
   // Skip if already loaded
   if (state.treeData[mountId][path]) return;
+  // Local mount: load via File System Access API
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (mount && mount._local && state.localMounts[mountId]) {
+    try {
+      const localMount = state.localMounts[mountId];
+      const dirHandle = await getLocalDirHandle(localMount.handle, path);
+      if (!dirHandle) return;
+      const result = await readLocalDir(dirHandle, path);
+      state.treeData[mountId][path] = result;
+    } catch (e) {
+      console.error('Failed to load local tree:', e);
+    }
+    return;
+  }
   try {
     const tree = await API.getTree(mountId, path);
     // Store the root entry; renderEntries will use .children
@@ -295,12 +465,44 @@ async function loadTree(mountId, path) {
   }
 }
 
+async function getLocalDirHandle(rootHandle, path) {
+  if (path === '/') return rootHandle;
+  const parts = path.split('/').filter(Boolean);
+  let current = rootHandle;
+  for (const part of parts) {
+    try {
+      current = await current.getDirectoryHandle(part);
+    } catch {
+      return null;
+    }
+  }
+  return current;
+}
+
 // 卸载挂载点
 async function removeMount(mountId) {
   // Cannot delete builtin mount
   const mount = state.mounts.find((m) => m.id === mountId);
   if (mount && mount.id === 'builtin-storage') {
     showToast('内置目录不能卸载');
+    return;
+  }
+  // Local mount: remove from frontend state only
+  if (mount && mount._local) {
+    delete state.localMounts[mountId];
+    state.mounts = state.mounts.filter((m) => m.id !== mountId);
+    delete state.treeData[mountId];
+    state.expandedMounts = state.expandedMounts.filter(
+      (id) => id !== mountId && !id.startsWith(`${mountId}:`),
+    );
+    for (const key of Object.keys(state.accessLog)) {
+      if (key.startsWith(mountId + ':')) {
+        delete state.accessLog[key];
+      }
+    }
+    localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
+    renderSidebar();
+    showToast('已卸载本机目录');
     return;
   }
   try {
@@ -528,7 +730,13 @@ async function openFile(path, preferredMountId, searchKeyword) {
   }
 
   try {
-    const content = await API.getFile(mount.id, path);
+    let content;
+    if (mount._local && state.localMounts[mount.id]) {
+      // Read from local File System Access API
+      content = await readLocalFile(mount.id, path);
+    } else {
+      content = await API.getFile(mount.id, path);
+    }
     if (content === null) {
       showToast('文件加载失败，请查看浏览器控制台获取详情');
       return;
@@ -762,17 +970,28 @@ async function saveFile({ silent = false } = {}) {
   }
 
   try {
-    const resp = await API.putFile(state.currentMountId, state.currentPath, content);
-    if (resp && resp.error) {
-      throw new Error(resp.error);
+    // Local mount: save via File System Access API
+    if (mount && mount._local && state.localMounts[mount.id]) {
+      const ok = await writeLocalFile(mount.id, state.currentPath, content);
+      if (!ok) throw new Error('写入本机文件失败');
+      window._originalContent = content;
+      markClean();
+      clearLocalStorage(state.currentPath);
+      if (!silent) showToast('已保存');
+      else showToast('自动保存完成');
+    } else {
+      const resp = await API.putFile(state.currentMountId, state.currentPath, content);
+      if (resp && resp.error) {
+        throw new Error(resp.error);
+      }
+      window._originalContent = content;
+      markClean();
+      clearLocalStorage(state.currentPath);
+      if (!silent) showToast('已保存');
+      else showToast('自动保存完成');
+      // Trigger sync after save
+      performSync();
     }
-    window._originalContent = content;
-    markClean();
-    clearLocalStorage(state.currentPath);
-    if (!silent) showToast('已保存');
-    else showToast('自动保存完成');
-    // Trigger sync after save
-    performSync();
   } catch (e) {
     // Fallback to localStorage on error
     saveToLocalStorage(state.currentPath, content);
