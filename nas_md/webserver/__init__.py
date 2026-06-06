@@ -332,10 +332,15 @@ class MountManager:
             return mount.path
         # Strip leading /
         rel = clean.lstrip("/")
-        abs_path = os.path.realpath(os.path.join(mount.path, rel))
+        joined = os.path.join(mount.path, rel)
+        abs_path = os.path.realpath(joined)
         # Safety: must be under mount root
         mount_real = os.path.realpath(mount.path)
         if not abs_path.startswith(mount_real + os.sep) and abs_path != mount_real:
+            logger.warning(
+                f"_safe_path: path escape detected, mount.path={mount.path}, "
+                f"mount_real={mount_real}, joined={joined}, abs_path={abs_path}, rel_path={rel_path}"
+            )
             return None
         return abs_path
 
@@ -806,19 +811,29 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            logger.warning(f"File API: mount not found for id={mount_id}")
             return self._send_error("Mount not found", 404)
         # Check visibility
         session_id = self._get_session_id()
         visible = self._visible_mounts(session_id)
         if mount not in visible:
+            logger.warning(
+                f"File API: mount {mount_id} not visible for session={session_id}, "
+                f"is_admin={self._is_admin_request()}, mount.host={mount.host}, "
+                f"mount.owner={mount.owner}"
+            )
             return self._send_error("Mount not found", 404)
         rel_path = qs.get("path", [None])[0]
         if not rel_path:
             return self._send_error("Missing path parameter", 400)
         abs_path = self.mount_manager._safe_path(mount, rel_path)
         if abs_path is None:
+            logger.warning(
+                f"File API: path escapes mount root, mount.path={mount.path}, rel_path={rel_path}"
+            )
             return self._send_error("Path escapes mount root", 403)
         if not os.path.isfile(abs_path):
+            logger.warning(f"File API: file not found at abs_path={abs_path}")
             return self._send_error("File not found", 404)
         ct = _content_type(abs_path)
         try:
@@ -831,6 +846,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
         except OSError as e:
+            logger.error(f"File API: failed to read {abs_path}: {e}")
             self._send_error(str(e), 500)
 
     def _handle_write_file(self, mount_id: str, qs: dict):

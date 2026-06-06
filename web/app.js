@@ -515,7 +515,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
   try {
     const content = await API.getFile(mount.id, path);
     if (content === null) {
-      showToast('文件不存在');
+      showToast('文件加载失败，请查看浏览器控制台获取详情');
       return;
     }
     state.currentPath = path;

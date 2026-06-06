@@ -79,7 +79,15 @@ const API = {
 
   async getFile(mountId, path) {
     const r = await this.request(`/api/mounts/${mountId}/file?path=${encodeURIComponent(path)}`);
-    if (!r || !r.ok) return null;
+    if (!r) {
+      console.error('getFile: request failed, no response');
+      return null;
+    }
+    if (!r.ok) {
+      const errText = await r.text().catch(() => '');
+      console.error(`getFile: HTTP ${r.status}`, errText);
+      return null;
+    }
     return r.text();
   },
 
