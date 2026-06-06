@@ -1217,7 +1217,7 @@ function renderRecentFiles() {
     el.innerHTML = '';
     return;
   }
-  let html = '<h3 class="section-title">最近修改</h3>';
+  let html = '<h3 class="section-title">最近访问</h3>';
   for (const f of state.recentFiles) {
     html += `<div class="recent-item" onclick="openFile('${f.path}')">
       <span class="recent-name">${f.name}</span>
