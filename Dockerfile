@@ -9,7 +9,7 @@ COPY nas_md/ ./nas_md/
 
 # --- runtime stage ---
 FROM python:3.13-slim AS runtime
-RUN groupadd -g 1000 app && useradd -D -u 1000 -g app app
+RUN groupadd -g 1000 app && useradd -m -u 1000 -g app app
 
 WORKDIR /app
 
