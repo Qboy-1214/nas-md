@@ -1135,9 +1135,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         ).fetchone()
                         stats["link_count"] = link_row[0] if link_row else 0
                     else:
-                        stats.update(
-                            task_total=0, task_done=0, tag_count=0, link_count=0
-                        )
+                        stats.update(task_total=0, task_done=0, tag_count=0, link_count=0)
                 else:
                     # No mounts visible — return empty stats
                     stats = {

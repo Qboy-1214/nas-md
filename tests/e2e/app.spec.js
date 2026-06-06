@@ -24,17 +24,14 @@ test.describe('应用加载', () => {
     await page.goto('/admin');
     const footer = page.locator('.sidebar-footer');
     await expect(footer).toBeVisible();
-    await expect(footer.getByText('首页')).toBeVisible();
-    await expect(footer.getByText('图谱')).toBeVisible();
-    await expect(footer.getByText('看板')).toBeVisible();
+    await expect(footer.getByText('挂载')).toBeVisible();
   });
 
   test('欢迎页内容', async ({ page }) => {
     await page.goto('/admin');
-    // 点击首页按钮确保显示欢迎页
-    await page.locator('.sidebar-footer').getByText('首页').click();
+    await page.locator('.sidebar-footer').getByText('挂载').click();
     await expect(page.locator('#welcome-page')).toBeVisible();
-    await expect(page.locator('.welcome-logo')).toContainText('nas-md');
+    await expect(page.locator('#new-dir-path')).toBeVisible();
   });
 });
 
@@ -106,39 +103,7 @@ test.describe('Toast 提示', () => {
   });
 });
 
-test.describe('新建文件对话框', () => {
-  test('打开和关闭新建文件对话框', async ({ page }) => {
-    await page.goto('/admin');
-    await page.locator('.sidebar-footer').getByText('首页').click();
-    const newFileCard = page.locator('.quick-action-card').nth(1);
-    await newFileCard.click();
-    const modal = page.locator('#new-file-modal');
-    await expect(modal).toBeVisible();
-    await expect(page.locator('#new-file-name')).toBeVisible();
-    await page.locator('#new-file-modal button', { hasText: '取消' }).click();
-    await expect(modal).not.toBeVisible();
-  });
-});
 
-test.describe('知识图谱页', () => {
-  test('点击图谱按钮显示图谱页', async ({ page }) => {
-    await page.goto('/admin');
-    await page.locator('.sidebar-footer').getByText('图谱').click();
-    await expect(page.locator('#graph-page')).toBeVisible();
-    await expect(page.locator('#graph-page h1')).toContainText('知识图谱');
-  });
-});
-
-test.describe('数据看板页', () => {
-  test('点击看板按钮显示看板页', async ({ page }) => {
-    await page.goto('/admin');
-    await page.locator('.sidebar-footer').getByText('看板').click();
-    await expect(page.locator('#dashboard-page')).toBeVisible();
-    await expect(page.locator('#dashboard-page h1')).toContainText('数据看板');
-    await expect(page.locator('#dash-files')).toBeVisible();
-    await expect(page.locator('#dash-tasks-done')).toBeVisible();
-  });
-});
 
 test.describe('键盘快捷键', () => {
   test('Ctrl+K 聚焦搜索框', async ({ page }) => {
