@@ -13,6 +13,7 @@ const state = {
   dirty: false,
   searchResults: [],
   recentFiles: [],
+  accessLog: JSON.parse(localStorage.getItem('nasmd_access_log') || '{}'), // path -> timestamp
   toastTimer: null,
   syncStatus: 'offline', // offline | synced | syncing | conflict
   syncTimer: null,
@@ -515,6 +516,11 @@ async function openFile(path, preferredMountId, searchKeyword) {
     localStorage.setItem('nasmd_last_path', path);
     localStorage.setItem('nasmd_last_mount', mount.id);
 
+    // Record access time for "recent files"
+    const accessKey = mount.id + ':' + path;
+    state.accessLog[accessKey] = Date.now();
+    localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
+
     $('breadcrumb').textContent = path + (mount.readonly ? ' (只读)' : '');
     $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
@@ -921,7 +927,7 @@ function renderGraph(data) {
 
   node.on('click', (event, d) => {
     event.stopPropagation();
-    openFile(d.path);
+    openFile(d.rel_path || d.path, d.mount_id || '');
   });
 
   simulation.on('tick', () => {
@@ -969,9 +975,9 @@ async function showDashboard() {
         : recent
             .map(
               (p) =>
-                `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
+                `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
           <span class="dash-recent-title">${p.title || p.path}</span>
-          <span class="dash-recent-time">${p.path}</span>
+          <span class="dash-recent-time">${p.rel_path || p.path}</span>
         </div>`,
             )
             .join('');
@@ -987,7 +993,7 @@ async function showDashboard() {
             : orphans
                 .map(
                   (p) =>
-                    `<div class="dash-recent-item" onclick="openFile('${p.path.replace(/'/g, "\\'")}')">
+                    `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
               <span class="dash-recent-title">${p.title || p.path}</span>
               <span class="dash-recent-time">孤立页面</span>
             </div>`,
@@ -1182,19 +1188,30 @@ function setEditorMode(mode) {
 async function loadRecentFiles() {
   const allFiles = [];
   const activeMountIds = new Set(state.mounts.map((m) => m.id));
+  const seen = new Set();
   for (const mount of state.mounts) {
     try {
-      // Ensure tree data is loaded (may already be cached)
       await loadTree(mount.id, '/');
       const root = state.treeData[mount.id]?.['/'];
       if (root) collectFiles(root, mount.id, allFiles);
     } catch {}
   }
   // Filter out files belonging to mounts that no longer exist
-  // (treeData may persist briefly after unmount due to async)
   const filtered = allFiles.filter((f) => activeMountIds.has(f.mountId));
-  filtered.sort((a, b) => b.modTime - a.modTime);
-  state.recentFiles = filtered.slice(0, 10);
+  // Deduplicate by (mountId + path)
+  const deduped = filtered.filter((f) => {
+    const key = f.mountId + ':' + f.path;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  // Sort by access time (most recent first), fall back to modTime
+  deduped.sort((a, b) => {
+    const aTime = state.accessLog[a.mountId + ':' + a.path] || a.modTime || 0;
+    const bTime = state.accessLog[b.mountId + ':' + b.path] || b.modTime || 0;
+    return bTime - aTime;
+  });
+  state.recentFiles = deduped.slice(0, 10);
   renderRecentFiles();
 }
 
@@ -1219,9 +1236,11 @@ function renderRecentFiles() {
   }
   let html = '<h3 class="section-title">最近访问</h3>';
   for (const f of state.recentFiles) {
-    html += `<div class="recent-item" onclick="openFile('${f.path}')">
+    const accessTime = state.accessLog[f.mountId + ':' + f.path];
+    const displayTime = accessTime ? formatTime(accessTime) : formatTime(f.modTime);
+    html += `<div class="recent-item" onclick="openFile('${f.path.replace(/'/g, "\\'")}', '${f.mountId}')">
       <span class="recent-name">${f.name}</span>
-      <span class="recent-time">${formatTime(f.modTime)}</span>
+      <span class="recent-time">${displayTime}</span>
     </div>`;
   }
   el.innerHTML = html;

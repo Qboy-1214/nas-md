@@ -1075,62 +1075,81 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     def _handle_stats(self):
         """Handle GET /api/stats — only count files in user-visible mount directories"""
-        from nas_md.search import init_db, get_stats
+        from nas_md.search import init_db, get_connection
 
         try:
             init_db()
-            stats = get_stats()
-            # Filter to only include files in user-visible mount directories
             session_id = self._get_session_id()
             mount_paths = self._visible_mount_paths(session_id)
-            if mount_paths:
-                stats["recent_pages"] = [
-                    p
-                    for p in stats.get("recent_pages", [])
-                    if self._path_visible(p["path"], mount_paths)
-                ]
-                # Also filter aggregate stats by mount paths
-                from nas_md.search import get_connection
 
-                conn = get_connection()
-                try:
-                    # Build path prefix conditions for each mount
-                    conditions = []
-                    params = []
-                    for mp in mount_paths:
-                        conditions.append(
-                            "(LOWER(path) LIKE ? OR LOWER(path) LIKE ? OR LOWER(path) = ?)"
+            conn = get_connection()
+            try:
+                if mount_paths:
+                    # Fetch all page paths and filter by visibility in Python
+                    all_pages = conn.execute(
+                        "SELECT id, path, title, updated_at FROM pages"
+                    ).fetchall()
+                    visible_ids = []
+                    recent_pages = []
+                    for row in all_pages:
+                        if self._path_visible(row[1], mount_paths):
+                            visible_ids.append(row[0])
+                            mount_info = self._find_mount_for_path(row[1])
+                            recent_pages.append(
+                                {
+                                    "path": row[1],
+                                    "title": row[2] or row[1],
+                                    "updated_at": row[3],
+                                    "mount_id": mount_info["mount_id"] if mount_info else None,
+                                    "rel_path": mount_info["rel_path"] if mount_info else row[1],
+                                }
+                            )
+
+                    # Recent pages sorted by updated_at desc
+                    recent_pages.sort(key=lambda p: p.get("updated_at", 0) or 0, reverse=True)
+                    stats = {
+                        "file_count": len(visible_ids),
+                        "recent_pages": recent_pages[:10],
+                    }
+
+                    if visible_ids:
+                        placeholders = ",".join("?" * len(visible_ids))
+                        task_row = conn.execute(
+                            f"SELECT COUNT(*) FROM tasks WHERE page_id IN ({placeholders})",
+                            visible_ids,
+                        ).fetchone()
+                        stats["task_total"] = task_row[0] if task_row else 0
+                        task_done_row = conn.execute(
+                            f"SELECT COUNT(*) FROM tasks WHERE done = 1 AND page_id IN ({placeholders})",
+                            visible_ids,
+                        ).fetchone()
+                        stats["task_done"] = task_done_row[0] if task_done_row else 0
+                        tag_row = conn.execute(
+                            f"SELECT COUNT(DISTINCT name) FROM tags WHERE page_id IN ({placeholders})",
+                            visible_ids,
+                        ).fetchone()
+                        stats["tag_count"] = tag_row[0] if tag_row else 0
+                        link_row = conn.execute(
+                            f"SELECT COUNT(*) FROM links WHERE page_id IN ({placeholders})",
+                            visible_ids,
+                        ).fetchone()
+                        stats["link_count"] = link_row[0] if link_row else 0
+                    else:
+                        stats.update(
+                            task_total=0, task_done=0, tag_count=0, link_count=0
                         )
-                        params.append(mp + "\\%")
-                        params.append(mp + "/%")
-                        params.append(mp)
-                    where_clause = " OR ".join(conditions)
-                    page_filter = f"SELECT rowid FROM pages WHERE {where_clause}"
-
-                    row = conn.execute(
-                        f"SELECT COUNT(*) FROM pages WHERE {where_clause}", params
-                    ).fetchone()
-                    stats["file_count"] = row[0] if row else 0
-                    task_row = conn.execute(
-                        f"SELECT COUNT(*) FROM tasks WHERE page_id IN ({page_filter})", params
-                    ).fetchone()
-                    stats["task_total"] = task_row[0] if task_row else 0
-                    task_done_row = conn.execute(
-                        f"SELECT COUNT(*) FROM tasks WHERE done = 1 AND page_id IN ({page_filter})",
-                        params,
-                    ).fetchone()
-                    stats["task_done"] = task_done_row[0] if task_done_row else 0
-                    tag_row = conn.execute(
-                        f"SELECT COUNT(DISTINCT name) FROM tags WHERE page_id IN ({page_filter})",
-                        params,
-                    ).fetchone()
-                    stats["tag_count"] = tag_row[0] if tag_row else 0
-                    link_row = conn.execute(
-                        f"SELECT COUNT(*) FROM links WHERE page_id IN ({page_filter})", params
-                    ).fetchone()
-                    stats["link_count"] = link_row[0] if link_row else 0
-                finally:
-                    conn.close()
+                else:
+                    # No mounts visible — return empty stats
+                    stats = {
+                        "file_count": 0,
+                        "task_total": 0,
+                        "task_done": 0,
+                        "tag_count": 0,
+                        "link_count": 0,
+                        "recent_pages": [],
+                    }
+            finally:
+                conn.close()
             self._send_json(stats)
         except Exception as e:
             logger.error("Stats error: %s", e)
@@ -1145,19 +1164,24 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             data = get_graph_data()
             session_id = self._get_session_id()
             mount_paths = self._visible_mount_paths(session_id)
-            # Filter nodes and edges by visibility
+            # Filter nodes by visibility, then filter edges to only include
+            # edges where both endpoints are visible
             if "nodes" in data:
-                data["nodes"] = [
-                    n
-                    for n in data["nodes"]
-                    if self._path_visible(n.get("path", n.get("id", "")), mount_paths)
-                ]
+                visible_nodes = []
+                for n in data["nodes"]:
+                    if self._path_visible(n.get("path", n.get("id", "")), mount_paths):
+                        mount_info = self._find_mount_for_path(n.get("path", ""))
+                        if mount_info:
+                            n["mount_id"] = mount_info["mount_id"]
+                            n["rel_path"] = mount_info["rel_path"]
+                        visible_nodes.append(n)
+                data["nodes"] = visible_nodes
             if "edges" in data:
+                visible_ids = {n["id"] for n in data.get("nodes", [])}
                 data["edges"] = [
                     e
                     for e in data["edges"]
-                    if self._path_visible(e.get("source", ""), mount_paths)
-                    and self._path_visible(e.get("target", ""), mount_paths)
+                    if e.get("source") in visible_ids and e.get("target") in visible_ids
                 ]
             self._send_json(data)
         except Exception as e:
@@ -1209,11 +1233,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 """).fetchall()
                 session_id = self._get_session_id()
                 mount_paths = self._visible_mount_paths(session_id)
-                result = [
-                    {"path": r[0], "title": r[1] or r[0]}
-                    for r in rows
-                    if self._path_visible(r[0], mount_paths)
-                ]
+                result = []
+                for r in rows:
+                    if self._path_visible(r[0], mount_paths):
+                        mount_info = self._find_mount_for_path(r[0])
+                        result.append(
+                            {
+                                "path": r[0],
+                                "title": r[1] or r[0],
+                                "mount_id": mount_info["mount_id"] if mount_info else None,
+                                "rel_path": mount_info["rel_path"] if mount_info else r[0],
+                            }
+                        )
                 self._send_json(result)
             finally:
                 conn.close()
@@ -1684,16 +1715,28 @@ def _create_server(host: str, port: int, handler: type) -> HTTPServer:
 
 def _init_search_index(mount_dirs: list[str]) -> None:
     """Initialize the search database and index all mounted directories."""
-    from nas_md.search import init_db, rebuild_index, get_stats
+    from nas_md.search import init_db, rebuild_index, get_connection
 
     try:
         init_db()
-        stats = get_stats()
-        if stats["file_count"] == 0:
-            logger.info("Building initial search index...")
-            count = rebuild_index(mount_dirs)
-            logger.info("Search index built: %d files indexed", count)
-        else:
-            logger.info("Search index ready: %d files", stats["file_count"])
+        conn = get_connection()
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM pages").fetchone()
+            count = row[0] if row else 0
+            if count == 0:
+                logger.info("Building initial search index...")
+                count = rebuild_index(mount_dirs)
+                logger.info("Search index built: %d files indexed", count)
+            else:
+                # Check if index uses relative paths (legacy) and needs rebuild
+                sample = conn.execute("SELECT path FROM pages LIMIT 1").fetchone()
+                if sample and sample[0] and not os.path.isabs(sample[0]):
+                    logger.info("Rebuilding search index (upgrading to absolute paths)...")
+                    count = rebuild_index(mount_dirs)
+                    logger.info("Search index rebuilt: %d files indexed", count)
+                else:
+                    logger.info("Search index ready: %d files", count)
+        finally:
+            conn.close()
     except Exception as e:
         logger.error("Failed to initialize search index: %s", e)

@@ -393,7 +393,7 @@ def rebuild_index(directories: list[str]) -> int:
             for md_file in dir_path.rglob("*.md"):
                 try:
                     content = md_file.read_text(encoding="utf-8", errors="replace")
-                    rel_path = str(md_file.relative_to(dir_path))
+                    abs_path = str(md_file)
                     filename = md_file.name
                     content_hash = str(hash(content))
                     updated_at = int(md_file.stat().st_mtime * 1000)
@@ -407,19 +407,19 @@ def rebuild_index(directories: list[str]) -> int:
                     if fm and "title" in fm:
                         title = str(fm["title"])
                     if not title:
-                        title = _extract_title(content, rel_path)
+                        title = _extract_title(content, filename)
 
                     conn.execute(
                         """
                         INSERT INTO pages (path, filename, title, content, content_hash, updated_at, frontmatter)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                        (rel_path, filename, title, content, content_hash, updated_at, fm_json),
+                        (abs_path, filename, title, content, content_hash, updated_at, fm_json),
                     )
 
                     # Get page_id
                     row = conn.execute(
-                        "SELECT id FROM pages WHERE path = ?", (rel_path,)
+                        "SELECT id FROM pages WHERE path = ?", (abs_path,)
                     ).fetchone()
                     page_id = row[0]
 
