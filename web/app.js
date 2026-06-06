@@ -307,6 +307,13 @@ async function removeMount(mountId) {
     state.expandedMounts = state.expandedMounts.filter(
       (id) => id !== mountId && !id.startsWith(`${mountId}:`),
     );
+    // Clean up access log entries for the unmounted directory
+    for (const key of Object.keys(state.accessLog)) {
+      if (key.startsWith(mountId + ':')) {
+        delete state.accessLog[key];
+      }
+    }
+    localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
     if (state.currentMountId === mountId) {
       state.currentPath = null;
       state.currentMountId = null;
@@ -317,6 +324,7 @@ async function removeMount(mountId) {
       showPage('welcome');
     }
     renderSidebar();
+    loadRecentFiles();
     showToast('已卸载');
   } catch (_e) {
     // Network error: still clean up frontend
