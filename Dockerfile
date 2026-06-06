@@ -18,7 +18,7 @@ COPY --from=build /src/pyproject.toml /app/pyproject.toml
 COPY web/ /app/web/
 
 RUN mkdir -p /app/storage /app/tokens && chown -R app:app /app
-VOLUME ["/app/storage", "/app/tokens"]
+VOLUME ["/app/storage", "/app/tokens"]  # tokens: Telegram Bot 令牌存储（Web 模式未使用）
 
 USER app
 
@@ -27,7 +27,7 @@ EXPOSE 8080
 ENV PYTHONPATH=/app
 ENV WEB_ROOT=/app/web
 ENV STORAGE_DIR=/app/storage
-ENV TOKENS_DIR=/app/tokens
+ENV TOKENS_DIR=/app/tokens  # Telegram Bot 令牌存储（Web 模式未使用）
 ENV MOUNT_DIRS=""
 ENV WEB_PORT=8080
 

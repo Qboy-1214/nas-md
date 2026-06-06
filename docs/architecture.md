@@ -138,7 +138,9 @@ class Cmd:
 
 **挂载 API**：将服务器上的任意目录暴露为 RESTful API，支持完整的 CRUD 操作。路径安全通过 `os.path.realpath()` + 前缀校验保证。
 
-**多用户隔离**：基于 Cookie 自动会话实现免登录多用户隔离。首次访问自动分配 UUID session ID（`nasmd_sid` Cookie，1 年有效期），后续请求浏览器自动携带。每个用户的挂载点完全隔离——普通用户只能看到内置存储和自己添加的挂载点，Admin 额外可见宿主机挂载点（`MOUNT_DIRS` 配置），任何用户都看不到其他用户的挂载点。`MountEntry` 新增 `owner` 字段标识创建者，`mounts.json` 按用户分组存储（`{"_host": [...], "uuid-xxx": [...]}`），升级时自动迁移旧格式。搜索、统计、结构化查询结果均按用户可见性过滤。
+**多用户隔离**：基于 Cookie 自动会话实现免登录多用户隔离。首次访问自动分配 UUID session ID（`nasmd_sid` Cookie，1 年有效期），后续请求浏览器自动携带。每个用户的挂载点完全隔离——普通用户只能看到内置存储和自己添加的挂载点，Admin 额外可见宿主机挂载点（`MOUNT_DIRS` 配置），任何用户都看不到其他用户的挂载点。`MountEntry` 新增 `owner` 字段标识创建者，`mounts.json` 按用户分组存储（`{"_host": [...], "uuid-xxx": [...]}`），升级时自动迁移旧格式。搜索、统计、结构化查询结果均按用户可见性过滤。卸载挂载点时自动清理前端访问日志中对应条目。
+
+**Ctrl+C 处理**：Windows 上 `serve_forever()` 内部的 `select()` 会阻塞信号，设置 `server.timeout = 0.5` 让 `select()` 定期超时，使 `KeyboardInterrupt` 能被及时处理。
 
 **认证模型**：
 - Token 写在配置文件（`WEB_AUTH_TOKEN` 环境变量），非随机生成，禁止注册
@@ -342,7 +344,8 @@ const state = {
   editorMode: 'ir',         // 编辑器模式 (ir | sv | wysiwyg)
   dirty: false,             // 是否有未保存修改
   searchResults: [],        // 搜索结果
-  recentFiles: [],          // 最近修改文件
+  recentFiles: [],          // 最近访问文件
+  accessLog: {},            // 访问日志 { "mountId:path": timestamp }，localStorage 持久化
   showSettings: false,      // 是否显示设置页
 };
 ```
@@ -353,17 +356,17 @@ const state = {
 
 ```
 <div class="layout">              ← display: flex, height: 100vh
-  <aside id="sidebar">            ← width: 280px, height: 100vh
+  <aside id="sidebar">            ← width: 240px, height: 100vh
     ├── .sidebar-header           ← Logo + 折叠按钮
     ├── .search-box               ← 搜索输入框 + 结果下拉
     ├── #file-tree                ← 文件树（flex: 1, overflow-y: auto）
-    └── .sidebar-footer           ← 首页/设置/登录按钮
+    └── .sidebar-footer           ← 挂载按钮（"图谱"和"看板"入口已隐藏）
   </aside>
   <main class="main">             ← flex: 1, min-width: 0
     <header class="topbar">        ← 面包屑 + 编辑器模式 + 保存
     </header>
     <div class="editor-area">     ← flex: 1, overflow: hidden
-      ├── #welcome-page           ← 欢迎页 Hero + 打开目录 + 最近修改
+      ├── #welcome-page           ← 挂载目录输入 + 最近访问列表（无标题/简介/快捷卡片）
       ├── #editor-container       ← Vditor 编辑器
       └── #settings-page          ← 设置页
     </div>

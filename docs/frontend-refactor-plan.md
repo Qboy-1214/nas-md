@@ -169,7 +169,7 @@ layout (flex row, 100vh)
 │   ├── page-tree (indented tree)
 │   │   ├── favorites section
 │   │   └── all pages section
-│   └── sidebar-footer (new page + settings, minimal)
+│   └── sidebar-footer (挂载按钮，图谱/看板入口已隐藏)
 ├── main (flex 1)
 │   ├── page-header (52px)
 │   │   ├── breadcrumb (lighter color)
@@ -268,39 +268,26 @@ layout (flex row, 100vh)
 
 #### 当前实现
 
-- Hero 区域：大标题 + 副标题 + 描述文字
-- 打开目录：输入框 + 浏览按钮 + 打开按钮
-- 已挂载目录：卡片列表
-- 最近文件：简单列表
+- 挂载目录输入框（路径输入 + 浏览按钮 + "挂载"按钮，无显示名称输入框）
+- 已挂载目录列表
+- 最近访问文件列表（按访问时间排序）
+
+> 注：标题、简介、"打开目录"/"新建笔记"/"导入文件"快捷卡片已移除。
 
 #### 目标样式
 
-**Hero 区域：**
-- 居中，最大宽度 560px
-- 标题：48px semibold，`#1a1a1a`，letter-spacing: -0.5px
-- 副标题：18px regular，`#787671`，margin-top 8px
-- 描述：14px regular，`#bbb8b1`，margin-top 12px，line-height 1.6
-- section 间距 48px
+**挂载目录输入区：**
+- 路径输入框 + 浏览按钮（inline）+ "挂载"按钮
+- 输入框：高度 44px，背景 `#ffffff`，边框 `1px solid #e5e3df`，圆角 8px
+- 浏览按钮：`button-secondary` 样式（transparent 背景，`1px solid #c8c4be` 边框），padding 10px 18px
+- 挂载按钮：`button-primary` 样式（`#5645d4` 背景），padding 10px 18px
 
-**快速操作区（3 列卡片）：**
-- 布局：grid，3 列，gap 12px
-- 每张卡片：背景 `#ffffff`，边框 `1px solid #e5e3df`，圆角 12px，padding 20px
-- 图标区域：32x32，pastel tint 背景，圆角 8px
-- 标题：14px semibold
-- 描述：13px，`#787671`
-- hover：边框变为 `#c8c4be`，轻微上浮 1px（translateY(-1px)），shadow 出现
-- 过渡：150ms ease
-
-三种卡片的 tint 色：
-- 打开目录 → `--c-tint-sky`（淡蓝）
-- 新建笔记 → `--c-tint-mint`（淡绿）
-- 导入文件 → `--c-tint-lavender`（淡紫）
-
-**最近文件：**
+**最近访问：**
 - 标题：13px semibold uppercase，`#bbb8b1`，letter-spacing: 0.5px
 - 每个文件：高度 36px，hover 背景 `#f6f5f4`，圆角 6px
 - 文件名：14px medium
 - 路径 + 时间：13px，`#bbb8b1`
+- 卸载挂载点时自动清理对应条目
 
 ### 3.4 编辑器区域（Vditor CSS 变量方案）
 

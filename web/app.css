@@ -909,8 +909,8 @@ a:hover {
 /* Buttons */
 .browse-btn {
   height: var(--input-h);
-  padding: var(--s-sm) var(--s-md);
-  background: var(--c-canvas);
+  padding: 10px 18px;
+  background: transparent;
   color: var(--c-ink);
   border: 1px solid var(--c-border-strong);
   border-radius: var(--r-md);
@@ -928,7 +928,7 @@ a:hover {
 
 .primary-btn {
   height: var(--input-h);
-  padding: var(--s-sm) var(--s-lg);
+  padding: 10px 18px;
   background: var(--c-primary);
   color: var(--c-on-primary);
   border: none;

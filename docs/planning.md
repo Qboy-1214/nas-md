@@ -438,7 +438,7 @@ web/
 
 | 路径 | 页面 | 说明 | 状态 |
 |------|------|------|------|
-| `/` | 首页 | 欢迎页 + 打开目录入口 + 最近修改 | ✅ |
+| `/` | 首页 | 挂载目录输入 + 最近访问列表 | ✅ |
 | `/editor` | 编辑器 | Vditor 编辑/预览（三种模式） | ✅ |
 | `/settings` | 设置 | 挂载点管理 | ✅ |
 | `/search?q=xxx` | 搜索结果 | 全文搜索 | ✅ |
@@ -446,10 +446,10 @@ web/
 ### 认证模型
 
 - **无注册**：Token 写在配置文件 `WEB_AUTH_TOKEN` 中
-- **可选登录**：任何人访问都看到欢迎页，右上角登录按钮
+- **多用户隔离**：基于 Cookie 自动会话（`nasmd_sid`），免登录，各用户挂载点完全隔离
 - **访客模式**：无需登录即可浏览公开目录和内置文件
-- **游客限制**：最多挂载 1 个目录，登录用户不限
 - **公开目录**：游客挂载的目录自动设为 `public=true`
+- **Admin**：通过 `/admin` URL 访问，可读写宿主机挂载点
 
 ### 前端状态管理
 
@@ -466,7 +466,8 @@ const state = {
   editorMode: 'ir',         // 编辑器模式 (ir | sv | wysiwyg)
   dirty: false,             // 是否有未保存修改
   searchResults: [],        // 搜索结果
-  recentFiles: [],          // 最近修改文件
+  recentFiles: [],          // 最近访问文件
+  accessLog: {},            // 访问日志 { "mountId:path": timestamp }，localStorage 持久化
   showSettings: false,      // 是否显示设置页
 };
 ```

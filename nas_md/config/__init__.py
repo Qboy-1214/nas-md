@@ -33,8 +33,8 @@ class Config:
     api_url: str = ""
     app_url: str = ""
     server_cert_dir: str = ""
-    tokens_dir: str = "./tokens"
-    tokens_salt: str = ""
+    tokens_dir: str = "./tokens"  # Telegram Bot 令牌存储（Web 模式未使用）
+    tokens_salt: str = ""  # Telegram Bot 令牌盐值（Web 模式未使用）
     server_log_file: str = ""
     storage_quota_kb: int = 1024  # 1MB
     unlimited_quota_ids: str = ""

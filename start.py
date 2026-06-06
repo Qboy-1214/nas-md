@@ -41,7 +41,7 @@ def setup_env():
         "WEB_HOST": WEB_HOST,
         "WEB_ROOT": str(BASE_DIR / "web"),
         "STORAGE_DIR": str(BASE_DIR / "storage"),
-        "TOKENS_DIR": str(BASE_DIR / "tokens"),
+        "TOKENS_DIR": str(BASE_DIR / "tokens"),  # Telegram Bot 令牌存储（Web 模式未使用）
         "MOUNT_DIRS": MOUNT_DIRS,
     }
     for key, value in defaults.items():
@@ -120,7 +120,7 @@ def run_server():
     """启动 web 服务器"""
     # 确保存储目录存在
     storage_dir = os.environ.get("STORAGE_DIR", str(BASE_DIR / "storage"))
-    tokens_dir = os.environ.get("TOKENS_DIR", str(BASE_DIR / "tokens"))
+    tokens_dir = os.environ.get("TOKENS_DIR", str(BASE_DIR / "tokens"))  # Telegram Bot（Web 模式未使用）
     os.makedirs(storage_dir, exist_ok=True)
     os.makedirs(tokens_dir, exist_ok=True)
 
