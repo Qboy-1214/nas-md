@@ -120,7 +120,9 @@ def run_server():
     """启动 web 服务器"""
     # 确保存储目录存在
     storage_dir = os.environ.get("STORAGE_DIR", str(BASE_DIR / "storage"))
-    tokens_dir = os.environ.get("TOKENS_DIR", str(BASE_DIR / "tokens"))  # Telegram Bot（Web 模式未使用）
+    tokens_dir = os.environ.get(
+        "TOKENS_DIR", str(BASE_DIR / "tokens")
+    )  # Telegram Bot（Web 模式未使用）
     os.makedirs(storage_dir, exist_ok=True)
     os.makedirs(tokens_dir, exist_ok=True)
 
