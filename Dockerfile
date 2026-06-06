@@ -21,7 +21,8 @@ RUN mkdir -p /app/storage /app/tokens && chown -R app:app /app
 # tokens: Telegram Bot 令牌存储（Web 模式未使用）
 VOLUME ["/app/storage", "/app/tokens"]
 
-USER app
+# Run as root to access host-mounted directories with arbitrary ownership
+# USER app
 
 EXPOSE 8080
 
