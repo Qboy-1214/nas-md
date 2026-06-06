@@ -1689,6 +1689,7 @@ def serve(
     logger.info(f"  Static files: http://localhost:{port}/")
 
     try:
+        server.timeout = 0.5  # Allow Ctrl+C on Windows (select() won't block indefinitely)
         server.serve_forever()
     except KeyboardInterrupt:
         logger.info("Server stopped.")
