@@ -843,96 +843,8 @@ a:hover {
   padding: var(--s-section);
   max-width: 640px;
   margin: 0 auto;
-  min-height: 100%;
+  height: 100%;
   overflow-y: auto;
-}
-
-/* Hero */
-.welcome-hero {
-  text-align: center;
-  padding: var(--s-xxxl) 0 var(--s-section-sm);
-}
-
-.welcome-logo {
-  font-size: var(--f-h1);
-  font-weight: var(--fw-semibold);
-  color: var(--c-ink);
-  letter-spacing: var(--ls-h1);
-  margin-bottom: var(--s-xs);
-  background: none;
-  -webkit-text-fill-color: initial;
-}
-
-.welcome-subtitle {
-  font-size: var(--f-subtitle);
-  font-weight: var(--fw-regular);
-  color: var(--c-steel);
-  margin-bottom: var(--s-md);
-}
-
-.welcome-desc {
-  font-size: var(--f-body-sm);
-  color: var(--c-muted);
-  line-height: var(--lh-body);
-  max-width: 420px;
-  margin: 0 auto;
-}
-
-/* Quick Actions */
-.quick-actions {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--s-sm);
-  margin-bottom: var(--s-section-sm);
-}
-
-.quick-action-card {
-  background: var(--c-canvas);
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-lg);
-  padding: var(--s-lg);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-sm);
-}
-
-.quick-action-card:hover {
-  border-color: var(--c-hairline-strong);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
-}
-
-.quick-action-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.quick-action-icon.tint-sky {
-  background: var(--c-tint-sky);
-}
-.quick-action-icon.tint-mint {
-  background: var(--c-tint-mint);
-}
-.quick-action-icon.tint-lavender {
-  background: var(--c-tint-lavender);
-}
-
-.quick-action-title {
-  font-size: var(--f-body-sm);
-  font-weight: var(--fw-semibold);
-  color: var(--c-ink);
-}
-
-.quick-action-desc {
-  font-size: var(--f-caption);
-  color: var(--c-steel);
-  line-height: var(--lh-caption);
 }
 
 /* Section Labels */
@@ -967,29 +879,6 @@ a:hover {
 }
 
 .open-dir-input {
-  flex: 2;
-  height: var(--input-h);
-  padding: var(--s-sm) var(--s-md);
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-md);
-  font-size: var(--f-body-sm);
-  background: var(--c-canvas);
-  color: var(--c-ink);
-  outline: none;
-  transition: border-color 0.15s ease;
-  font-family: var(--font-mono);
-  cursor: pointer;
-}
-
-.open-dir-input:focus {
-  border: 2px solid var(--c-primary);
-  padding: 11px 15px;
-}
-.open-dir-input::placeholder {
-  color: var(--c-muted);
-}
-
-.open-dir-name-input {
   flex: 1;
   height: var(--input-h);
   padding: var(--s-sm) var(--s-md);
@@ -1000,11 +889,15 @@ a:hover {
   color: var(--c-ink);
   outline: none;
   transition: border-color 0.15s ease;
+  font-family: var(--font-mono);
 }
 
-.open-dir-name-input:focus {
+.open-dir-input:focus {
   border: 2px solid var(--c-primary);
   padding: 11px 15px;
+}
+.open-dir-input::placeholder {
+  color: var(--c-muted);
 }
 
 .open-dir-hint {
@@ -1559,26 +1452,12 @@ a:hover {
   color: #818cf8;
 }
 
-/* Dark mode pastel tints */
-.dark .quick-action-icon.tint-sky {
-  background: rgba(220, 236, 250, 0.15);
-}
-.dark .quick-action-icon.tint-mint {
-  background: rgba(217, 243, 225, 0.15);
-}
-.dark .quick-action-icon.tint-lavender {
-  background: rgba(230, 224, 245, 0.15);
-}
-
 /* === Responsive === */
 
 /* Tablet: 768px – 1023px */
 @media (max-width: 1023px) {
   :root {
     --sidebar-w: 200px;
-  }
-  .quick-actions {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -1609,22 +1488,11 @@ a:hover {
   .welcome-page {
     padding: var(--s-lg);
   }
-  .welcome-hero {
-    padding: var(--s-xl) 0 var(--s-lg);
-  }
-  .welcome-logo {
-    font-size: var(--f-h3);
-  }
-
-  .quick-actions {
-    grid-template-columns: 1fr;
-  }
 
   .open-dir-input-group {
     flex-direction: column;
   }
-  .open-dir-input,
-  .open-dir-name-input {
+  .open-dir-input {
     flex: none;
   }
 
@@ -1698,16 +1566,6 @@ a:hover {
   --shadow-sm: rgba(0, 0, 0, 0.2) 0px 1px 2px;
   --shadow-md: rgba(0, 0, 0, 0.3) 0px 4px 12px;
   --shadow-lg: rgba(0, 0, 0, 0.4) 0px 8px 24px;
-}
-
-.dark .quick-action-icon.tint-sky {
-  background: rgba(220, 236, 250, 0.15);
-}
-.dark .quick-action-icon.tint-mint {
-  background: rgba(217, 243, 225, 0.15);
-}
-.dark .quick-action-icon.tint-lavender {
-  background: rgba(230, 224, 245, 0.15);
 }
 
 /* === Vditor Light Mode Variables === */
@@ -2156,8 +2014,5 @@ a:hover {
 @media (min-width: 768px) and (max-width: 1023px) {
   :root {
     --sidebar-w: 200px;
-  }
-  .quick-actions {
-    grid-template-columns: repeat(2, 1fr);
   }
 }

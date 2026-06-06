@@ -166,23 +166,17 @@ function onDirPicked(event) {
   }
 
   // 方式2：webkitRelativePath（标准属性，所有浏览器支持）
-  // 格式为 "目录名/子目录/文件名"，最前面的部分就是所选目录名
   if (!fullPath && f.webkitRelativePath) {
     dirName = f.webkitRelativePath.split('/')[0];
   }
 
   if (fullPath) {
-    // 拿到完整路径，直接填入
     $('new-dir-path').value = fullPath;
   } else {
-    // 浏览器安全限制下无法获取完整路径（Edge/Firefox）
-    // 尝试让后端搜索匹配的目录
     const dirName = f.webkitRelativePath ? f.webkitRelativePath.split('/')[0] : '';
     if (dirName) {
       $('new-dir-path').value = '';
       $('new-dir-path').placeholder = `正在定位 "${dirName}"...`;
-      $('new-dir-name').value = dirName;
-      // 后端搜索目录
       API.findMountPath(dirName)
         .then((result) => {
           if (result && result.path) {
@@ -201,31 +195,22 @@ function onDirPicked(event) {
     }
   }
 
-  // 自动填入显示名称
-  if (dirName && !$('new-dir-name').value.trim()) {
-    $('new-dir-name').value = dirName;
-  }
-
-  // 聚焦路径输入框
   $('new-dir-path').focus();
-
-  // 重置 input，避免同一目录重复选择不触发 onchange
   event.target.value = '';
 }
 
 async function openDirectory() {
   const dirPath = $('new-dir-path').value.trim();
   if (!dirPath) {
-    showToast('请点击输入框选择目录，或手动输入路径');
+    showToast('请输入目录路径或点击浏览选择');
     return;
   }
   try {
-    const resp = await API.addMount(dirPath, $('new-dir-name').value.trim());
+    const resp = await API.addMount(dirPath, '');
     if (resp && resp.id) {
       showToast(`已挂载: ${resp.name || resp.path}`);
       $('new-dir-path').value = '';
-      $('new-dir-name').value = '';
-      $('new-dir-path').placeholder = '输入目录路径，或点击浏览选择';
+      $('new-dir-path').placeholder = '输入目录路径';
       await loadMounts();
     } else {
       const errMsg = resp?.error || '';
