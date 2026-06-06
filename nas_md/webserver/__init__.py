@@ -269,8 +269,7 @@ class MountManager:
     def add_mount(self, path: str, name: str | None = None, owner: str = "") -> MountEntry:
         """Add a new mount point at runtime."""
         path = os.path.abspath(path.strip())
-        # In Docker mode, skip directory validation (container FS differs from host)
-        if not _docker_mode and not os.path.isdir(path):
+        if not os.path.isdir(path):
             return None
         # Check for duplicates
         for m in self.mounts:
@@ -844,6 +843,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if not os.path.isfile(abs_path):
             logger.warning(f"File API: file not found at abs_path={abs_path}")
             return self._send_error("File not found", 404)
+        logger.info(f"File API: serving {abs_path} ({os.path.getsize(abs_path)} bytes)")
         ct = _content_type(abs_path)
         try:
             with open(abs_path, "rb") as f:

@@ -144,14 +144,14 @@ async function loadMounts() {
   try {
     state.mounts = await API.getMounts();
     renderSidebar();
-    // Docker mode: hide browse button and show hint
+    // Docker mode: hide browse button and update placeholder
     if (state.dockerMode) {
       const browseBtn = document.querySelector('.browse-btn');
       const dirPicker = $('dir-picker');
       const dirInput = $('new-dir-path');
       if (browseBtn) browseBtn.style.display = 'none';
       if (dirPicker) dirPicker.style.display = 'none';
-      if (dirInput) dirInput.placeholder = 'Docker 模式下请通过 compose.yaml 配置挂载';
+      if (dirInput) dirInput.placeholder = '输入容器内路径，如 /mnt/docs';
     }
   } catch (_e) {
     showToast('加载挂载点失败');
@@ -218,7 +218,7 @@ function onDirPicked(event) {
 async function openDirectory() {
   const dirPath = $('new-dir-path').value.trim();
   if (!dirPath) {
-    showToast('请输入目录路径或点击浏览选择');
+    showToast(state.dockerMode ? '请输入容器内目录路径' : '请输入目录路径或点击浏览选择');
     return;
   }
   try {
@@ -226,12 +226,12 @@ async function openDirectory() {
     if (resp && resp.id) {
       showToast(`已挂载: ${resp.name || resp.path}`);
       $('new-dir-path').value = '';
-      $('new-dir-path').placeholder = '输入目录路径';
+      $('new-dir-path').placeholder = state.dockerMode ? '输入容器内路径，如 /mnt/docs' : '输入目录路径';
       await loadMounts();
     } else {
       const errMsg = resp?.error || '';
       if (errMsg.includes('Not a valid directory')) {
-        showToast('目录不存在，请检查路径是否正确');
+        showToast(state.dockerMode ? '目录不存在，请确认容器内路径是否正确（需在 compose.yaml 中配置 volumes）' : '目录不存在，请检查路径是否正确');
       } else {
         showToast('挂载失败: ' + errMsg);
       }
