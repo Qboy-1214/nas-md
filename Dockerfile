@@ -10,6 +10,7 @@ COPY nas_md/ ./nas_md/
 # --- runtime stage ---
 FROM python:3.13-slim AS runtime
 RUN groupadd -g 1000 app && useradd -m -u 1000 -g app app
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

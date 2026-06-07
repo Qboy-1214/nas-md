@@ -10,7 +10,9 @@ import mimetypes
 import os
 import shutil
 import socket
+import ssl
 import stat
+import subprocess
 import time
 import traceback
 import uuid
@@ -1737,7 +1739,9 @@ def serve(
     # Initialize search index
     _init_search_index(all_dirs)
 
-    server = _create_server(host, port, MountHTTPHandler)
+    # In Docker mode, enable HTTPS with self-signed cert for LAN access
+    cert_dir = os.path.join(storage_dir, "certs") if _docker_mode and storage_dir else ""
+    server = _create_server(host, port, MountHTTPHandler, cert_dir=cert_dir)
 
     mounts_str = (
         ", ".join(f"{m.name} ({m.id})={m.path}" for m in mgr.mounts)
@@ -1745,7 +1749,8 @@ def serve(
         else "(none)"
     )
     web_str = web_root if web_root else "(none)"
-    logger.info(f"Starting HTTP server on {host}:{port}")
+    protocol = "HTTPS" if cert_dir else "HTTP"
+    logger.info(f"Starting {protocol} server on {host}:{port}")
     logger.info(f"  Mount points: {mounts_str}")
     logger.info(f"  Web root: {web_str}")
     logger.info("  Admin: access via /admin URL path")
@@ -1769,7 +1774,7 @@ def serve(
     logger.info("    PUT  /api/mounts/{id}/rename?oldPath=/a.md&newPath=/b.md")
     logger.info("    PUT  /api/mounts/{id}/mkdir?path=/newdir")
     logger.info("    DELETE /api/mounts/{id}/file?path=/file.md")
-    logger.info(f"  Static files: http://localhost:{port}/")
+    logger.info(f"  Static files: {'https' if cert_dir else 'http'}://localhost:{port}/")
 
     try:
         server.timeout = 0.5  # Allow Ctrl+C on Windows (select() won't block indefinitely)
@@ -1779,8 +1784,87 @@ def serve(
         server.server_close()
 
 
-def _create_server(host: str, port: int, handler: type) -> HTTPServer:
-    """Create HTTPServer with SO_REUSEADDR to avoid port-in-use errors on restart."""
+def _generate_self_signed_cert(cert_dir: str) -> tuple[str, str]:
+    """Generate a self-signed SSL certificate for LAN HTTPS access.
+
+    Returns (cert_path, key_path).
+    """
+    cert_path = os.path.join(cert_dir, "nas-md.crt")
+    key_path = os.path.join(cert_dir, "nas-md.key")
+    if os.path.isfile(cert_path) and os.path.isfile(key_path):
+        logger.info(f"Reusing existing certificate: {cert_path}")
+        return cert_path, key_path
+
+    os.makedirs(cert_dir, exist_ok=True)
+    logger.info(f"Generating self-signed certificate in {cert_dir}...")
+
+    # Try openssl first (available in Docker)
+    try:
+        subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", key_path, "-out", cert_path,
+                "-days", "3650", "-nodes",
+                "-subj", "/CN=nas-md",
+                "-addext", "subjectAltName=IP:0.0.0.0",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        logger.info("Certificate generated with openssl")
+        return cert_path, key_path
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        logger.info(f"openssl not available or failed ({e}), using Python ssl module")
+
+    # Fallback: generate with Python's ssl module
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        import datetime
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "nas-md")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime.utcnow())
+            .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=3650))
+            .add_extension(
+                x509.SubjectAlternativeName([x509.IPAddress(socket.inet_aton("0.0.0.0"))]),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+
+        with open(cert_path, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+        with open(key_path, "wb") as f:
+            f.write(key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption(),
+            ))
+        logger.info("Certificate generated with cryptography library")
+        return cert_path, key_path
+    except ImportError:
+        logger.warning("cryptography library not available either")
+
+    # Last resort: create a minimal cert using ssl module (no SAN, browsers may reject)
+    logger.warning("Generating minimal certificate (no SAN extension)")
+    import tempfile
+    # Python's ssl module can't generate certs; we need openssl or cryptography
+    # If we reach here, just skip HTTPS
+    raise RuntimeError("Cannot generate SSL certificate: neither openssl nor cryptography available")
+
+
+def _create_server(host: str, port: int, handler: type, cert_dir: str = "") -> HTTPServer:
+    """Create HTTPServer with SO_REUSEADDR. If cert_dir is provided, enable HTTPS."""
 
     class ReusableHTTPServer(HTTPServer):
         allow_reuse_address = True
@@ -1790,11 +1874,24 @@ def _create_server(host: str, port: int, handler: type) -> HTTPServer:
             super().server_bind()
 
     try:
-        return ReusableHTTPServer((host, port), handler)
+        server = ReusableHTTPServer((host, port), handler)
     except OSError as e:
         logger.error("Failed to bind %s:%s — %s", host, port, e)
         logger.error("Port may be in use. Try: netstat -ano | findstr %s", port)
         raise SystemExit(1) from e
+
+    # Enable HTTPS if cert_dir is provided
+    if cert_dir:
+        try:
+            cert_path, key_path = _generate_self_signed_cert(cert_dir)
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(cert_path, key_path)
+            server.socket = ctx.wrap_socket(server.socket, server_side=True)
+            logger.info("HTTPS enabled with self-signed certificate")
+        except Exception as e:
+            logger.warning(f"Failed to enable HTTPS, falling back to HTTP: {e}")
+
+    return server
 
 
 def _init_search_index(mount_dirs: list[str]) -> None:
