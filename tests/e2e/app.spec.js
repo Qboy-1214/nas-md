@@ -31,7 +31,8 @@ test.describe('应用加载', () => {
     await page.goto('/admin');
     await page.locator('.sidebar-footer').getByText('挂载').click();
     await expect(page.locator('#welcome-page')).toBeVisible();
-    await expect(page.locator('#new-dir-path')).toBeVisible();
+    // Browse button for mounting local directory
+    await expect(page.locator('.browse-btn')).toBeVisible();
   });
 });
 
