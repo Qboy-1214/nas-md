@@ -36,7 +36,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const cfg = await API.getConfig();
     if (cfg) state.dockerMode = cfg.docker_mode === true;
-  } catch (_e) { /* ignore */ }
+  } catch (_e) {
+    /* ignore */
+  }
   await loadMounts();
   await loadRecentFiles();
   // Restore last opened file, or fall back to welcome.md
@@ -223,7 +225,9 @@ async function readLocalDir(dirHandle, parentPath) {
         const subResult = await readLocalDir(subHandle, entryPath);
         subChildren.push(...(subResult.children || []));
         hasMd = subResult.hasMd || false;
-      } catch (_e) { /* skip unreadable dirs */ }
+      } catch (_e) {
+        /* skip unreadable dirs */
+      }
       // Only include dirs that contain .md files
       if (hasMd) {
         children.push({
@@ -322,7 +326,6 @@ function onDirPicked(event) {
   if (!files || files.length === 0) return;
 
   let fullPath = null;
-  let dirName = '';
 
   // 方式1：files[0].path（Chrome/Edge 桌面版非标准属性）
   const f = files[0];
@@ -330,11 +333,6 @@ function onDirPicked(event) {
     const p = f.path;
     const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
     if (idx > 0) fullPath = p.substring(0, idx);
-  }
-
-  // 方式2：webkitRelativePath（标准属性，所有浏览器支持）
-  if (!fullPath && f.webkitRelativePath) {
-    dirName = f.webkitRelativePath.split('/')[0];
   }
 
   if (fullPath) {
@@ -377,12 +375,18 @@ async function openDirectory() {
     if (resp && resp.id) {
       showToast(`已挂载: ${resp.name || resp.path}`);
       $('new-dir-path').value = '';
-      $('new-dir-path').placeholder = state.dockerMode ? '输入容器内路径，如 /mnt/docs' : '输入目录路径';
+      $('new-dir-path').placeholder = state.dockerMode
+        ? '输入容器内路径，如 /mnt/docs'
+        : '输入目录路径';
       await loadMounts();
     } else {
       const errMsg = resp?.error || '';
       if (errMsg.includes('Not a valid directory')) {
-        showToast(state.dockerMode ? '目录不存在，请确认容器内路径是否正确（需在 compose.yaml 中配置 volumes）' : '目录不存在，请检查路径是否正确');
+        showToast(
+          state.dockerMode
+            ? '目录不存在，请确认容器内路径是否正确（需在 compose.yaml 中配置 volumes）'
+            : '目录不存在，请检查路径是否正确',
+        );
       } else {
         showToast('挂载失败: ' + errMsg);
       }
