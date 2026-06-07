@@ -171,7 +171,13 @@ function chooseDirectory() {
   if (window.showDirectoryPicker) {
     mountLocalDirectory();
   } else {
-    showToast('当前浏览器不支持选择本机目录，请使用 Chrome/Edge 浏览器');
+    // Fallback: use <input webkitdirectory> (works in non-secure contexts)
+    const picker = document.getElementById('dir-picker');
+    if (picker) {
+      picker.click();
+    } else {
+      showToast('当前浏览器不支持选择本机目录，请使用 Chrome/Edge 浏览器');
+    }
   }
 }
 
@@ -263,6 +269,13 @@ async function readLocalFile(mountId, path) {
   const localMount = state.localMounts[mountId];
   if (!localMount) return null;
   try {
+    // Fallback mode: read from File object stored in fileMap
+    if (localMount.fileMap) {
+      const file = localMount.fileMap[path];
+      if (!file) return null;
+      return await file.text();
+    }
+    // Primary mode: read via FileSystemDirectoryHandle
     const handle = await getLocalFileHandle(localMount.handle, path);
     if (!handle) return null;
     const file = await handle.getFile();
@@ -325,42 +338,102 @@ function onDirPicked(event) {
   const files = event.target.files;
   if (!files || files.length === 0) return;
 
-  let fullPath = null;
+  // Build a local mount from the file list (fallback when showDirectoryPicker is unavailable)
+  const firstFile = files[0];
+  const dirName = firstFile.webkitRelativePath
+    ? firstFile.webkitRelativePath.split('/')[0]
+    : '本机目录';
+  const mountId = 'local-' + Date.now();
 
-  // 方式1：files[0].path（Chrome/Edge 桌面版非标准属性）
-  const f = files[0];
-  if (f.path) {
-    const p = f.path;
-    const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-    if (idx > 0) fullPath = p.substring(0, idx);
+  // Build tree from flat file list
+  const root = { name: dirName, path: '/', isDir: true, children: [], hasMd: false };
+  const dirMap = { '/': root };
+
+  for (const file of files) {
+    const relPath = file.webkitRelativePath; // e.g. "mydir/sub/file.md"
+    if (!relPath) continue;
+    const parts = relPath.split('/');
+    // Only include .md files
+    const fileName = parts[parts.length - 1];
+    if (!fileName.toLowerCase().endsWith('.md')) continue;
+
+    // Ensure all parent directories exist in the tree
+    let currentPath = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      const parentPath = currentPath;
+      currentPath = currentPath + '/' + parts[i];
+      if (!dirMap[currentPath]) {
+        const dirEntry = {
+          name: parts[i],
+          path: currentPath,
+          isDir: true,
+          children: [],
+          hasMd: false,
+        };
+        dirMap[currentPath] = dirEntry;
+        const parent = dirMap[parentPath] || root;
+        parent.children.push(dirEntry);
+      }
+    }
+    // Add file entry
+    const filePath = currentPath + '/' + fileName;
+    const parentDir = dirMap[currentPath] || root;
+    parentDir.children.push({
+      name: fileName,
+      path: filePath,
+      isDir: false,
+      hasMd: true,
+      size: file.size,
+      modTime: file.lastModified,
+    });
+    // Mark all ancestors as having .md
+    let markPath = currentPath;
+    while (markPath) {
+      if (dirMap[markPath]) dirMap[markPath].hasMd = true;
+      const idx = markPath.lastIndexOf('/');
+      markPath = idx > 0 ? markPath.substring(0, idx) : '';
+    }
+    root.hasMd = true;
   }
 
-  if (fullPath) {
-    $('new-dir-path').value = fullPath;
-  } else {
-    const dirName = f.webkitRelativePath ? f.webkitRelativePath.split('/')[0] : '';
-    if (dirName) {
-      $('new-dir-path').value = '';
-      $('new-dir-path').placeholder = `正在定位 "${dirName}"...`;
-      API.findMountPath(dirName)
-        .then((result) => {
-          if (result && result.path) {
-            $('new-dir-path').value = result.path;
-            showToast(`已定位: ${result.path}`);
-          } else {
-            $('new-dir-path').placeholder =
-              `无法自动定位，请输入完整路径（如 D:\\xxx\\${dirName}）`;
-            showToast(`无法自动定位 "${dirName}"，请手动输入完整路径`);
-          }
-        })
-        .catch(() => {
-          $('new-dir-path').placeholder = `无法自动定位，请输入完整路径（如 D:\\xxx\\${dirName}）`;
-          showToast(`无法自动定位 "${dirName}"，请手动输入完整路径`);
-        });
+  // Sort children: dirs first, then files
+  function sortChildren(entry) {
+    if (!entry.children) return;
+    entry.children.sort((a, b) => {
+      if (a.isDir && !b.isDir) return -1;
+      if (!a.isDir && b.isDir) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    entry.children.forEach(sortChildren);
+  }
+  sortChildren(root);
+
+  // Store file references for reading later
+  const fileMap = {};
+  for (const file of files) {
+    if (file.webkitRelativePath) {
+      const parts = file.webkitRelativePath.split('/');
+      const filePath = '/' + parts.slice(1).join('/');
+      fileMap[filePath] = file;
     }
   }
 
-  $('new-dir-path').focus();
+  state.localMounts[mountId] = { fileMap, name: dirName };
+  state.mounts.push({
+    id: mountId,
+    name: dirName,
+    path: '本机: ' + dirName,
+    public: false,
+    readonly: true, // webkitdirectory only provides read access
+    host: false,
+    owner: 'local',
+    _local: true,
+    _fallback: true, // flag: no write support
+  });
+  state.treeData[mountId] = { '/': root };
+
+  showToast(`已挂载本机目录: ${dirName}（只读）`);
+  renderSidebar();
   event.target.value = '';
 }
 
@@ -444,6 +517,8 @@ async function loadTree(mountId, path) {
   // Local mount: load via File System Access API
   const mount = state.mounts.find((m) => m.id === mountId);
   if (mount && mount._local && state.localMounts[mountId]) {
+    // Fallback mode: tree already built by onDirPicked, nothing to load
+    if (state.localMounts[mountId].fileMap) return;
     try {
       const localMount = state.localMounts[mountId];
       const dirHandle = await getLocalDirHandle(localMount.handle, path);
