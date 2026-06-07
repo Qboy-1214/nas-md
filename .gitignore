@@ -4,7 +4,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .env
-storage/
+storage/mounts.json
 storage-test-e2e/
 tokens/
 *.db

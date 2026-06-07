@@ -35,8 +35,8 @@ ENV MOUNT_DIRS=""
 ENV WEB_PORT=8080
 ENV DOCKER_MODE=1
 
-# Create default storage files (e.g. 欢迎.md) so they survive volume mount
-RUN mkdir -p /app/storage-default && printf '# 欢迎\n\n欢迎使用 nas-md！\n' > /app/storage-default/欢迎.md
+# Copy default storage files (e.g. 欢迎.md) so they survive volume mount
+COPY storage/ /app/storage-default/
 
 ENTRYPOINT ["python3", "-m", "nas_md.cli"]
 CMD ["web"]
