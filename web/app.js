@@ -149,12 +149,14 @@ async function loadMounts() {
   try {
     state.mounts = await API.getMounts();
     renderSidebar();
-    // Docker mode: update placeholder hint for manual input, change browse button text
+    // Docker mode: hide input and mount button, change browse button text
     if (state.dockerMode) {
       const dirInput = $('new-dir-path');
       const browseBtn = document.querySelector('.browse-btn');
-      if (dirInput) dirInput.placeholder = '输入容器内路径，如 /mnt/docs';
-      if (browseBtn) browseBtn.textContent = '本机…';
+      const mountBtn = document.querySelector('.primary-btn');
+      if (dirInput) dirInput.style.display = 'none';
+      if (mountBtn) mountBtn.style.display = 'none';
+      if (browseBtn) browseBtn.textContent = '挂载本机目录…';
     }
   } catch (_e) {
     showToast('加载挂载点失败');
