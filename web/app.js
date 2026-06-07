@@ -149,15 +149,13 @@ async function loadMounts() {
   try {
     state.mounts = await API.getMounts();
     renderSidebar();
-    // Docker mode: hide input and mount button, change browse button text
-    if (state.dockerMode) {
-      const dirInput = $('new-dir-path');
-      const browseBtn = document.querySelector('.browse-btn');
-      const mountBtn = document.querySelector('.primary-btn');
-      if (dirInput) dirInput.style.display = 'none';
-      if (mountBtn) mountBtn.style.display = 'none';
-      if (browseBtn) browseBtn.textContent = '挂载本机目录…';
-    }
+    // Hide input and mount button; browse button uses File System Access API
+    const dirInput = $('new-dir-path');
+    const browseBtn = document.querySelector('.browse-btn');
+    const mountBtn = document.querySelector('.primary-btn');
+    if (dirInput) dirInput.style.display = 'none';
+    if (mountBtn) mountBtn.style.display = 'none';
+    if (browseBtn) browseBtn.textContent = '挂载本机目录…';
   } catch (_e) {
     showToast('加载挂载点失败');
   } finally {
@@ -168,16 +166,11 @@ async function loadMounts() {
 // === 目录选择 ===
 
 function chooseDirectory() {
-  // Docker mode: use File System Access API (showDirectoryPicker)
-  if (state.dockerMode) {
-    if (window.showDirectoryPicker) {
-      mountLocalDirectory();
-    } else {
-      showToast('当前浏览器不支持选择本机目录，请使用 Chrome/Edge 浏览器');
-    }
-    return;
+  if (window.showDirectoryPicker) {
+    mountLocalDirectory();
+  } else {
+    showToast('当前浏览器不支持选择本机目录，请使用 Chrome/Edge 浏览器');
   }
-  $('dir-picker').click();
 }
 
 async function mountLocalDirectory() {
