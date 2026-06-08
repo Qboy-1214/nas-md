@@ -117,6 +117,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (welcome) openFile(welcome.path, builtin.id);
     }
   }
+
+  // Start sidebar auto-refresh (pause when tab is hidden)
+  startSidebarRefresh();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      stopSidebarRefresh();
+    } else {
+      refreshTree();
+      startSidebarRefresh();
+    }
+  });
 });
 
 // === UI 更新 ===
@@ -1400,13 +1411,49 @@ function collectFileMtimes(entries, files) {
 }
 
 async function refreshTree() {
-  if (!state.currentMountId) return;
-  try {
-    const tree = await API.getTree(state.currentMountId, '/');
-    state.treeData[state.currentMountId + ':/'] = tree.children || [];
-    renderFileTree();
-  } catch (e) {
-    console.error('Refresh tree failed:', e);
+  // Refresh all expanded mount trees by clearing cache and reloading
+  const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
+  let changed = false;
+  for (const mountId of expandedMountIds) {
+    // Collect expanded dir paths for this mount
+    const expandedDirs = state.expandedMounts
+      .filter((k) => k.startsWith(mountId + ':'))
+      .map((k) => k.substring(mountId.length + 1));
+    expandedDirs.push('/'); // always refresh root
+    for (const dirPath of expandedDirs) {
+      const oldChildren = state.treeData[mountId]?.[dirPath];
+      // Force reload by clearing cache
+      if (state.treeData[mountId]) {
+        delete state.treeData[mountId][dirPath];
+      }
+      await loadTree(mountId, dirPath);
+      const newChildren = state.treeData[mountId]?.[dirPath];
+      // Quick check if tree changed
+      if (oldChildren && newChildren) {
+        const oldNames = (oldChildren.children || []).map((e) => e.name).sort().join(',');
+        const newNames = (newChildren.children || []).map((e) => e.name).sort().join(',');
+        if (oldNames !== newNames) changed = true;
+      } else if (!oldChildren !== !newChildren) {
+        changed = true;
+      }
+    }
+  }
+  if (changed) renderSidebar();
+}
+
+// === Sidebar auto-refresh ===
+let _sidebarRefreshTimer = null;
+const SIDEBAR_REFRESH_INTERVAL = 5000; // 5 seconds
+
+function startSidebarRefresh() {
+  if (_sidebarRefreshTimer) return;
+  _sidebarRefreshTimer = setInterval(refreshTree, SIDEBAR_REFRESH_INTERVAL);
+}
+
+function stopSidebarRefresh() {
+  if (_sidebarRefreshTimer) {
+    clearInterval(_sidebarRefreshTimer);
+    _sidebarRefreshTimer = null;
   }
 }
 
