@@ -43,6 +43,7 @@ export default [
         history: "readonly",
         location: "readonly",
         alert: "readonly",
+        prompt: "readonly",
         // Third-party libraries
         Alpine: "readonly",
         Vditor: "readonly",

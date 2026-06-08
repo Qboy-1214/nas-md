@@ -809,6 +809,7 @@ async function createItem(mountId, dirPath, kind) {
     return;
   }
   const label = kind === 'folder' ? '文件夹名称' : '文件名称（无需输入 .md 后缀）';
+  // eslint-disable-next-line no-undef
   const name = prompt(label);
   if (!name || !name.trim()) return;
 
@@ -820,10 +821,10 @@ async function createItem(mountId, dirPath, kind) {
     });
     const headers = {};
     if (state.isAdmin) headers['X-Admin'] = '1';
-    const resp = await fetch(
-      `${_apiBase}/api/mounts/${mountId}/create?${params}`,
-      { method: 'POST', headers },
-    );
+    const resp = await fetch(`${_apiBase}/api/mounts/${mountId}/create?${params}`, {
+      method: 'POST',
+      headers,
+    });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
       if (resp.status === 409) {
