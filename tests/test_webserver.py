@@ -109,7 +109,9 @@ def _get(url: str) -> tuple[int, str, dict]:
         return e.code, body, {}
 
 
-def _post(url: str, data: dict | None = None, content_type: str = "application/json") -> tuple[int, str]:
+def _post(
+    url: str, data: dict | None = None, content_type: str = "application/json"
+) -> tuple[int, str]:
     """Send POST request, return (status, body_text)."""
     import urllib.request
 
@@ -181,9 +183,7 @@ class TestSyncRoute:
 class TestFileRoute:
     def test_get_file_returns_content(self, server_url):
         """GET /api/mounts/{id}/file must return file content."""
-        status, body, _headers = _get(
-            f"{server_url}/api/mounts/builtin-storage/file?path=/test.md"
-        )
+        status, body, _headers = _get(f"{server_url}/api/mounts/builtin-storage/file?path=/test.md")
         assert status == 200
         assert "Hello" in body
 
