@@ -910,7 +910,7 @@ function startDirtyCheck() {
 }
 
 // === Auto-save ===
-state.autoSave = localStorage.getItem('nasmd_autosave') === '1';
+state.autoSave = localStorage.getItem('nasmd_autosave') !== '0';
 
 function toggleAutoSave(on) {
   state.autoSave = on;

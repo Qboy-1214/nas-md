@@ -1168,6 +1168,31 @@ a:hover {
 /* Vditor toolbar tooltips are handled by Vditor's built-in CSS (vditor-tooltipped class + aria-label attr) */
 /* We only override colors for dark mode compatibility */
 
+/* Dark mode: ensure Vditor toolbar tooltips are visible */
+.dark .vditor-tooltipped::after {
+  background: #3b3e43 !important;
+  color: #fff !important;
+}
+.dark .vditor-tooltipped::before {
+  border-bottom-color: #3b3e43 !important;
+}
+.dark .vditor-tooltipped__s::before,
+.dark .vditor-tooltipped__se::before,
+.dark .vditor-tooltipped__sw::before {
+  border-top-color: #3b3e43 !important;
+}
+.dark .vditor-tooltipped__n::before,
+.dark .vditor-tooltipped__ne::before,
+.dark .vditor-tooltipped__nw::before {
+  border-bottom-color: #3b3e43 !important;
+}
+.dark .vditor-tooltipped__w::before {
+  border-right-color: #3b3e43 !important;
+}
+.dark .vditor-tooltipped__e::before {
+  border-left-color: #3b3e43 !important;
+}
+
 /* Horizontal rule */
 .vditor-ir hr,
 .vditor-wysiwyg hr {

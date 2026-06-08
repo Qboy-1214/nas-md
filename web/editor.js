@@ -8,6 +8,70 @@ let _currentRelPath = null;
 let _originalContent = '';
 let _editorMode = 'ir';
 
+/**
+ * Rewrite relative image src to API path so images in mounted dirs display correctly.
+ * e.g. ![](photo.png) in /notes/readme.md → /api/mounts/{id}/file?path=/notes/photo.png
+ */
+function rewriteImageSrc(html) {
+  if (!_currentMountId) return html;
+  // Get the directory of the current file
+  const dir = _currentRelPath ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1) : '/';
+  return html.replace(/(<img\s+[^>]*src=")([^"]+)("[^>]*>)/g, (match, prefix, src, suffix) => {
+    // Skip absolute URLs, data URIs, and already-rewritten API paths
+    if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) {
+      return match;
+    }
+    // Resolve relative path against current file's directory
+    let resolved;
+    if (src.startsWith('/')) {
+      resolved = src;
+    } else {
+      resolved = dir + src;
+    }
+    // Normalize: remove ./ and ../
+    const parts = resolved.split('/');
+    const normalized = [];
+    for (const p of parts) {
+      if (p === '..') {
+        normalized.pop();
+      } else if (p !== '.' && p !== '') {
+        normalized.push(p);
+      }
+    }
+    const apiPath = '/api/mounts/' + _currentMountId + '/file?path=/' + normalized.join('/');
+    return prefix + apiPath + suffix;
+  });
+}
+
+// Also rewrite images in the editor area (IR/WYSIWYG) after rendering
+function rewriteEditorImages() {
+  if (!_currentMountId || !_vditor) return;
+  const dir = _currentRelPath ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1) : '/';
+  const vditorEl = document.getElementById('vditor');
+  if (!vditorEl) return;
+  // Target IR, WYSIWYG, and preview areas
+  const areas = vditorEl.querySelectorAll('.vditor-ir, .vditor-wysiwyg, .vditor-preview');
+  areas.forEach((area) => {
+    area.querySelectorAll('img').forEach((img) => {
+      const src = img.getAttribute('src') || '';
+      if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) return;
+      let resolved;
+      if (src.startsWith('/')) {
+        resolved = src;
+      } else {
+        resolved = dir + src;
+      }
+      const parts = resolved.split('/');
+      const normalized = [];
+      for (const p of parts) {
+        if (p === '..') normalized.pop();
+        else if (p !== '.' && p !== '') normalized.push(p);
+      }
+      img.src = '/api/mounts/' + _currentMountId + '/file?path=/' + normalized.join('/');
+    });
+  });
+}
+
 // State saved before mode switch, restored after reinit
 let _pendingRestore = null;
 // { headingText, scrollPercent, cursorViewportOffset, svCursorPos }
@@ -220,6 +284,7 @@ function initEditor(content, mode, readonly) {
         current: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
         path: '/lib/vditor-cdn/dist/css/content-theme',
       },
+      transform: (html) => rewriteImageSrc(html),
     },
     hint: {
       extend: [
@@ -286,21 +351,43 @@ function initEditor(content, mode, readonly) {
 
       // Add native title tooltips to all Vditor toolbar buttons
       // Vditor sets aria-label on buttons with vditor-tooltipped class
-      vditorEl.querySelectorAll('[class*="vditor-tooltipped"]').forEach((btn) => {
-        if (btn.getAttribute('title')) return;
-        const ariaLabel = btn.getAttribute('aria-label');
-        if (ariaLabel) {
-          btn.setAttribute('title', ariaLabel);
-        }
-      });
-      // Also handle toolbar items that might not have vditor-tooltipped
-      vditorEl.querySelectorAll('.vditor-toolbar__item').forEach((btn) => {
-        if (btn.getAttribute('title')) return;
-        const ariaLabel = btn.getAttribute('aria-label');
-        if (ariaLabel) {
-          btn.setAttribute('title', ariaLabel);
-        }
-      });
+      // Use MutationObserver to handle buttons added/updated after init (e.g. dark mode switch)
+      function addTitleTooltips(root) {
+        root.querySelectorAll('.vditor-toolbar__item button, .vditor-toolbar__item [role="button"]').forEach((btn) => {
+          if (btn.getAttribute('title')) return;
+          const ariaLabel = btn.getAttribute('aria-label');
+          if (ariaLabel) {
+            btn.setAttribute('title', ariaLabel);
+          }
+        });
+      }
+      addTitleTooltips(vditorEl);
+      const toolbarEl = vditorEl.querySelector('.vditor-toolbar');
+      if (toolbarEl) {
+        new MutationObserver(() => addTitleTooltips(vditorEl)).observe(toolbarEl, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['aria-label', 'class'],
+        });
+      }
+
+      // Rewrite relative image paths in editor content
+      rewriteEditorImages();
+      const contentEl = vditorEl.querySelector('.vditor-ir') || vditorEl.querySelector('.vditor-wysiwyg');
+      if (contentEl) {
+        new MutationObserver(() => rewriteEditorImages()).observe(contentEl, {
+          childList: true,
+          subtree: true,
+        });
+      }
+      const previewEl = vditorEl.querySelector('.vditor-preview');
+      if (previewEl) {
+        new MutationObserver(() => rewriteEditorImages()).observe(previewEl, {
+          childList: true,
+          subtree: true,
+        });
+      }
 
       const needsRestore = _pendingRestore !== null;
       if (needsRestore) {
