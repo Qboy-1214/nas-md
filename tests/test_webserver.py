@@ -148,7 +148,7 @@ class TestMountsRoute:
 class TestSyncRoute:
     def test_sync_post_not_405(self, server_url):
         """POST /api/sync must not return 405 Method Not Allowed."""
-        status, body = _post(f"{server_url}/api/sync?mount=builtin-storage", {"files": {}})
+        status, _body = _post(f"{server_url}/api/sync?mount=builtin-storage", {"files": {}})
         assert status != 405, "POST /api/sync returned 405 — route missing from do_POST"
 
     def test_sync_post_returns_json(self, server_url):
@@ -162,7 +162,7 @@ class TestSyncRoute:
 
     def test_sync_post_with_mount_param(self, server_url):
         """Frontend uses 'mount' query param, not 'mount_id'."""
-        status, body = _post(f"{server_url}/api/sync?mount=builtin-storage", {"files": {}})
+        status, _body = _post(f"{server_url}/api/sync?mount=builtin-storage", {"files": {}})
         assert status == 200
 
     def test_sync_status_get(self, server_url):
@@ -174,21 +174,21 @@ class TestSyncRoute:
 
     def test_sync_post_unknown_mount(self, server_url):
         """POST /api/sync with unknown mount should return 404, not 405."""
-        status, body = _post(f"{server_url}/api/sync?mount=nonexistent", {"files": {}})
+        status, _body = _post(f"{server_url}/api/sync?mount=nonexistent", {"files": {}})
         assert status == 404
 
 
 class TestFileRoute:
     def test_get_file_returns_content(self, server_url):
         """GET /api/mounts/{id}/file must return file content."""
-        status, body, headers = _get(
+        status, body, _headers = _get(
             f"{server_url}/api/mounts/builtin-storage/file?path=/test.md"
         )
         assert status == 200
         assert "Hello" in body
 
     def test_get_file_not_found(self, server_url):
-        status, body, _ = _get(
+        status, _body, _ = _get(
             f"{server_url}/api/mounts/builtin-storage/file?path=/nonexistent.md"
         )
         assert status == 404
@@ -220,14 +220,14 @@ class TestStaticFiles:
         assert "Vditor" in body, "Vditor JS content missing — got HTML fallback?"
 
     def test_vditor_css_served_as_css(self, server_url):
-        status, body, headers = _get(f"{server_url}/lib/vditor/index.css")
+        status, _body, headers = _get(f"{server_url}/lib/vditor/index.css")
         assert status == 200
         ct = headers.get("content-type", "")
         assert "css" in ct, f"Expected CSS content-type, got: {ct}"
 
     def test_vditor_cdn_js_served(self, server_url):
         """Vditor CDN JS must not return HTML fallback."""
-        status, body, headers = _get(f"{server_url}/lib/vditor-cdn/dist/js/index.js")
+        status, _body, headers = _get(f"{server_url}/lib/vditor-cdn/dist/js/index.js")
         assert status == 200
         ct = headers.get("content-type", "")
         assert "javascript" in ct
@@ -309,12 +309,12 @@ class TestCertGeneration:
         """If cert already exists, should reuse without regenerating."""
         d = tempfile.mkdtemp(prefix="nasmd_certs_")
         try:
-            cert_path, key_path = _generate_self_signed_cert(d)
+            cert_path, _key_path = _generate_self_signed_cert(d)
             # Get mtime of first generation
             mtime1 = os.path.getmtime(cert_path)
             # Call again — should reuse
             time.sleep(0.1)
-            cert_path2, key_path2 = _generate_self_signed_cert(d)
+            cert_path2, _key_path2 = _generate_self_signed_cert(d)
             assert cert_path2 == cert_path
             mtime2 = os.path.getmtime(cert_path)
             assert mtime1 == mtime2, "Cert was regenerated instead of reused"
@@ -324,13 +324,13 @@ class TestCertGeneration:
     def test_generate_cert_with_cryptography(self):
         """Test cert generation using cryptography library (skip if unavailable)."""
         try:
-            from cryptography import x509  # noqa: F401
+            from cryptography import x509
         except ImportError:
             pytest.skip("cryptography library not installed")
 
         d = tempfile.mkdtemp(prefix="nasmd_certs_")
         try:
-            cert_path, key_path = _generate_self_signed_cert(d)
+            cert_path, _key_path = _generate_self_signed_cert(d)
             # Verify the cert has SAN extension
             from cryptography import x509
             from cryptography.hazmat.primitives.serialization import Encoding
@@ -346,7 +346,7 @@ class TestCertGeneration:
         """_create_server with cert_dir should create an HTTPS server."""
         d = tempfile.mkdtemp(prefix="nasmd_certs_")
         try:
-            cert_path, key_path = _generate_self_signed_cert(d)
+            _cert_path, _key_path = _generate_self_signed_cert(d)
             port = _find_free_port()
             server = _create_server("127.0.0.1", port, MountHTTPHandler, cert_dir=d)
             assert server is not None

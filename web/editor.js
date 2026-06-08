@@ -391,7 +391,8 @@ function initEditor(content, mode, readonly) {
 
       // Rewrite relative image paths in editor content
       rewriteEditorImages();
-      const contentEl = vditorEl.querySelector('.vditor-ir') || vditorEl.querySelector('.vditor-wysiwyg');
+      const contentEl =
+        vditorEl.querySelector('.vditor-ir') || vditorEl.querySelector('.vditor-wysiwyg');
       if (contentEl) {
         new MutationObserver(() => rewriteEditorImages()).observe(contentEl, {
           childList: true,
