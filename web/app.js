@@ -962,15 +962,11 @@ if (localStorage.getItem('nasmd_dark') === '1') {
 function toggleDarkMode() {
   const isDark = document.documentElement.classList.toggle('dark');
   localStorage.setItem('nasmd_dark', isDark ? '1' : '0');
-  // Sync Vditor content theme
+  // Sync Vditor theme
   if (window._vditor) {
-    window._vditor.setContentTheme(
-      isDark ? 'dark' : 'light',
-      '/lib/vditor-cdn/dist/css/content-theme',
-    );
     window._vditor.setTheme(
       isDark ? 'dark' : 'classic',
-      isDark ? 'dark' : 'classic',
+      isDark ? 'dark' : 'light',
       isDark ? 'dracula' : 'github',
     );
   }
