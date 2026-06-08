@@ -1857,7 +1857,6 @@ def _generate_self_signed_cert(cert_dir: str) -> tuple[str, str]:
 
     # Last resort: create a minimal cert using ssl module (no SAN, browsers may reject)
     logger.warning("Generating minimal certificate (no SAN extension)")
-    import tempfile
     # Python's ssl module can't generate certs; we need openssl or cryptography
     # If we reach here, just skip HTTPS
     raise RuntimeError("Cannot generate SSL certificate: neither openssl nor cryptography available")
