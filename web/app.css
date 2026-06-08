@@ -136,7 +136,7 @@
   --s-section: 64px;
 
   /* === DESIGN TOKENS: Layout === */
-  --sidebar-w: 240px;
+  --sidebar-w: 280px;
   --topbar-h: 52px;
   --tree-indent: 16px;
   --tree-node-h: 28px;
@@ -375,6 +375,61 @@ a:hover {
 }
 .mount-group:hover .mount-remove-btn {
   opacity: 0.6;
+}
+
+.mount-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.mount-group:hover .mount-actions {
+  opacity: 1;
+}
+
+.mount-create-btn {
+  background: none;
+  border: none;
+  font-size: var(--f-body-sm);
+  cursor: pointer;
+  color: var(--c-muted);
+  padding: var(--s-xxs) var(--s-xs);
+  border-radius: var(--r-sm);
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.mount-create-btn:hover {
+  color: var(--c-primary);
+  background: var(--c-bg-hover);
+}
+
+.dir-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dir-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  cursor: pointer;
+}
+
+.dir-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.tree-item:hover .dir-actions {
+  opacity: 1;
 }
 
 .mount-builtin-badge {
@@ -1065,19 +1120,6 @@ a:hover {
   color: var(--c-ink);
 }
 
-/* === Mount Path Hint (admin mode) === */
-.mount-path-hint {
-  font-size: var(--f-micro);
-  color: var(--c-muted);
-  font-family: var(--font-mono);
-  padding: var(--s-xxs) var(--s-xs) var(--s-xxs);
-  display: block;
-  opacity: 0.7;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* === Vditor Light Mode Variables === */
 .vditor {
   --border-color: #e5e3df;
@@ -1482,7 +1524,7 @@ a:hover {
 /* Tablet: 768px – 1023px */
 @media (max-width: 1023px) {
   :root {
-    --sidebar-w: 200px;
+    --sidebar-w: 260px;
   }
 }
 
@@ -2038,6 +2080,6 @@ a:hover {
 /* === Tablet: 768-1023px === */
 @media (min-width: 768px) and (max-width: 1023px) {
   :root {
-    --sidebar-w: 200px;
+    --sidebar-w: 260px;
   }
 }

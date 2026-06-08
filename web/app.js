@@ -679,6 +679,8 @@ function renderSidebar() {
   for (const mount of regularMounts) {
     const isExpanded = state.expandedMounts.includes(mount.id);
     const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
+    const canWrite = !mount.readonly && !mount.id.startsWith('builtin');
+    const isHostMount = !!mount.host;
 
     let html = `<div class="mount-group">`;
     html += `<div class="mount-name-row">`;
@@ -686,8 +688,16 @@ function renderSidebar() {
     html += `<span class="mount-icon">${chevron}</span>`;
     html += `<span>${mount.name}</span>`;
     html += `</div>`;
-    html += `<span class="mount-path-hint" title="${mount.path}">${svgFolder} ${mount.path}</span>`;
-    html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+    // Action buttons (right side)
+    html += `<span class="mount-actions">`;
+    if (canWrite && isExpanded) {
+      html += `<button class="mount-create-btn" onclick="createItem('${mount.id}','/','file')" title="新建文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>`;
+      html += `<button class="mount-create-btn" onclick="createItem('${mount.id}','/','folder')" title="新建文件夹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>`;
+    }
+    if (!isHostMount) {
+      html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+    }
+    html += `</span>`;
     html += `</div>`;
 
     if (isExpanded) {
@@ -742,11 +752,21 @@ function renderEntries(entries, mountId, _parentPath) {
         const isDirExpanded = state.expandedMounts.includes(dirKey);
         const subEntries = state.treeData[mountId]?.[fullPath];
         const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isDirExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
+        const mount = state.mounts.find((m) => m.id === mountId);
+        const canWrite = mount && !mount.readonly;
 
         let html = `<div>`;
-        html += `<div class="${cls}" onclick="toggleDir('${mountId}','${fullPath}')">`;
+        html += `<div class="${cls} dir-row">`;
+        html += `<span class="dir-label" onclick="toggleDir('${mountId}','${fullPath}')">`;
         html += `<span class="tree-icon">${chevron}</span>`;
         html += `<span class="tree-folder" title="${e.name}">${e.name}</span>`;
+        html += `</span>`;
+        if (canWrite && isDirExpanded) {
+          html += `<span class="dir-actions">`;
+          html += `<button class="mount-create-btn" onclick="event.stopPropagation();createItem('${mountId}','${fullPath}','file')" title="新建文件"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>`;
+          html += `<button class="mount-create-btn" onclick="event.stopPropagation();createItem('${mountId}','${fullPath}','folder')" title="新建文件夹"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>`;
+          html += `</span>`;
+        }
         html += `</div>`;
 
         if (isDirExpanded) {
@@ -779,6 +799,57 @@ function findMountForPath(path) {
     if (tree && _treeHasPath(tree, path)) return m;
   }
   return null;
+}
+
+// === Create file / folder ===
+async function createItem(mountId, dirPath, kind) {
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount || mount.readonly) {
+    showToast('该目录不可写');
+    return;
+  }
+  const label = kind === 'folder' ? '文件夹名称' : '文件名称（无需输入 .md 后缀）';
+  const name = prompt(label);
+  if (!name || !name.trim()) return;
+
+  try {
+    const params = new URLSearchParams({
+      path: dirPath,
+      name: name.trim(),
+      kind: kind,
+    });
+    const headers = {};
+    if (state.isAdmin) headers['X-Admin'] = '1';
+    const resp = await fetch(
+      `${_apiBase}/api/mounts/${mountId}/create?${params}`,
+      { method: 'POST', headers },
+    );
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      if (resp.status === 409) {
+        showToast('已存在同名文件或文件夹');
+      } else {
+        showToast(data.error || '创建失败');
+      }
+      return;
+    }
+    const result = await resp.json();
+    showToast(`已创建: ${result.name}`);
+    // Force refresh the directory tree
+    if (state.treeData[mountId]) {
+      delete state.treeData[mountId][dirPath];
+    }
+    await loadTree(mountId, dirPath);
+    renderSidebar();
+    // Auto-open the new file
+    if (kind === 'file' && result.name) {
+      const filePath = dirPath === '/' ? '/' + result.name : dirPath + '/' + result.name;
+      openFile(filePath, mountId);
+    }
+  } catch (e) {
+    console.error('Create item failed:', e);
+    showToast('创建失败');
+  }
 }
 
 function _treeHasPath(entry, path) {

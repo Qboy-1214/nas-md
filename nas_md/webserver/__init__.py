@@ -797,6 +797,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_sync(sync_mount_id, qs)
                 return
 
+            # POST /api/mounts/{id}/create — create file or folder
+            if path.startswith("/api/mounts/") and path.endswith("/create"):
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    mount_id = parts[3]
+                    qs = parse_qs(parsed.query)
+                    self._handle_create(mount_id, qs)
+                    return
+
             # /syncFilenames
             if path == "/syncFilenames":
                 self._handle_sync_filenames()
@@ -814,6 +823,64 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._send_error("Internal server error", 500)
 
     # --- Mount API handlers ---
+
+    def _handle_create(self, mount_id: str, qs: dict):
+        """Create a new file or folder in a mount point."""
+        if not self.mount_manager:
+            return self._send_error("No mounts configured", 404)
+        mount = self.mount_manager.find_mount(mount_id)
+        if not mount:
+            return self._send_error("Mount not found", 404)
+        # Check visibility and write permission
+        session_id = self._get_session_id()
+        visible = self._visible_mounts(session_id)
+        if mount not in visible:
+            return self._send_error("Mount not found", 404)
+        if mount.readonly:
+            return self._send_error("Mount is read-only", 403)
+        if mount.host:
+            if not self._is_admin_request() and not mount.public:
+                return self._send_error("Mount not found", 404)
+        elif not self._owns_mount(mount, session_id):
+            return self._send_error("Mount not found", 404)
+
+        parent_path = qs.get("path", ["/"])[0]
+        name = qs.get("name", [None])[0]
+        kind = qs.get("kind", ["file"])[0]  # "file" or "folder"
+
+        if not name:
+            return self._send_error("Missing name parameter", 400)
+        # Sanitize name: no slashes, no dots-only, no empty
+        if "/" in name or "\\" in name or not name.strip() or name.strip(".") == "":
+            return self._send_error("Invalid name", 400)
+        name = name.strip()
+
+        # Check for duplicate
+        abs_parent = self.mount_manager._safe_path(mount, parent_path)
+        if abs_parent is None:
+            return self._send_error("Path escapes mount root", 403)
+        target = os.path.join(abs_parent, name)
+        if os.path.exists(target):
+            return self._send_error("A file or folder with this name already exists", 409)
+
+        try:
+            if kind == "folder":
+                os.makedirs(target, exist_ok=False)
+            else:
+                # Create .md file by default
+                if not name.endswith(".md"):
+                    name += ".md"
+                    target = os.path.join(abs_parent, name)
+                    if os.path.exists(target):
+                        return self._send_error(
+                            "A file or folder with this name already exists", 409
+                        )
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write("")
+            self._send_json({"ok": True, "name": name, "kind": kind})
+        except OSError as e:
+            logger.error(f"Create failed: {e}")
+            self._send_error(f"Failed to create: {e}", 500)
 
     def _handle_tree(self, mount_id: str, qs: dict):
         if not self.mount_manager:
