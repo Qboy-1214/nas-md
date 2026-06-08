@@ -625,14 +625,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_orphans()
                 return
 
-            # Sync API
-            if path == "/api/sync" and self.command == "POST":
-                sync_mount_id = qs.get("mount_id", [None])[0] or ""
-                self._handle_sync(sync_mount_id, qs)
-                return
-
+            # Sync status (GET)
             if path == "/api/sync/status":
-                sync_mount_id = qs.get("mount_id", [None])[0] or ""
+                sync_mount_id = qs.get("mount_id", [None])[0] or qs.get("mount", [None])[0] or ""
                 self._handle_sync_status(sync_mount_id)
                 return
 
@@ -766,6 +761,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             # POST /api/mounts — add new mount
             if path == "/api/mounts":
                 self._handle_add_mount()
+                return
+
+            # POST /api/sync — incremental file synchronization
+            if path == "/api/sync":
+                qs = parse_qs(parsed.query)
+                sync_mount_id = qs.get("mount_id", [None])[0] or qs.get("mount", [None])[0] or ""
+                self._handle_sync(sync_mount_id, qs)
                 return
 
             # /syncFilenames

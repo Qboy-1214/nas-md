@@ -1348,6 +1348,12 @@ async function performSync() {
     updateSyncIndicator();
     return;
   }
+  // Skip sync for local mounts (browser-side directories, no server counterpart)
+  if (state.currentMountId.startsWith('local-')) {
+    state.syncStatus = 'synced';
+    updateSyncIndicator();
+    return;
+  }
   state.syncStatus = 'syncing';
   updateSyncIndicator();
 
