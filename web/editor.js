@@ -15,10 +15,17 @@ let _editorMode = 'ir';
 function rewriteImageSrc(html) {
   if (!_currentMountId) return html;
   // Get the directory of the current file
-  const dir = _currentRelPath ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1) : '/';
+  const dir = _currentRelPath
+    ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1)
+    : '/';
   return html.replace(/(<img\s+[^>]*src=")([^"]+)("[^>]*>)/g, (match, prefix, src, suffix) => {
     // Skip absolute URLs, data URIs, and already-rewritten API paths
-    if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) {
+    if (
+      src.startsWith('http://') ||
+      src.startsWith('https://') ||
+      src.startsWith('data:') ||
+      src.startsWith('/api/')
+    ) {
       return match;
     }
     // Resolve relative path against current file's directory
@@ -46,7 +53,9 @@ function rewriteImageSrc(html) {
 // Also rewrite images in the editor area (IR/WYSIWYG) after rendering
 function rewriteEditorImages() {
   if (!_currentMountId || !_vditor) return;
-  const dir = _currentRelPath ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1) : '/';
+  const dir = _currentRelPath
+    ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1)
+    : '/';
   const vditorEl = document.getElementById('vditor');
   if (!vditorEl) return;
   // Target IR, WYSIWYG, and preview areas
@@ -54,7 +63,13 @@ function rewriteEditorImages() {
   areas.forEach((area) => {
     area.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src') || '';
-      if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('/api/')) return;
+      if (
+        src.startsWith('http://') ||
+        src.startsWith('https://') ||
+        src.startsWith('data:') ||
+        src.startsWith('/api/')
+      )
+        return;
       let resolved;
       if (src.startsWith('/')) {
         resolved = src;
@@ -353,13 +368,15 @@ function initEditor(content, mode, readonly) {
       // Vditor sets aria-label on buttons with vditor-tooltipped class
       // Use MutationObserver to handle buttons added/updated after init (e.g. dark mode switch)
       function addTitleTooltips(root) {
-        root.querySelectorAll('.vditor-toolbar__item button, .vditor-toolbar__item [role="button"]').forEach((btn) => {
-          if (btn.getAttribute('title')) return;
-          const ariaLabel = btn.getAttribute('aria-label');
-          if (ariaLabel) {
-            btn.setAttribute('title', ariaLabel);
-          }
-        });
+        root
+          .querySelectorAll('.vditor-toolbar__item button, .vditor-toolbar__item [role="button"]')
+          .forEach((btn) => {
+            if (btn.getAttribute('title')) return;
+            const ariaLabel = btn.getAttribute('aria-label');
+            if (ariaLabel) {
+              btn.setAttribute('title', ariaLabel);
+            }
+          });
       }
       addTitleTooltips(vditorEl);
       const toolbarEl = vditorEl.querySelector('.vditor-toolbar');
