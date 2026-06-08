@@ -1802,11 +1802,22 @@ def _generate_self_signed_cert(cert_dir: str) -> tuple[str, str]:
     try:
         subprocess.run(
             [
-                "openssl", "req", "-x509", "-newkey", "rsa:2048",
-                "-keyout", key_path, "-out", cert_path,
-                "-days", "3650", "-nodes",
-                "-subj", "/CN=nas-md",
-                "-addext", "subjectAltName=IP:0.0.0.0",
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                key_path,
+                "-out",
+                cert_path,
+                "-days",
+                "3650",
+                "-nodes",
+                "-subj",
+                "/CN=nas-md",
+                "-addext",
+                "subjectAltName=IP:0.0.0.0",
             ],
             check=True,
             capture_output=True,
@@ -1845,11 +1856,13 @@ def _generate_self_signed_cert(cert_dir: str) -> tuple[str, str]:
         with open(cert_path, "wb") as f:
             f.write(cert.public_bytes(serialization.Encoding.PEM))
         with open(key_path, "wb") as f:
-            f.write(key.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.TraditionalOpenSSL,
-                serialization.NoEncryption(),
-            ))
+            f.write(
+                key.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.TraditionalOpenSSL,
+                    serialization.NoEncryption(),
+                )
+            )
         logger.info("Certificate generated with cryptography library")
         return cert_path, key_path
     except ImportError:
@@ -1859,7 +1872,9 @@ def _generate_self_signed_cert(cert_dir: str) -> tuple[str, str]:
     logger.warning("Generating minimal certificate (no SAN extension)")
     # Python's ssl module can't generate certs; we need openssl or cryptography
     # If we reach here, just skip HTTPS
-    raise RuntimeError("Cannot generate SSL certificate: neither openssl nor cryptography available")
+    raise RuntimeError(
+        "Cannot generate SSL certificate: neither openssl nor cryptography available"
+    )
 
 
 def _create_server(host: str, port: int, handler: type, cert_dir: str = "") -> HTTPServer:
