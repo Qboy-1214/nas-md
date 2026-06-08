@@ -1686,24 +1686,22 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
 
 def _seed_storage(storage_dir: str) -> None:
-    """Copy default files into storage dir if they don't exist (Docker first-start)."""
+    """Copy default files into storage dir, always overwriting with latest versions."""
     default_dir = "/app/storage-default"
     if not os.path.isdir(default_dir):
         return
-    # Copy any default files that don't already exist in storage
+    # Always copy default files to ensure they stay up-to-date
     try:
         seeded = 0
         for name in os.listdir(default_dir):
             src = os.path.join(default_dir, name)
             dst = os.path.join(storage_dir, name)
-            if os.path.isfile(src) and not os.path.exists(dst):
+            if os.path.isfile(src):
                 shutil.copy2(src, dst)
                 seeded += 1
                 logger.info(f"Seeded storage: {name}")
         if seeded:
             logger.info(f"Seeded {seeded} file(s) into storage dir")
-        else:
-            logger.info("Storage dir already has all default files, nothing to seed")
     except OSError as e:
         logger.warning(f"Failed to seed storage: {e}")
 
