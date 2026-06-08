@@ -356,8 +356,10 @@ class MountManager:
         try:
             entries = []
             for name in sorted(os.listdir(abs_path)):
-                # Skip hidden
+                # Skip hidden and internal dirs
                 if name.startswith("."):
+                    continue
+                if name == "certs":
                     continue
                 full = os.path.join(abs_path, name)
                 try:

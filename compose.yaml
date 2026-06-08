@@ -3,7 +3,7 @@ services:
     image: ghcr.io/qboy-1214/nas-md:latest
     build: .
     ports:
-      - "80:8080"
+      - "443:8080"  # HTTPS: Docker 模式自动生成自签名证书
     volumes:
       - storage:/app/storage
       - tokens:/app/tokens  # Telegram Bot 令牌存储（Web 模式未使用）
@@ -12,11 +12,12 @@ services:
       # - /home/yong/n8n/file:/mnt/n8n
       # - /home/yong/docs:/mnt/docs
     environment:
-      APP_URL: http://localhost
+      APP_URL: https://localhost
       STORAGE_DIR: /app/storage
       TOKENS_DIR: /app/tokens  # Telegram Bot 令牌存储（Web 模式未使用）
       WEB_ROOT: /app/web
       WEB_PORT: "8080"
+      DOCKER_MODE: "1"
       # MOUNT_DIRS: 无需设置，应用自动扫描 /mnt/ 子目录
       # 如需手动指定，可用 "显示名:路径" 格式，分号分隔
     restart: unless-stopped

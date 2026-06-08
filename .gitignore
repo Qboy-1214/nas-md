@@ -10,8 +10,7 @@ tokens/
 *.db
 *.log
 .DS_Store
-web/lib/vditor/index.min.js
-web/lib/vditor/index.css
+
 node_modules/
 test-results/
 playwright-report/
