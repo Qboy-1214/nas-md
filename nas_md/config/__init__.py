@@ -39,6 +39,10 @@ class Config:
     storage_quota_kb: int = 1024  # 1MB
     unlimited_quota_ids: str = ""
     mount_dirs: str = ""
+    public_mount_dirs: str = ""  # Host-mounted dirs visible to all users (not just admin)
+    public_mounts: str = (
+        ""  # Docker auto-scan: names of /mnt/ subdirs that are public (comma-separated)
+    )
     web_root: str = "./web"
     web_port: int = 8080
     web_host: str = "127.0.0.1"
@@ -74,6 +78,34 @@ class Config:
                 p = str(Path(self.working_dir) / p)
             dirs.append(p)
         return dirs
+
+    def public_mount_dir_list(self) -> list[str]:
+        """Parse PUBLIC_MOUNT_DIRS the same way as mount_dir_list."""
+        if not self.public_mount_dirs:
+            return []
+        dirs = []
+        raw = self.public_mount_dirs.strip()
+        if ";" in raw:
+            parts = raw.split(";")
+        elif "," in raw:
+            parts = raw.split(",")
+        else:
+            parts = [raw]
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            p_path = Path(p)
+            if not p_path.is_absolute():
+                p = str(Path(self.working_dir) / p)
+            dirs.append(p)
+        return dirs
+
+    def public_mount_names(self) -> set[str]:
+        """Parse PUBLIC_MOUNTS (Docker auto-scan names) into a set."""
+        if not self.public_mounts:
+            return set()
+        return {n.strip() for n in self.public_mounts.split(",") if n.strip()}
 
 
 def _host_of(raw_url: str) -> str:
@@ -124,6 +156,8 @@ def load_bot_config() -> None:
         "STORAGE_QUOTA_KB": ("storage_quota_kb", int),
         "UNLIMITED_QUOTA_IDS": "unlimited_quota_ids",
         "MOUNT_DIRS": "mount_dirs",
+        "PUBLIC_MOUNT_DIRS": "public_mount_dirs",
+        "PUBLIC_MOUNTS": "public_mounts",
         "WEB_ROOT": "web_root",
         "WEB_PORT": ("web_port", int),
         "WEB_HOST": "web_host",

@@ -113,7 +113,7 @@ class MountEntry:
         self.path = path  # absolute path on host
         self.public = public  # visible to visitors without auth
         self.readonly = readonly  # files in this mount cannot be modified
-        self.host = host  # True = host-mounted (from MOUNT_DIRS), only visible to admin
+        self.host = host  # True = host-mounted (from MOUNT_DIRS / PUBLIC_MOUNT_DIRS)
         self.owner = (
             owner  # session UUID of the user who created this mount (empty for host/builtin)
         )
@@ -220,8 +220,26 @@ class MountManager:
 
     AUTO_SCAN_DIR = "/mnt"
 
-    def __init__(self, mount_dirs: list[str]):
+    def __init__(
+        self,
+        mount_dirs: list[str],
+        public_mount_dirs: list[str] | None = None,
+        public_mount_names: set[str] | None = None,
+    ):
         self.mounts: list[MountEntry] = []
+        self._public_paths: set[str] = set()
+        if public_mount_dirs:
+            for d in public_mount_dirs:
+                d = d.strip()
+                if not d:
+                    continue
+                if ":" in d and d[1:2] != ":":
+                    _, path = d.split(":", 1)
+                    path = os.path.abspath(path.strip())
+                else:
+                    path = os.path.abspath(d)
+                self._public_paths.add(os.path.normpath(path))
+
         if mount_dirs:
             # Explicit MOUNT_DIRS (backward compatible)
             for i, d in enumerate(mount_dirs):
@@ -238,13 +256,17 @@ class MountManager:
                     name = os.path.basename(path) or f"root-{i}"
                 if not os.path.isdir(path):
                     continue
-                self.mounts.append(MountEntry(f"mount-{i}", name, path, host=True))
+                is_public = os.path.normpath(path) in self._public_paths
+                self.mounts.append(
+                    MountEntry(f"mount-{i}", name, path, public=is_public, host=True)
+                )
         else:
             # Auto-scan /mnt/ subdirectories (Docker-friendly)
-            self._auto_scan()
+            self._auto_scan(public_mount_names or set())
 
-    def _auto_scan(self) -> None:
+    def _auto_scan(self, public_names: set[str] | None = None) -> None:
         """Scan /mnt/ for subdirectories and create host mount points."""
+        public_names = public_names or set()
         base = self.AUTO_SCAN_DIR
         if not os.path.isdir(base):
             logger.info(f"Auto-scan: {base} does not exist, skipping")
@@ -258,8 +280,12 @@ class MountManager:
         for i, name in enumerate(entries):
             path = os.path.join(base, name)
             if os.path.isdir(path):
-                self.mounts.append(MountEntry(f"mount-{i}", name, path, host=True))
-                logger.info(f"Auto-scan: added host mount {name} -> {path}")
+                is_public = name in public_names
+                self.mounts.append(
+                    MountEntry(f"mount-{i}", name, path, public=is_public, host=True)
+                )
+                vis = "public" if is_public else "admin-only"
+                logger.info(f"Auto-scan: added host mount {name} -> {path} ({vis})")
             else:
                 logger.info(f"Auto-scan: skipping non-directory {path}")
         if not self.mounts:
@@ -499,10 +525,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         """Return mounts visible to the current user session.
 
         - Builtin storage: visible to everyone
-        - Host mounts (MOUNT_DIRS): visible only to admin
+        - Host mounts (private): visible only to admin
+        - Host mounts (public): visible to everyone
         - User mounts with owner: visible only to the owner (matched by session_id)
         - Legacy mounts (no owner, not host): visible to everyone (backward compat)
-        - Admin also sees their own user mounts + host mounts
+        - Admin also sees their own user mounts + all host mounts
         """
         if not self.mount_manager:
             return []
@@ -512,7 +539,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             if m.id == "builtin-storage":
                 result.append(m)
             elif m.host:
-                if is_admin:
+                if is_admin or m.public:
                     result.append(m)
             elif m.owner:
                 # User mount: visible only to owner
@@ -873,7 +900,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         # Check ownership (only owner can write to their mounts; admin can write to host mounts)
         session_id = self._get_session_id()
         if mount.host:
-            if not self._is_admin_request():
+            if not self._is_admin_request() and not mount.public:
                 return self._send_error("Mount not found", 404)
         elif not self._owns_mount(mount, session_id):
             return self._send_error("Mount not found", 404)
@@ -928,7 +955,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         # Check ownership
         session_id = self._get_session_id()
         if mount.host:
-            if not self._is_admin_request():
+            if not self._is_admin_request() and not mount.public:
                 return self._send_error("Mount not found", 404)
         elif not self._owns_mount(mount, session_id):
             return self._send_error("Mount not found", 404)
@@ -979,7 +1006,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         # Check ownership
         session_id = self._get_session_id()
         if mount.host:
-            if not self._is_admin_request():
+            if not self._is_admin_request() and not mount.public:
                 return self._send_error("Mount not found", 404)
         elif not self._owns_mount(mount, session_id):
             return self._send_error("Mount not found", 404)
@@ -1683,6 +1710,8 @@ def _seed_storage(storage_dir: str) -> None:
 
 def serve(
     mount_dirs: list[str],
+    public_mount_dirs: list[str] | None = None,
+    public_mount_names: set[str] | None = None,
     web_root: str = "",
     port: int = 8080,
     host: str = "0.0.0.0",
@@ -1696,7 +1725,7 @@ def serve(
     if _docker_mode and storage_dir:
         _seed_storage(storage_dir)
 
-    mgr = MountManager(mount_dirs)
+    mgr = MountManager(mount_dirs, public_mount_dirs, public_mount_names)
 
     # Auto-mount storage dir as built-in readonly mount (always visible, cannot be removed)
     if storage_dir and os.path.isdir(storage_dir):

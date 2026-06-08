@@ -45,6 +45,8 @@ def cmd_web() -> None:
     cfg_mod.load_bot_config()
 
     mount_dirs = cfg_mod.server_cfg.mount_dir_list()
+    public_mount_dirs = cfg_mod.server_cfg.public_mount_dir_list()
+    public_mount_names = cfg_mod.server_cfg.public_mount_names()
     web_root = cfg_mod.server_cfg.web_root
     port = cfg_mod.server_cfg.web_port
     storage_dir = cfg_mod.server_cfg.storage_dir
@@ -53,6 +55,8 @@ def cmd_web() -> None:
 
     serve(
         mount_dirs=mount_dirs,
+        public_mount_dirs=public_mount_dirs,
+        public_mount_names=public_mount_names,
         web_root=web_root,
         port=port,
         storage_dir=storage_dir,
