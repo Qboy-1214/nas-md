@@ -1430,8 +1430,14 @@ async function refreshTree() {
       const newChildren = state.treeData[mountId]?.[dirPath];
       // Quick check if tree changed
       if (oldChildren && newChildren) {
-        const oldNames = (oldChildren.children || []).map((e) => e.name).sort().join(',');
-        const newNames = (newChildren.children || []).map((e) => e.name).sort().join(',');
+        const oldNames = (oldChildren.children || [])
+          .map((e) => e.name)
+          .sort()
+          .join(',');
+        const newNames = (newChildren.children || [])
+          .map((e) => e.name)
+          .sort()
+          .join(',');
         if (oldNames !== newNames) changed = true;
       } else if (!oldChildren !== !newChildren) {
         changed = true;
