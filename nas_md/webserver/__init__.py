@@ -962,7 +962,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
         if os.path.exists(dest_abs):
-            return self._send_error("A file or folder with this name already exists at destination", 409)
+            return self._send_error(
+                "A file or folder with this name already exists at destination", 409
+            )
 
         # Prevent moving a directory into itself or its subtree
         if dest_dir_abs.startswith(src_abs + os.sep) or dest_dir_abs == src_abs:
@@ -1000,7 +1002,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
         if os.path.exists(dest_abs):
-            return self._send_error("A file or folder with this name already exists at destination", 409)
+            return self._send_error(
+                "A file or folder with this name already exists at destination", 409
+            )
 
         try:
             if os.path.isdir(src_abs):
@@ -1045,7 +1049,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
         if os.path.exists(dest_abs):
-            return self._send_error("A file or folder with this name already exists at destination", 409)
+            return self._send_error(
+                "A file or folder with this name already exists at destination", 409
+            )
 
         try:
             if os.path.isdir(src_abs):
@@ -1098,7 +1104,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
         if os.path.exists(dest_abs):
-            return self._send_error("A file or folder with this name already exists at destination", 409)
+            return self._send_error(
+                "A file or folder with this name already exists at destination", 409
+            )
 
         try:
             if os.path.isdir(src_abs):
