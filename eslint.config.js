@@ -58,6 +58,7 @@ export default [
         setFileInfo: "readonly",
         clearTreeCache: "readonly",
         renderFileTree: "readonly",
+        indexedDB: "readonly",
       },
     },
     rules: {
