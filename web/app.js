@@ -812,11 +812,50 @@ async function createItem(mountId, dirPath, kind) {
   // eslint-disable-next-line no-undef
   const name = prompt(label);
   if (!name || !name.trim()) return;
+  const trimmedName = name.trim();
 
+  // Local mount: use File System Access API
+  if (mount._local && state.localMounts[mountId]) {
+    try {
+      const dirHandle = await getLocalDirHandle(state.localMounts[mountId].handle, dirPath);
+      if (!dirHandle) {
+        showToast('目录不存在');
+        return;
+      }
+      if (kind === 'folder') {
+        await dirHandle.getDirectoryHandle(trimmedName, { create: true });
+        showToast(`已创建文件夹: ${trimmedName}`);
+      } else {
+        const fileName = trimmedName.endsWith('.md') ? trimmedName : trimmedName + '.md';
+        const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write('');
+        await writable.close();
+        showToast(`已创建: ${fileName}`);
+        const filePath = dirPath === '/' ? '/' + fileName : dirPath + '/' + fileName;
+        await loadLocalTree(mountId);
+        renderSidebar();
+        openFile(filePath, mountId);
+        return;
+      }
+      await loadLocalTree(mountId);
+      renderSidebar();
+    } catch (e) {
+      if (e.name === 'NotAllowedError') {
+        showToast('已存在同名项');
+      } else {
+        console.error('Local create failed:', e);
+        showToast('创建失败');
+      }
+    }
+    return;
+  }
+
+  // Server mount: use API
   try {
     const params = new URLSearchParams({
       path: dirPath,
-      name: name.trim(),
+      name: trimmedName,
       kind: kind,
     });
     const headers = {};
@@ -836,11 +875,9 @@ async function createItem(mountId, dirPath, kind) {
     }
     const result = await resp.json();
     showToast(`已创建: ${result.name}`);
-    // Force refresh the directory tree
-    if (state.treeData[mountId]) {
-      delete state.treeData[mountId][dirPath];
-    }
-    await loadTree(mountId, dirPath);
+    // Force refresh the entire mount tree (recursive tree is nested from root)
+    delete state.treeData[mountId];
+    await loadTree(mountId, '/');
     renderSidebar();
     // Auto-open the new file
     if (kind === 'file' && result.name) {

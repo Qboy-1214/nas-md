@@ -831,13 +831,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
             return self._send_error("Mount not found", 404)
-        # Check visibility and write permission
-        session_id = self._get_session_id()
-        visible = self._visible_mounts(session_id)
-        if mount not in visible:
-            return self._send_error("Mount not found", 404)
+        # Check write permission
         if mount.readonly:
             return self._send_error("Mount is read-only", 403)
+        session_id = self._get_session_id()
         if mount.host:
             if not self._is_admin_request() and not mount.public:
                 return self._send_error("Mount not found", 404)
@@ -1046,15 +1043,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
             return self._send_error("Mount not found", 404)
+        if mount.readonly:
+            return self._send_error("Mount is read-only", 403)
         # Check ownership
         session_id = self._get_session_id()
         if mount.host:
-            if not self._is_admin_request():
+            if not self._is_admin_request() and not mount.public:
                 return self._send_error("Mount not found", 404)
         elif not self._owns_mount(mount, session_id):
             return self._send_error("Mount not found", 404)
-        if mount.readonly:
-            return self._send_error("Mount is read-only", 403)
         rel_path = qs.get("path", [None])[0]
         if not rel_path:
             return self._send_error("Missing path parameter", 400)
