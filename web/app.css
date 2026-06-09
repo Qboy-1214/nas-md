@@ -499,6 +499,109 @@ a:hover {
   font-weight: var(--fw-medium);
 }
 
+/* Drag & Drop */
+.tree-item.dragging {
+  opacity: 0.4;
+}
+
+.tree-item.drop-target,
+.dir-row.drop-target,
+[data-drop-mount].drop-target {
+  background: rgba(99, 102, 241, 0.12);
+  outline: 2px dashed var(--c-primary);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
+
+/* Rename input */
+.rename-input {
+  background: var(--c-surface);
+  border: 1px solid var(--c-primary);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: inherit;
+  font-family: inherit;
+  color: var(--c-ink);
+  outline: none;
+  min-width: 40px;
+}
+
+/* Move/Copy dialog */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.modal-box {
+  background: var(--c-surface);
+  border-radius: var(--r-lg);
+  padding: var(--s-lg);
+  min-width: 300px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.modal-title {
+  font-size: var(--f-body-lg);
+  font-weight: var(--fw-semibold);
+  margin-bottom: var(--s-sm);
+}
+
+.modal-body {
+  font-size: var(--f-body);
+  color: var(--c-muted);
+  margin-bottom: var(--s-md);
+}
+
+.modal-actions {
+  display: flex;
+  gap: var(--s-sm);
+  justify-content: flex-end;
+}
+
+.modal-btn {
+  padding: var(--s-xs) var(--s-md);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+  color: var(--c-ink);
+  cursor: pointer;
+  font-size: var(--f-body-sm);
+  transition: all 0.15s ease;
+}
+
+.modal-btn:hover {
+  background: var(--c-bg-hover);
+}
+
+.modal-btn.primary {
+  background: var(--c-primary);
+  color: var(--c-on-primary);
+  border-color: var(--c-primary);
+}
+
+.modal-btn.primary:hover {
+  background: var(--c-primary-pressed);
+}
+
+.modal-btn.cancel {
+  color: var(--c-muted);
+}
+
+/* Sidebar hint */
+.sidebar-hint {
+  padding: var(--s-sm) var(--s-md);
+  font-size: var(--f-micro);
+  color: var(--c-muted);
+  text-align: center;
+  opacity: 0.7;
+  user-select: none;
+}
+
 .tree-icon {
   font-size: 14px;
 }

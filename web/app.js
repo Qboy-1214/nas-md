@@ -824,6 +824,9 @@ function renderSidebar() {
     html += `</div>`;
 
     if (isExpanded) {
+      // Root directory as drop target
+      const dropAttr = canWrite ? `data-drop-mount="${mount.id}" data-drop-path="/"` : '';
+      html += `<div ${dropAttr}>`;
       const treeData = state.treeData[mount.id]?.['/'];
       if (treeData) {
         html += renderEntries(treeData.children || [], mount.id, '/');
@@ -831,6 +834,7 @@ function renderSidebar() {
         html += '<div class="tree-loading">加载中...</div>';
         loadTree(mount.id, '/').then(() => renderSidebar());
       }
+      html += `</div>`;
     }
 
     html += `</div>`;
@@ -840,6 +844,15 @@ function renderSidebar() {
   if (regularMounts.length === 0 && !builtinEntries) {
     tree.innerHTML = '<div class="tree-loading">暂无挂载目录</div>';
   }
+
+  // Hint at bottom
+  const hint = document.createElement('div');
+  hint.className = 'sidebar-hint';
+  hint.textContent = '双击重命名 · 拖拽移动文件';
+  tree.appendChild(hint);
+
+  // Setup drag & drop event listeners
+  setupDragDrop();
 }
 
 function renderEntries(entries, mountId, _parentPath) {
@@ -863,6 +876,9 @@ function renderEntries(entries, mountId, _parentPath) {
   const svgFolder = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
   const svgFile = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
 
+  const mount = state.mounts.find((m) => m.id === mountId);
+  const canWrite = mount && !mount.readonly;
+
   return items
     .map((e) => {
       const fullPath = e.path;
@@ -875,14 +891,20 @@ function renderEntries(entries, mountId, _parentPath) {
         const isDirExpanded = state.expandedMounts.includes(dirKey);
         const subEntries = state.treeData[mountId]?.[fullPath];
         const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isDirExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
-        const mount = state.mounts.find((m) => m.id === mountId);
-        const canWrite = mount && !mount.readonly;
+
+        // Directories are drop targets; also draggable if writable
+        const dragAttr = canWrite
+          ? `draggable="true" data-drag-mount="${mountId}" data-drag-path="${fullPath}" data-drag-isdir="true"`
+          : '';
+        const dropAttr = canWrite
+          ? `data-drop-mount="${mountId}" data-drop-path="${fullPath}"`
+          : '';
 
         let html = `<div>`;
-        html += `<div class="${cls} dir-row">`;
+        html += `<div class="${cls} dir-row" ${dragAttr} ${dropAttr}>`;
         html += `<span class="dir-label" onclick="toggleDir('${mountId}','${fullPath}')">`;
         html += `<span class="tree-icon">${chevron}</span>`;
-        html += `<span class="tree-folder" title="${e.name}">${e.name}</span>`;
+        html += `<span class="tree-folder" title="${e.name}" ${canWrite ? `ondblclick="event.stopPropagation();startRename('${mountId}','${fullPath}',true)"` : ''}>${e.name}</span>`;
         html += `</span>`;
         if (canWrite && isDirExpanded) {
           html += `<span class="dir-actions">`;
@@ -905,9 +927,13 @@ function renderEntries(entries, mountId, _parentPath) {
         return html;
       }
 
-      return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')">
+      // MD file: draggable if writable
+      const dragAttr = canWrite
+        ? `draggable="true" data-drag-mount="${mountId}" data-drag-path="${fullPath}" data-drag-isdir="false"`
+        : '';
+      return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')" ${dragAttr}>
       <span class="tree-icon">${icon}</span>
-      <span title="${e.name}">${e.name}</span>
+      <span title="${e.name}" ${canWrite ? `ondblclick="event.stopPropagation();startRename('${mountId}','${fullPath}',false)"` : ''}>${e.name}</span>
     </div>`;
     })
     .join('');
@@ -922,6 +948,494 @@ function findMountForPath(path) {
     if (tree && _treeHasPath(tree, path)) return m;
   }
   return null;
+}
+
+// === Drag & Drop ===
+let _dragData = null; // { mountId, path, isDir }
+
+function setupDragDrop() {
+  const tree = $('file-tree');
+  if (!tree) return;
+
+  // Dragstart: capture source info
+  tree.addEventListener('dragstart', (e) => {
+    const el = e.target.closest('[data-drag-mount]');
+    if (!el) return;
+    _dragData = {
+      mountId: el.dataset.dragMount,
+      path: el.dataset.dragPath,
+      isDir: el.dataset.dragIsdir === 'true',
+    };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', _dragData.path);
+    el.classList.add('dragging');
+  });
+
+  tree.addEventListener('dragend', (e) => {
+    const el = e.target.closest('[data-drag-mount]');
+    if (el) el.classList.remove('dragging');
+    // Remove all drop highlights
+    tree.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));
+    _dragData = null;
+  });
+
+  // Dragover: highlight valid drop targets
+  tree.addEventListener('dragover', (e) => {
+    if (!_dragData) return;
+    const dropEl = e.target.closest('[data-drop-mount]');
+    if (!dropEl) {
+      e.preventDefault(); // still allow default to show no-drop cursor
+      return;
+    }
+    const destMountId = dropEl.dataset.dropMount;
+    const destPath = dropEl.dataset.dropPath;
+
+    // Don't allow dropping on self or into own subtree
+    if (_dragData.mountId === destMountId) {
+      if (_dragData.path === destPath) return;
+      if (destPath.startsWith(_dragData.path + '/')) return;
+    }
+
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    // Clear previous highlights
+    tree.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));
+    dropEl.classList.add('drop-target');
+  });
+
+  tree.addEventListener('dragleave', (e) => {
+    const dropEl = e.target.closest('[data-drop-mount]');
+    if (dropEl && !dropEl.contains(e.relatedTarget)) {
+      dropEl.classList.remove('drop-target');
+    }
+  });
+
+  // Drop: perform move or copy
+  tree.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    if (!_dragData) return;
+    const dropEl = e.target.closest('[data-drop-mount]');
+    if (!dropEl) return;
+
+    const destMountId = dropEl.dataset.dropMount;
+    const destPath = dropEl.dataset.dropPath;
+
+    // Don't allow dropping on self or into own subtree
+    if (_dragData.mountId === destMountId) {
+      if (_dragData.path === destPath) return;
+      if (destPath.startsWith(_dragData.path + '/')) return;
+    }
+
+    // Don't allow dropping into the same parent directory (no-op)
+    const srcParent = _dragData.path.substring(0, _dragData.path.lastIndexOf('/')) || '/';
+    if (_dragData.mountId === destMountId && srcParent === destPath) return;
+
+    dropEl.classList.remove('drop-target');
+
+    const isCrossMount = _dragData.mountId !== destMountId;
+    const srcMount = state.mounts.find((m) => m.id === _dragData.mountId);
+    const srcIsLocal = srcMount && srcMount._local;
+    const destMount = state.mounts.find((m) => m.id === destMountId);
+    const destIsLocal = destMount && destMount._local;
+
+    if (isCrossMount) {
+      // Cross-mount: ask user to choose move or copy
+      const choice = await showMoveCopyDialog();
+      if (!choice) return; // cancelled
+      if (srcIsLocal && destIsLocal) {
+        await crossMountLocal(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
+      } else if (srcIsLocal || destIsLocal) {
+        showToast('暂不支持本地与服务器挂载之间的跨挂载点操作');
+        return;
+      } else {
+        await crossMountServer(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
+      }
+    } else {
+      // Same mount: always move
+      if (srcIsLocal) {
+        await moveLocalItem(_dragData.mountId, _dragData.path, destPath);
+      } else {
+        await moveServerItem(_dragData.mountId, _dragData.path, destPath);
+      }
+    }
+  });
+}
+
+function showMoveCopyDialog() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-title">跨挂载点操作</div>
+        <div class="modal-body">目标目录与源文件不在同一挂载点，请选择操作：</div>
+        <div class="modal-actions">
+          <button class="modal-btn primary" data-action="move">移动（删除原文件）</button>
+          <button class="modal-btn" data-action="copy">复制（保留原文件）</button>
+          <button class="modal-btn cancel" data-action="cancel">取消</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      overlay.remove();
+      resolve(action === 'cancel' ? null : action);
+    });
+  });
+}
+
+// Move item within same server mount
+async function moveServerItem(mountId, srcPath, destDir) {
+  try {
+    const params = new URLSearchParams({ src: srcPath, destDir: destDir });
+    const headers = {};
+    if (state.isAdmin) headers['X-Admin'] = '1';
+    const resp = await fetch(`${_apiBase}/api/mounts/${mountId}/move?${params}`, {
+      method: 'POST',
+      headers,
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      showToast(data.error || '移动失败');
+      return;
+    }
+    showToast('已移动');
+    delete state.treeData[mountId];
+    await loadTree(mountId, '/');
+    renderSidebar();
+  } catch (e) {
+    console.error('Move failed:', e);
+    showToast('移动失败');
+  }
+}
+
+// Move item within same local mount
+async function moveLocalItem(mountId, srcPath, destDir) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount) return;
+  try {
+    const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+    const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+    const srcParentHandle = await getLocalDirHandle(localMount.handle, srcParentPath);
+    const destDirHandle = await getLocalDirHandle(localMount.handle, destDir);
+    if (!srcParentHandle || !destDirHandle) {
+      showToast('目录不存在');
+      return;
+    }
+
+    // Check if destination already exists
+    try {
+      if (srcPath.endsWith('.md') || !srcPath.includes('/')) {
+        // Could be file or dir, try file first
+        await destDirHandle.getFileHandle(srcName);
+        showToast('目标位置已存在同名文件');
+        return;
+      }
+    } catch {
+      // Not found as file, check dir
+    }
+    try {
+      await destDirHandle.getDirectoryHandle(srcName);
+      showToast('目标位置已存在同名文件夹');
+      return;
+    } catch {
+      // OK, doesn't exist
+    }
+
+    // Read source, write to dest, remove source
+    const isDir = await (async () => {
+      try {
+        await srcParentHandle.getDirectoryHandle(srcName);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+
+    if (isDir) {
+      // Move directory: copy recursively then remove original
+      const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
+      await copyLocalDir(srcDirHandle, destDirHandle, srcName);
+      await srcParentHandle.removeEntry(srcName, { recursive: true });
+    } else {
+      const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
+      const file = await srcFileHandle.getFile();
+      const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
+      const writable = await destFileHandle.createWritable();
+      await writable.write(await file.arrayBuffer());
+      await writable.close();
+      await srcParentHandle.removeEntry(srcName);
+    }
+
+    showToast('已移动');
+    await loadLocalTree(mountId);
+    renderSidebar();
+  } catch (e) {
+    console.error('Local move failed:', e);
+    showToast('移动失败');
+  }
+}
+
+// Copy a local directory recursively
+async function copyLocalDir(srcDirHandle, destParentHandle, dirName) {
+  const newDirHandle = await destParentHandle.getDirectoryHandle(dirName, { create: true });
+  for await (const entry of srcDirHandle.values()) {
+    if (entry.kind === 'file') {
+      const file = await entry.getFile();
+      const newFileHandle = await newDirHandle.getFileHandle(entry.name, { create: true });
+      const writable = await newFileHandle.createWritable();
+      await writable.write(await file.arrayBuffer());
+      await writable.close();
+    } else {
+      await copyLocalDir(entry, newDirHandle, entry.name);
+    }
+  }
+}
+
+// Cross-mount move/copy on server
+async function crossMountServer(srcMountId, srcPath, destMountId, destDir, action) {
+  try {
+    const endpoint = action === 'move' ? '/api/cross-mount-move' : '/api/cross-mount-copy';
+    const params = new URLSearchParams({
+      srcMount: srcMountId,
+      srcPath: srcPath,
+      destMount: destMountId,
+      destDir: destDir,
+    });
+    const headers = {};
+    if (state.isAdmin) headers['X-Admin'] = '1';
+    const resp = await fetch(`${_apiBase}${endpoint}?${params}`, {
+      method: 'POST',
+      headers,
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      showToast(data.error || '操作失败');
+      return;
+    }
+    showToast(action === 'move' ? '已移动' : '已复制');
+    // Refresh both mounts
+    delete state.treeData[srcMountId];
+    delete state.treeData[destMountId];
+    await loadTree(srcMountId, '/');
+    await loadTree(destMountId, '/');
+    renderSidebar();
+  } catch (e) {
+    console.error('Cross-mount operation failed:', e);
+    showToast('操作失败');
+  }
+}
+
+// Cross-mount move/copy between local mounts
+async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action) {
+  const srcLocalMount = state.localMounts[srcMountId];
+  const destLocalMount = state.localMounts[destMountId];
+  if (!srcLocalMount || !destLocalMount) return;
+
+  try {
+    const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+    const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+    const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
+    const destDirHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
+    if (!srcParentHandle || !destDirHandle) {
+      showToast('目录不存在');
+      return;
+    }
+
+    const isDir = await (async () => {
+      try {
+        await srcParentHandle.getDirectoryHandle(srcName);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+
+    if (isDir) {
+      const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
+      await copyLocalDir(srcDirHandle, destDirHandle, srcName);
+      if (action === 'move') {
+        await srcParentHandle.removeEntry(srcName, { recursive: true });
+      }
+    } else {
+      const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
+      const file = await srcFileHandle.getFile();
+      const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
+      const writable = await destFileHandle.createWritable();
+      await writable.write(await file.arrayBuffer());
+      await writable.close();
+      if (action === 'move') {
+        await srcParentHandle.removeEntry(srcName);
+      }
+    }
+
+    showToast(action === 'move' ? '已移动' : '已复制');
+    await loadLocalTree(srcMountId);
+    await loadLocalTree(destMountId);
+    renderSidebar();
+  } catch (e) {
+    console.error('Cross-mount local operation failed:', e);
+    showToast('操作失败');
+  }
+}
+
+// === Rename ===
+function startRename(mountId, path, isDir) {
+  // Don't allow renaming root directory
+  if (path === '/') return;
+
+  const tree = $('file-tree');
+  // Find the element that contains the name text
+  const el = tree.querySelector(`[data-drag-mount="${mountId}"][data-drag-path="${path}"]`);
+  if (!el) return;
+
+  // Find the name span
+  const nameSpan = isDir
+    ? el.querySelector('.tree-folder')
+    : el.querySelectorAll(':scope > span')[1];
+  if (!nameSpan || nameSpan.querySelector('input')) return; // already editing
+
+  const oldName = nameSpan.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = oldName;
+  input.className = 'rename-input';
+  input.style.width = Math.max(60, nameSpan.offsetWidth + 20) + 'px';
+
+  nameSpan.textContent = '';
+  nameSpan.appendChild(input);
+  input.focus();
+  // Select name without extension for files
+  if (!isDir && oldName.includes('.')) {
+    input.setSelectionRange(0, oldName.lastIndexOf('.'));
+  } else {
+    input.select();
+  }
+
+  const finishRename = async () => {
+    const newName = input.value.trim();
+    if (!newName || newName === oldName) {
+      nameSpan.textContent = oldName;
+      return;
+    }
+    // Validate name
+    if (newName.includes('/') || newName.includes('\\')) {
+      showToast('名称不能包含 / 或 \\');
+      nameSpan.textContent = oldName;
+      return;
+    }
+
+    const newPath = path.substring(0, path.lastIndexOf('/') + 1) + newName;
+    const mount = state.mounts.find((m) => m.id === mountId);
+    const isLocal = mount && mount._local;
+
+    if (isLocal) {
+      await renameLocalItem(mountId, path, newPath, newName);
+    } else {
+      await renameServerItem(mountId, path, newPath);
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finishRename();
+    } else if (e.key === 'Escape') {
+      nameSpan.textContent = oldName;
+    }
+  });
+  input.addEventListener('blur', finishRename);
+}
+
+async function renameServerItem(mountId, oldPath, newPath) {
+  try {
+    const params = new URLSearchParams({ oldPath: oldPath, newPath: newPath });
+    const headers = {};
+    if (state.isAdmin) headers['X-Admin'] = '1';
+    const resp = await fetch(`${_apiBase}/api/mounts/${mountId}/rename?${params}`, {
+      method: 'PUT',
+      headers,
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      showToast(data.error || '重命名失败');
+      renderSidebar();
+      return;
+    }
+    showToast('已重命名');
+    delete state.treeData[mountId];
+    await loadTree(mountId, '/');
+    renderSidebar();
+  } catch (e) {
+    console.error('Rename failed:', e);
+    showToast('重命名失败');
+    renderSidebar();
+  }
+}
+
+async function renameLocalItem(mountId, oldPath, newPath, newName) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount) return;
+  try {
+    const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/')) || '/';
+    const oldName = oldPath.substring(oldPath.lastIndexOf('/') + 1);
+    const parentHandle = await getLocalDirHandle(localMount.handle, parentPath);
+    if (!parentHandle) {
+      showToast('目录不存在');
+      renderSidebar();
+      return;
+    }
+
+    // Check if new name already exists
+    // Determine if it's a dir by trying to get it
+    let srcIsDir = false;
+    try {
+      await parentHandle.getDirectoryHandle(oldName);
+      srcIsDir = true;
+    } catch {
+      srcIsDir = false;
+    }
+
+    // Check destination doesn't exist
+    try {
+      if (srcIsDir) {
+        await parentHandle.getDirectoryHandle(newName);
+      } else {
+        await parentHandle.getFileHandle(newName);
+      }
+      showToast('已存在同名项');
+      renderSidebar();
+      return;
+    } catch {
+      // OK, doesn't exist
+    }
+
+    // For local FS, we need to copy then delete (no native rename in File System Access API)
+    if (srcIsDir) {
+      const srcDirHandle = await parentHandle.getDirectoryHandle(oldName);
+      await copyLocalDir(srcDirHandle, parentHandle, newName);
+      await parentHandle.removeEntry(oldName, { recursive: true });
+    } else {
+      const srcFileHandle = await parentHandle.getFileHandle(oldName);
+      const file = await srcFileHandle.getFile();
+      const destFileHandle = await parentHandle.getFileHandle(newName, { create: true });
+      const writable = await destFileHandle.createWritable();
+      await writable.write(await file.arrayBuffer());
+      await writable.close();
+      await parentHandle.removeEntry(oldName);
+    }
+
+    showToast('已重命名');
+    await loadLocalTree(mountId);
+    renderSidebar();
+  } catch (e) {
+    console.error('Local rename failed:', e);
+    showToast('重命名失败');
+    renderSidebar();
+  }
 }
 
 // === Create file / folder ===

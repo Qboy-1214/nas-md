@@ -233,7 +233,10 @@ class MountManager:
                 d = d.strip()
                 if not d:
                     continue
-                if ":" in d and d[1:2] != ":":
+                if "=" in d:
+                    _, path = d.split("=", 1)
+                    path = os.path.abspath(path.strip())
+                elif ":" in d and d[1:2] != ":":
                     _, path = d.split(":", 1)
                     path = os.path.abspath(path.strip())
                 else:
@@ -246,8 +249,13 @@ class MountManager:
                 d = d.strip()
                 if not d:
                     continue
-                # Support "显示名:path" format
-                if ":" in d and d[1:2] != ":":  # not a Windows drive letter
+                # Support "name=path" format (preferred, works on all OS)
+                # Also support "name:path" format (backward compat, only if path part looks absolute)
+                if "=" in d:
+                    name, path = d.split("=", 1)
+                    name = name.strip()
+                    path = os.path.abspath(path.strip())
+                elif ":" in d and d[1:2] != ":":  # not a Windows drive letter
                     name, path = d.split(":", 1)
                     name = name.strip()
                     path = os.path.abspath(path.strip())
@@ -806,6 +814,36 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     self._handle_create(mount_id, qs)
                     return
 
+            # POST /api/mounts/{id}/move — move file/folder to new path
+            if path.startswith("/api/mounts/") and path.endswith("/move"):
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    mount_id = parts[3]
+                    qs = parse_qs(parsed.query)
+                    self._handle_move(mount_id, qs)
+                    return
+
+            # POST /api/mounts/{id}/copy — copy file to new path
+            if path.startswith("/api/mounts/") and path.endswith("/copy"):
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    mount_id = parts[3]
+                    qs = parse_qs(parsed.query)
+                    self._handle_copy(mount_id, qs)
+                    return
+
+            # POST /api/cross-mount-move — move file across mount points
+            if path == "/api/cross-mount-move":
+                qs = parse_qs(parsed.query)
+                self._handle_cross_mount_move(qs)
+                return
+
+            # POST /api/cross-mount-copy — copy file across mount points
+            if path == "/api/cross-mount-copy":
+                qs = parse_qs(parsed.query)
+                self._handle_cross_mount_copy(qs)
+                return
+
             # /syncFilenames
             if path == "/syncFilenames":
                 self._handle_sync_filenames()
@@ -882,6 +920,195 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         except OSError as e:
             logger.error(f"Create failed: {e}")
             self._send_error(f"Failed to create: {e}", 500)
+
+    def _check_write_access(self, mount, mount_id: str) -> str | None:
+        """Check write permission for a mount. Returns error message or None."""
+        if not self.mount_manager:
+            return "No mounts configured"
+        if not mount:
+            return "Mount not found"
+        if mount.readonly:
+            return "Mount is read-only"
+        session_id = self._get_session_id()
+        if mount.host:
+            if not self._is_admin_request() and not mount.public:
+                return "Mount not found"
+        elif not self._owns_mount(mount, session_id):
+            return "Mount not found"
+        return None
+
+    def _handle_move(self, mount_id: str, qs: dict):
+        """Move a file or folder to a new parent directory within the same mount."""
+        mount = self.mount_manager.find_mount(mount_id) if self.mount_manager else None
+        err = self._check_write_access(mount, mount_id)
+        if err:
+            return self._send_error(err, 404 if "not found" in err.lower() else 403)
+
+        src_path = qs.get("src", [None])[0]
+        dest_dir = qs.get("destDir", [None])[0]
+        if not src_path or dest_dir is None:
+            return self._send_error("Missing src or destDir parameter", 400)
+
+        src_abs = self.mount_manager._safe_path(mount, src_path)
+        dest_dir_abs = self.mount_manager._safe_path(mount, dest_dir)
+        if src_abs is None or dest_dir_abs is None:
+            return self._send_error("Path escapes mount root", 403)
+
+        if not os.path.exists(src_abs):
+            return self._send_error("Source not found", 404)
+        if not os.path.isdir(dest_dir_abs):
+            return self._send_error("Destination directory not found", 404)
+
+        name = os.path.basename(src_path)
+        dest_abs = os.path.join(dest_dir_abs, name)
+        if os.path.exists(dest_abs):
+            return self._send_error("A file or folder with this name already exists at destination", 409)
+
+        # Prevent moving a directory into itself or its subtree
+        if dest_dir_abs.startswith(src_abs + os.sep) or dest_dir_abs == src_abs:
+            return self._send_error("Cannot move a directory into itself", 400)
+
+        try:
+            os.rename(src_abs, dest_abs)
+            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+        except OSError as e:
+            logger.error(f"Move failed: {e}")
+            self._send_error(f"Failed to move: {e}", 500)
+
+    def _handle_copy(self, mount_id: str, qs: dict):
+        """Copy a file to a new parent directory within the same mount."""
+        mount = self.mount_manager.find_mount(mount_id) if self.mount_manager else None
+        err = self._check_write_access(mount, mount_id)
+        if err:
+            return self._send_error(err, 404 if "not found" in err.lower() else 403)
+
+        src_path = qs.get("src", [None])[0]
+        dest_dir = qs.get("destDir", [None])[0]
+        if not src_path or dest_dir is None:
+            return self._send_error("Missing src or destDir parameter", 400)
+
+        src_abs = self.mount_manager._safe_path(mount, src_path)
+        dest_dir_abs = self.mount_manager._safe_path(mount, dest_dir)
+        if src_abs is None or dest_dir_abs is None:
+            return self._send_error("Path escapes mount root", 403)
+
+        if not os.path.exists(src_abs):
+            return self._send_error("Source not found", 404)
+        if not os.path.isdir(dest_dir_abs):
+            return self._send_error("Destination directory not found", 404)
+
+        name = os.path.basename(src_path)
+        dest_abs = os.path.join(dest_dir_abs, name)
+        if os.path.exists(dest_abs):
+            return self._send_error("A file or folder with this name already exists at destination", 409)
+
+        try:
+            if os.path.isdir(src_abs):
+                shutil.copytree(src_abs, dest_abs)
+            else:
+                shutil.copy2(src_abs, dest_abs)
+            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+        except OSError as e:
+            logger.error(f"Copy failed: {e}")
+            self._send_error(f"Failed to copy: {e}", 500)
+
+    def _handle_cross_mount_move(self, qs: dict):
+        """Move a file across mount points (copy + delete source)."""
+        src_mount_id = qs.get("srcMount", [None])[0]
+        src_path = qs.get("srcPath", [None])[0]
+        dest_mount_id = qs.get("destMount", [None])[0]
+        dest_dir = qs.get("destDir", [None])[0]
+        if not all([src_mount_id, src_path, dest_mount_id, dest_dir]):
+            return self._send_error("Missing parameters", 400)
+
+        src_mount = self.mount_manager.find_mount(src_mount_id) if self.mount_manager else None
+        dest_mount = self.mount_manager.find_mount(dest_mount_id) if self.mount_manager else None
+
+        # Check write access on both mounts
+        err_src = self._check_write_access(src_mount, src_mount_id)
+        if err_src:
+            return self._send_error(err_src, 404 if "not found" in err_src.lower() else 403)
+        err_dest = self._check_write_access(dest_mount, dest_mount_id)
+        if err_dest:
+            return self._send_error(err_dest, 404 if "not found" in err_dest.lower() else 403)
+
+        src_abs = self.mount_manager._safe_path(src_mount, src_path)
+        dest_dir_abs = self.mount_manager._safe_path(dest_mount, dest_dir)
+        if src_abs is None or dest_dir_abs is None:
+            return self._send_error("Path escapes mount root", 403)
+
+        if not os.path.exists(src_abs):
+            return self._send_error("Source not found", 404)
+        if not os.path.isdir(dest_dir_abs):
+            return self._send_error("Destination directory not found", 404)
+
+        name = os.path.basename(src_path)
+        dest_abs = os.path.join(dest_dir_abs, name)
+        if os.path.exists(dest_abs):
+            return self._send_error("A file or folder with this name already exists at destination", 409)
+
+        try:
+            if os.path.isdir(src_abs):
+                shutil.copytree(src_abs, dest_abs)
+                shutil.rmtree(src_abs)
+            else:
+                shutil.copy2(src_abs, dest_abs)
+                os.remove(src_abs)
+            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+        except OSError as e:
+            logger.error(f"Cross-mount move failed: {e}")
+            self._send_error(f"Failed to move: {e}", 500)
+
+    def _handle_cross_mount_copy(self, qs: dict):
+        """Copy a file across mount points."""
+        src_mount_id = qs.get("srcMount", [None])[0]
+        src_path = qs.get("srcPath", [None])[0]
+        dest_mount_id = qs.get("destMount", [None])[0]
+        dest_dir = qs.get("destDir", [None])[0]
+        if not all([src_mount_id, src_path, dest_mount_id, dest_dir]):
+            return self._send_error("Missing parameters", 400)
+
+        src_mount = self.mount_manager.find_mount(src_mount_id) if self.mount_manager else None
+        dest_mount = self.mount_manager.find_mount(dest_mount_id) if self.mount_manager else None
+
+        # Check read access on source, write access on destination
+        if not src_mount or not self.mount_manager:
+            return self._send_error("Source mount not found", 404)
+        session_id = self._get_session_id()
+        if src_mount.host:
+            if not self._is_admin_request() and not src_mount.public:
+                return self._send_error("Source mount not found", 404)
+        elif not self._owns_mount(src_mount, session_id):
+            return self._send_error("Source mount not found", 404)
+
+        err_dest = self._check_write_access(dest_mount, dest_mount_id)
+        if err_dest:
+            return self._send_error(err_dest, 404 if "not found" in err_dest.lower() else 403)
+
+        src_abs = self.mount_manager._safe_path(src_mount, src_path)
+        dest_dir_abs = self.mount_manager._safe_path(dest_mount, dest_dir)
+        if src_abs is None or dest_dir_abs is None:
+            return self._send_error("Path escapes mount root", 403)
+
+        if not os.path.exists(src_abs):
+            return self._send_error("Source not found", 404)
+        if not os.path.isdir(dest_dir_abs):
+            return self._send_error("Destination directory not found", 404)
+
+        name = os.path.basename(src_path)
+        dest_abs = os.path.join(dest_dir_abs, name)
+        if os.path.exists(dest_abs):
+            return self._send_error("A file or folder with this name already exists at destination", 409)
+
+        try:
+            if os.path.isdir(src_abs):
+                shutil.copytree(src_abs, dest_abs)
+            else:
+                shutil.copy2(src_abs, dest_abs)
+            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+        except OSError as e:
+            logger.error(f"Cross-mount copy failed: {e}")
+            self._send_error(f"Failed to copy: {e}", 500)
 
     def _handle_tree(self, mount_id: str, qs: dict):
         if not self.mount_manager:
@@ -1033,6 +1260,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         new_path = qs.get("newPath", [None])[0]
         if not old_path or not new_path:
             return self._send_error("Missing oldPath or newPath", 400)
+        # Don't allow renaming root directory
+        if old_path == "/":
+            return self._send_error("Cannot rename root directory", 403)
         old_abs = self.mount_manager._safe_path(mount, old_path)
         new_abs = self.mount_manager._safe_path(mount, new_path)
         if old_abs is None or new_abs is None:
