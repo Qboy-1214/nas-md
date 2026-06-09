@@ -863,6 +863,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             if kind == "folder":
                 os.makedirs(target, exist_ok=False)
+                # Auto-create tmp.md so the folder is visible in sidebar
+                tmp_path = os.path.join(target, "tmp.md")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write("为了让目录可见，所以自动创建了这个文件，不需要可以去对应文件夹删掉\n")
             else:
                 # Create .md file by default
                 if not name.endswith(".md"):

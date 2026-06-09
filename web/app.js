@@ -27,6 +27,54 @@ const state = {
 // Expose state globally so files.js can access isAdmin
 window.state = state;
 
+// === IndexedDB helpers for persisting FileSystemDirectoryHandle ===
+const IDB_NAME = 'nasmd-local-mounts';
+const IDB_STORE = 'handles';
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbPut(key, value) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGet(key) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbDelete(key) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function idbGetAllKeys() {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).getAllKeys();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 // === DOM 引用 ===
 const $ = (id) => document.getElementById(id);
 
@@ -40,6 +88,53 @@ document.addEventListener('DOMContentLoaded', async () => {
     /* ignore */
   }
   await loadMounts();
+  // Restore local mounts from IndexedDB
+  try {
+    const keys = await idbGetAllKeys();
+    for (const mountId of keys) {
+      const record = await idbGet(mountId);
+      if (record && record.handle) {
+        // Request permission (may prompt user)
+        const perm = await record.handle.queryPermission({ mode: 'readwrite' });
+        if (perm === 'granted') {
+          state.localMounts[mountId] = { handle: record.handle, name: record.name };
+          state.mounts.push({
+            id: mountId,
+            name: record.name,
+            path: '本机: ' + record.name,
+            public: false,
+            readonly: false,
+            host: false,
+            owner: 'local',
+            _local: true,
+          });
+          await loadLocalTree(mountId);
+        } else {
+          // Permission not granted yet, will request on first interaction
+          // Store handle temporarily and try requestPermission later
+          state.localMounts[mountId] = {
+            handle: record.handle,
+            name: record.name,
+            needsPerm: true,
+          };
+          state.mounts.push({
+            id: mountId,
+            name: record.name,
+            path: '本机: ' + record.name,
+            public: false,
+            readonly: false,
+            host: false,
+            owner: 'local',
+            _local: true,
+            _needsPerm: true,
+          });
+        }
+      }
+    }
+    if (keys.length > 0) renderSidebar();
+  } catch (_e) {
+    /* IndexedDB not available, skip */
+  }
   await loadRecentFiles();
   // Restore last opened file, or fall back to welcome.md
   const lastPath = localStorage.getItem('nasmd_last_path');
@@ -209,6 +304,8 @@ async function mountLocalDirectory() {
       owner: 'local',
       _local: true,
     });
+    // Persist handle to IndexedDB
+    await idbPut(mountId, { handle, name });
     showToast(`已挂载本机目录: ${name}`);
     await loadLocalTree(mountId);
     renderSidebar();
@@ -498,6 +595,27 @@ async function toggleMountPublic(mountId, isPublic) {
 
 // 挂载点展开/折叠
 async function toggleMount(mountId) {
+  const mount = state.mounts.find((m) => m.id === mountId);
+  // Handle local mount that needs permission
+  if (mount && mount._local && mount._needsPerm) {
+    const localMount = state.localMounts[mountId];
+    if (localMount && localMount.handle) {
+      try {
+        const perm = await localMount.handle.requestPermission({ mode: 'readwrite' });
+        if (perm === 'granted') {
+          delete mount._needsPerm;
+          delete localMount.needsPerm;
+          await loadLocalTree(mountId);
+        } else {
+          showToast('需要授予目录访问权限');
+          return;
+        }
+      } catch (_e) {
+        showToast('权限请求失败');
+        return;
+      }
+    }
+  }
   const idx = state.expandedMounts.indexOf(mountId);
   if (idx >= 0) {
     state.expandedMounts.splice(idx, 1);
@@ -586,6 +704,8 @@ async function removeMount(mountId) {
       }
     }
     localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
+    // Remove from IndexedDB
+    await idbDelete(mountId);
     renderSidebar();
     showToast('已卸载本机目录');
     return;
@@ -687,6 +807,9 @@ function renderSidebar() {
     html += `<div class="mount-name" onclick="toggleMount('${mount.id}')">`;
     html += `<span class="mount-icon">${chevron}</span>`;
     html += `<span>${mount.name}</span>`;
+    if (mount._needsPerm) {
+      html += `<span style="color:var(--c-muted);font-size:var(--f-body-xs);margin-left:4px">（点击授权）</span>`;
+    }
     html += `</div>`;
     // Action buttons (right side)
     html += `<span class="mount-actions">`;
@@ -823,7 +946,14 @@ async function createItem(mountId, dirPath, kind) {
         return;
       }
       if (kind === 'folder') {
-        await dirHandle.getDirectoryHandle(trimmedName, { create: true });
+        const newDir = await dirHandle.getDirectoryHandle(trimmedName, { create: true });
+        // Auto-create tmp.md so the folder is visible in sidebar
+        const tmpHandle = await newDir.getFileHandle('tmp.md', { create: true });
+        const tmpWritable = await tmpHandle.createWritable();
+        await tmpWritable.write(
+          '为了让目录可见，所以自动创建了这个文件，不需要可以去对应文件夹删掉\n',
+        );
+        await tmpWritable.close();
         showToast(`已创建文件夹: ${trimmedName}`);
       } else {
         const fileName = trimmedName.endsWith('.md') ? trimmedName : trimmedName + '.md';
