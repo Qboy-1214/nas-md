@@ -157,6 +157,16 @@
   --shadow-md: rgba(15, 15, 15, 0.08) 0px 4px 12px;
   --shadow-lg: rgba(15, 15, 15, 0.12) 0px 8px 24px;
   --shadow-float: rgba(15, 15, 15, 0.2) 0px 24px 48px -8px;
+
+  /* List connector colors (per nesting level) */
+  --lc-color-1: #e06c75;
+  --lc-color-2: #98c379;
+  --lc-color-3: #e5c07b;
+  --lc-color-4: #56b6c2;
+  --lc-color-5: #c678dd;
+  --lc-color-6: #d19a66;
+  --lc-color-7: #61afef;
+  --lc-color-8: #be95ff;
 }
 
 /* === Global Typography === */
@@ -1832,122 +1842,24 @@ a:hover {
   font-weight: var(--fw-bold);
 }
 
-/* === List Tree Connectors === */
-/* Target IR mode, WYSIWYG mode, and Preview mode */
-.vditor-ir .vditor-reset ul,
-.vditor-ir .vditor-reset ol,
-.vditor-wysiwyg .vditor-reset ul,
-.vditor-wysiwyg .vditor-reset ol,
-.vditor-preview .vditor-reset ul,
-.vditor-preview .vditor-reset ol {
-  list-style: none !important;
-}
-
-.vditor-ir .vditor-reset li,
-.vditor-wysiwyg .vditor-reset li,
-.vditor-preview .vditor-reset li {
-  position: relative;
-  padding-left: 1.4em;
-}
-
-/* Vertical line connecting sibling items */
-.vditor-ir .vditor-reset li::before,
-.vditor-wysiwyg .vditor-reset li::before,
-.vditor-preview .vditor-reset li::before {
-  content: '';
+/* === Dynamic List Connectors === */
+/* SVG overlay for drawing connector lines on top of list items */
+.list-connectors-svg {
   position: absolute;
-  left: 0.45em;
   top: 0;
-  bottom: 0;
-  width: 1px;
-  background-color: var(--c-hairline-strong);
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
 }
 
-/* Horizontal connector branching to content */
-.vditor-ir .vditor-reset li::after,
-.vditor-wysiwyg .vditor-reset li::after,
-.vditor-preview .vditor-reset li::after {
-  content: '';
-  position: absolute;
-  left: 0.45em;
-  top: 0.68em;
-  width: 0.5em;
-  height: 1px;
-  background-color: var(--c-hairline-strong);
-}
-
-/* Last child: vertical line stops at horizontal (L-shape) */
-.vditor-ir .vditor-reset li:last-child::before,
-.vditor-wysiwyg .vditor-reset li:last-child::before,
-.vditor-preview .vditor-reset li:last-child::before {
-  bottom: auto;
-  height: 0.68em;
-}
-
-/* Root-level items: no left vertical line, only horizontal stub */
-.vditor-ir .vditor-reset > ul > li::before,
-.vditor-ir .vditor-reset > ol > li::before,
-.vditor-wysiwyg .vditor-reset > ul > li::before,
-.vditor-wysiwyg .vditor-reset > ol > li::before,
-.vditor-preview .vditor-reset > ul > li::before,
-.vditor-preview .vditor-reset > ol > li::before {
-  display: none;
-}
-
-.vditor-ir .vditor-reset > ul > li::after,
-.vditor-ir .vditor-reset > ol > li::after,
-.vditor-wysiwyg .vditor-reset > ul > li::after,
-.vditor-wysiwyg .vditor-reset > ol > li::after,
-.vditor-preview .vditor-reset > ul > li::after,
-.vditor-preview .vditor-reset > ol > li::after {
-  display: block;
-}
-
-/* Ordered list: show counter number via CSS counter */
-.vditor-ir .vditor-reset ol,
-.vditor-wysiwyg .vditor-reset ol,
-.vditor-preview .vditor-reset ol {
-  counter-reset: ol-counter;
-}
-
-.vditor-ir .vditor-reset ol > li,
-.vditor-wysiwyg .vditor-reset ol > li,
-.vditor-preview .vditor-reset ol > li {
-  counter-increment: ol-counter;
-}
-
-.vditor-ir .vditor-reset ol > li > ::before,
-.vditor-wysiwyg .vditor-reset ol > li > ::before,
-.vditor-preview .vditor-reset ol > li > ::before {
-  /* Don't interfere with our connector lines */
-}
-
-/* Task list / checkbox items: skip connector lines */
-.vditor-ir .vditor-reset input[type='checkbox'],
-.vditor-wysiwyg .vditor-reset input[type='checkbox'],
-.vditor-preview .vditor-reset input[type='checkbox'] {
-  margin-right: 0.35em;
-}
-
-/* Nested lists inside li: reduce indent since we have padding */
-.vditor-ir .vditor-reset li > ul,
-.vditor-ir .vditor-reset li > ol,
-.vditor-wysiwyg .vditor-reset li > ul,
-.vditor-wysiwyg .vditor-reset li > ol,
-.vditor-preview .vditor-reset li > ul,
-.vditor-preview .vditor-reset li > ol {
-  margin-top: 0.15em;
-  margin-bottom: 0.15em;
-}
-
-/* Dark mode: use darker connector lines */
-.dark .vditor-ir .vditor-reset li::before,
-.dark .vditor-wysiwyg .vditor-reset li::before,
-.dark .vditor-preview .vditor-reset li::before,
-.dark .vditor-ir .vditor-reset li::after,
-.dark .vditor-wysiwyg .vditor-reset li::after,
-.dark .vditor-preview .vditor-reset li::after {
-  background-color: #555;
+/* Container for the SVG, positioned relative over Vditor content */
+.vditor-ir .vditor-reset,
+.vditor-wysiwyg .vditor-reset,
+.vditor-preview .vditor-reset {
+  position: relative;
 }
 
 /* === Vditor Dark Mode Variables === */

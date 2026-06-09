@@ -500,6 +500,8 @@ function initEditor(content, mode, readonly) {
           ed.style.userSelect = 'text';
         }
       }
+      // Initialize dynamic list connectors
+      setupListConnectors(vditorEl);
       window._vditor = _vditor;
     },
   });
@@ -758,4 +760,159 @@ function getCurrentFileInfo() {
 function setFileInfo(mountId, relPath) {
   _currentMountId = mountId;
   _currentRelPath = relPath;
+}
+
+// ─── Dynamic List Connectors ─────────────────────────────────────────────
+//
+// Draws colored vertical lines on the left side of nested list items,
+// following mouse cursor position. Each nesting level gets a different color.
+// Lines connect ancestor <li> elements to show the hierarchy chain.
+
+const LC_COLORS = [
+  'var(--lc-color-1)',
+  'var(--lc-color-2)',
+  'var(--lc-color-3)',
+  'var(--lc-color-4)',
+  'var(--lc-color-5)',
+  'var(--lc-color-6)',
+  'var(--lc-color-7)',
+  'var(--lc-color-8)',
+];
+
+let _lcSvg = null;
+let _lcContainer = null;
+let _lcRafId = null;
+let _lcActiveLi = null;
+
+function setupListConnectors(vditorEl) {
+  // Find content container (IR, WYSIWYG, or Preview)
+  const containers = [
+    vditorEl.querySelector('.vditor-ir .vditor-reset'),
+    vditorEl.querySelector('.vditor-wysiwyg .vditor-reset'),
+    vditorEl.querySelector('.vditor-preview .vditor-reset'),
+  ].filter(Boolean);
+
+  if (containers.length === 0) return;
+
+  // Create SVG overlay
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.classList.add('list-connectors-svg');
+  svg.setAttribute('aria-hidden', 'true');
+
+  // Insert into first available container
+  _lcContainer = containers[0];
+  _lcContainer.style.position = 'relative';
+  _lcContainer.appendChild(svg);
+  _lcSvg = svg;
+
+  // Listen for mousemove on all content areas
+  containers.forEach((container) => {
+    container.addEventListener('mousemove', _onLcMouseMove, { passive: true });
+  });
+
+  // Also listen to selection changes for keyboard navigation
+  document.addEventListener('selectionchange', _onLcSelectionChange);
+
+  // Redraw on scroll
+  containers.forEach((container) => {
+    const scrollParent = container.closest('.vditor-content') || container;
+    scrollParent.addEventListener('scroll', _onLcScroll, { passive: true });
+  });
+
+  // Cleanup on editor destroy
+  const origDestroy = _vditor.destroy.bind(_vditor);
+  _vditor.destroy = function () {
+    teardownListConnectors();
+    origDestroy();
+  };
+}
+
+function teardownListConnectors() {
+  if (_lcSvg && _lcSvg.parentNode) _lcSvg.remove();
+  if (_lcRafId) cancelAnimationFrame(_lcRafId);
+  document.removeEventListener('selectionchange', _onLcSelectionChange);
+  _lcSvg = null;
+  _lcContainer = null;
+  _lcActiveLi = null;
+  _lcRafId = null;
+}
+
+function _onLcMouseMove(e) {
+  // Find closest <li> under cursor
+  const li = e.target.closest('li');
+  if (li === _lcActiveLi) return;
+  _lcActiveLi = li;
+  _scheduleLcDraw();
+}
+
+function _onLcSelectionChange() {
+  if (!_lcContainer) return;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  const node = sel.anchorNode;
+  if (!node) return;
+  const li =
+    node.nodeType === Node.TEXT_NODE ? node.parentElement.closest('li') : node.closest('li');
+  if (li === _lcActiveLi) return;
+  _lcActiveLi = li;
+  _scheduleLcDraw();
+}
+
+function _onLcScroll() {
+  _scheduleLcDraw();
+}
+
+function _scheduleLcDraw() {
+  if (_lcRafId) cancelAnimationFrame(_lcRafId);
+  _lcRafId = requestAnimationFrame(() => {
+    _lcRafId = null;
+    _drawConnectors();
+  });
+}
+
+function _drawConnectors() {
+  if (!_lcSvg || !_lcContainer || !_lcActiveLi) {
+    if (_lcSvg) _lcSvg.innerHTML = '';
+    return;
+  }
+
+  // Collect ancestor <li> chain from current item up to root list
+  const ancestors = [];
+  let el = _lcActiveLi.parentElement;
+  while (el) {
+    if (el.tagName === 'LI') {
+      ancestors.unshift(el);
+      el = el.parentElement;
+    } else if (el.tagName === 'UL' || el.tagName === 'OL') {
+      el = el.parentElement; // skip ul/ol, go to parent li or root
+    } else {
+      break;
+    }
+  }
+
+  if (ancestors.length === 0) {
+    _lcSvg.innerHTML = '';
+    return;
+  }
+
+  // Get container rect for coordinate mapping
+  const containerRect = _lcContainer.getBoundingClientRect();
+  const targetRect = _lcActiveLi.getBoundingClientRect();
+
+  // Build SVG lines
+  let html = '';
+
+  ancestors.forEach((ancestorLi, depth) => {
+    const color = LC_COLORS[depth % LC_COLORS.length];
+    const ancRect = ancestorLi.getBoundingClientRect();
+
+    // Vertical line: from ancestor top to current item center
+    const x1 = ancRect.left - containerRect.left - 2;
+    const y1 = Math.max(0, ancRect.top - containerRect.top);
+    const y2 = targetRect.top - containerRect.top + targetRect.height / 2;
+
+    html += `<line x1="${x1}" y1="${y1}" x2="${x1}" y2="${y2}" stroke="${color}" stroke-width="2" stroke-linecap="round" opacity="0.6"/>`;
+  });
+
+  _lcSvg.innerHTML = html;
 }
