@@ -675,12 +675,27 @@ a:hover {
 }
 
 .breadcrumb {
-  flex: 1;
   font-size: var(--f-body-sm);
   color: var(--c-steel);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rename-top-btn {
+  background: none;
+  border: none;
+  color: var(--c-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.rename-top-btn:hover {
+  color: var(--c-primary);
+  background: rgba(99, 102, 241, 0.08);
 }
 
 .topbar-actions {

@@ -786,7 +786,7 @@ function renderSidebar() {
       const isActive = state.currentPath === fullPath;
       const icon = e.isDir ? svgFolder : svgFile;
       const cls = `tree-item builtin-file ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
-      tree.innerHTML += `<div class="${cls}" onclick="if(!_renaming)openFile('${fullPath}','${builtin.id}')">
+      tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}','${builtin.id}')">
         <span class="tree-icon">${icon}</span>
         <span title="${e.name}">${e.name}</span>
         <span class="mount-builtin-badge" title="内置只读">${svgLock}</span>
@@ -848,7 +848,7 @@ function renderSidebar() {
   // Hint at bottom
   const hint = document.createElement('div');
   hint.className = 'sidebar-hint';
-  hint.textContent = '双击重命名 · 拖拽移动文件';
+  hint.textContent = '拖拽移动文件';
   tree.appendChild(hint);
 
   // Setup drag & drop event listeners
@@ -902,9 +902,9 @@ function renderEntries(entries, mountId, _parentPath) {
 
         let html = `<div>`;
         html += `<div class="${cls} dir-row" ${dragAttr} ${dropAttr}>`;
-        html += `<span class="dir-label" onclick="if(!_renaming)toggleDir('${mountId}','${fullPath}')">`;
+        html += `<span class="dir-label" onclick="toggleDir('${mountId}','${fullPath}')">`;
         html += `<span class="tree-icon">${chevron}</span>`;
-        html += `<span class="tree-folder" title="${e.name}" ${canWrite ? `ondblclick="event.stopPropagation();startRename('${mountId}','${fullPath}',true)"` : ''}>${e.name}</span>`;
+        html += `<span class="tree-folder" title="${e.name}">${e.name}</span>`;
         html += `</span>`;
         if (canWrite && isDirExpanded) {
           html += `<span class="dir-actions">`;
@@ -931,9 +931,9 @@ function renderEntries(entries, mountId, _parentPath) {
       const dragAttr = canWrite
         ? `draggable="true" data-drag-mount="${mountId}" data-drag-path="${fullPath}" data-drag-isdir="false"`
         : '';
-      return `<div class="${cls}" onclick="if(!_renaming)openFile('${fullPath}','${mountId}')" ${dragAttr}>
+      return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')" ${dragAttr}>
       <span class="tree-icon">${icon}</span>
-      <span title="${e.name}" ${canWrite ? `ondblclick="event.stopPropagation();startRename('${mountId}','${fullPath}',false)"` : ''}>${e.name}</span>
+      <span title="${e.name}">${e.name}</span>
     </div>`;
     })
     .join('');
@@ -953,9 +953,15 @@ function findMountForPath(path) {
 // === Drag & Drop ===
 let _dragData = null; // { mountId, path, isDir }
 
+let _dragDropSetup = false;
+
 function setupDragDrop() {
   const tree = $('file-tree');
   if (!tree) return;
+
+  // Only bind event listeners once
+  if (_dragDropSetup) return;
+  _dragDropSetup = true;
 
   // Dragstart: capture source info
   tree.addEventListener('dragstart', (e) => {
@@ -1380,60 +1386,52 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
   }
 }
 
-// === Rename ===
-let _renaming = false;
+// === Rename (modal dialog) ===
+function showRenameModal() {
+  const path = state.currentPath;
+  const mountId = state.currentMountId;
+  if (!path || !mountId || path === '/') return;
 
-function startRename(mountId, path, isDir) {
-  // Don't allow renaming root directory
-  if (path === '/') return;
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount || mount.readonly) return;
 
-  _renaming = true;
+  const oldName = path.substring(path.lastIndexOf('/') + 1);
+  const isDir = !oldName.includes('.');
 
-  const tree = $('file-tree');
-  // Find the element that contains the name text
-  const el = tree.querySelector(`[data-drag-mount="${mountId}"][data-drag-path="${path}"]`);
-  if (!el) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <div class="modal-title">重命名</div>
+      <div class="modal-body">
+        <input type="text" id="rename-modal-input" class="rename-input" value="${oldName}" style="width:100%;padding:6px 8px;font-size:14px" />
+      </div>
+      <div class="modal-actions">
+        <button class="modal-cancel" onclick="this.closest('.modal-overlay').remove()">取消</button>
+        <button class="modal-confirm" id="rename-modal-confirm">确定</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
 
-  // Find the name span
-  const nameSpan = isDir
-    ? el.querySelector('.tree-folder')
-    : el.querySelectorAll(':scope > span')[1];
-  if (!nameSpan || nameSpan.querySelector('input')) return; // already editing
-
-  const oldName = nameSpan.textContent;
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = oldName;
-  input.className = 'rename-input';
-  input.style.width = Math.max(60, nameSpan.offsetWidth + 20) + 'px';
-
-  nameSpan.textContent = '';
-  nameSpan.appendChild(input);
-  input.focus();
-  // Select name without extension for files
+  const input = document.getElementById('rename-modal-input');
   if (!isDir && oldName.includes('.')) {
     input.setSelectionRange(0, oldName.lastIndexOf('.'));
   } else {
     input.select();
   }
+  input.focus();
 
-  const finishRename = async () => {
-    _renaming = false;
+  const doRename = async () => {
     const newName = input.value.trim();
-    if (!newName || newName === oldName) {
-      nameSpan.textContent = oldName;
-      _renaming = false;
-      return;
-    }
-    // Validate name
+    overlay.remove();
+    if (!newName || newName === oldName) return;
     if (newName.includes('/') || newName.includes('\\')) {
       showToast('名称不能包含 / 或 \\');
-      nameSpan.textContent = oldName;
       return;
     }
 
     const newPath = path.substring(0, path.lastIndexOf('/') + 1) + newName;
-    const mount = state.mounts.find((m) => m.id === mountId);
     const isLocal = mount && mount._local;
 
     if (isLocal) {
@@ -1443,16 +1441,18 @@ function startRename(mountId, path, isDir) {
     }
   };
 
+  document.getElementById('rename-modal-confirm').addEventListener('click', doRename);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      finishRename();
+      doRename();
     } else if (e.key === 'Escape') {
-      nameSpan.textContent = oldName;
-      _renaming = false;
+      overlay.remove();
     }
   });
-  input.addEventListener('blur', finishRename);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
 }
 
 async function renameServerItem(mountId, oldPath, newPath) {
@@ -1695,6 +1695,11 @@ async function openFile(path, preferredMountId, searchKeyword) {
     localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
 
     $('breadcrumb').textContent = path + (mount.readonly ? ' (只读)' : '');
+    // Show rename button if file is writable and not root
+    const renameBtn = $('rename-top-btn');
+    if (renameBtn) {
+      renameBtn.style.display = !mount.readonly && path !== '/' ? '' : 'none';
+    }
     $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
     showPage('editor');
@@ -1859,7 +1864,7 @@ async function loadBacklinks(page) {
     content.innerHTML = bls
       .map(
         (bl) =>
-          `<div class="backlink-item" onclick="if(!_renaming)openFile('${bl.path.replace(/'/g, "\\'")}')">
+          `<div class="backlink-item" onclick="openFile('${bl.path.replace(/'/g, "\\'")}')">
         <span class="backlink-page">${bl.title || bl.path}</span>
         <span class="backlink-line">第 ${bl.line} 行</span>
       </div>`,
@@ -2155,7 +2160,7 @@ async function showDashboard() {
         : recent
             .map(
               (p) =>
-                `<div class="dash-recent-item" onclick="if(!_renaming)openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
+                `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
           <span class="dash-recent-title">${p.title || p.path}</span>
           <span class="dash-recent-time">${p.rel_path || p.path}</span>
         </div>`,
@@ -2173,7 +2178,7 @@ async function showDashboard() {
             : orphans
                 .map(
                   (p) =>
-                    `<div class="dash-recent-item" onclick="if(!_renaming)openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
+                    `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
               <span class="dash-recent-title">${p.title || p.path}</span>
               <span class="dash-recent-time">孤立页面</span>
             </div>`,
@@ -2473,7 +2478,7 @@ function renderRecentFiles() {
   for (const f of state.recentFiles) {
     const accessTime = state.accessLog[f.mountId + ':' + f.path];
     const displayTime = accessTime ? formatTime(accessTime) : formatTime(f.modTime);
-    html += `<div class="recent-item" onclick="if(!_renaming)openFile('${f.path.replace(/'/g, "\\'")}', '${f.mountId}')">
+    html += `<div class="recent-item" onclick="openFile('${f.path.replace(/'/g, "\\'")}', '${f.mountId}')">
       <span class="recent-name">${f.name}</span>
       <span class="recent-time">${displayTime}</span>
     </div>`;
