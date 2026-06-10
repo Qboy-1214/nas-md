@@ -527,16 +527,6 @@ a:hover {
 }
 
 /* Move/Copy dialog */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-}
-
 .modal-box {
   background: var(--c-surface);
   border-radius: var(--r-lg);
@@ -702,6 +692,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: var(--s-xs);
+  margin-left: auto;
 }
 
 /* Editor Mode — Segmented Tab */
@@ -2046,7 +2037,7 @@ a:hover {
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 9999;
   backdrop-filter: blur(4px);
   opacity: 0;
   transition: opacity 0.2s ease;

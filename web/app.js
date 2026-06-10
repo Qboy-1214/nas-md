@@ -1070,7 +1070,7 @@ function setupDragDrop() {
 function showMoveCopyDialog(isCrossMachine = false) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
+    overlay.className = 'modal-overlay active';
     const title = isCrossMachine ? '跨机器操作' : '跨挂载点操作';
     const body = isCrossMachine
       ? '源文件与目标目录不在同一台机器上，请选择操作：'
@@ -1399,7 +1399,7 @@ function showRenameModal() {
   const isDir = !oldName.includes('.');
 
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
+  overlay.className = 'modal-overlay active';
   overlay.innerHTML = `
     <div class="modal-box">
       <div class="modal-title">重命名</div>
