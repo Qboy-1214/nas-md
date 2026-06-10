@@ -639,14 +639,14 @@ async function toggleDir(mountId, dirPath) {
   renderSidebar();
 }
 
-async function loadTree(mountId, path) {
+async function loadTree(mountId, path, force = false) {
   if (!state.treeData[mountId]) state.treeData[mountId] = {};
-  // Skip if already loaded
-  if (state.treeData[mountId][path]) return;
+  // Skip if already loaded (unless forced)
+  if (!force && state.treeData[mountId][path]) return;
   // Local mount: load via File System Access API
   const mount = state.mounts.find((m) => m.id === mountId);
   if (mount && mount._local && state.localMounts[mountId]) {
-    // Fallback mode: tree already built by onDirPicked, nothing to load
+    // Fallback mode: tree already built by onDirPicked, skip even on force
     if (state.localMounts[mountId].fileMap) return;
     try {
       const localMount = state.localMounts[mountId];
@@ -2267,41 +2267,48 @@ function collectFileMtimes(entries, files) {
   }
 }
 
+let _refreshTreeBusy = false;
+
 async function refreshTree() {
-  // Refresh all expanded mount trees by clearing cache and reloading
-  const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
-  let changed = false;
-  for (const mountId of expandedMountIds) {
-    // Collect expanded dir paths for this mount
-    const expandedDirs = state.expandedMounts
-      .filter((k) => k.startsWith(mountId + ':'))
-      .map((k) => k.substring(mountId.length + 1));
-    expandedDirs.push('/'); // always refresh root
-    for (const dirPath of expandedDirs) {
-      const oldChildren = state.treeData[mountId]?.[dirPath];
-      // Force reload by clearing cache
-      if (state.treeData[mountId]) {
-        delete state.treeData[mountId][dirPath];
-      }
-      await loadTree(mountId, dirPath);
-      const newChildren = state.treeData[mountId]?.[dirPath];
-      // Quick check if tree changed
-      if (oldChildren && newChildren) {
-        const oldNames = (oldChildren.children || [])
-          .map((e) => e.name)
-          .sort()
-          .join(',');
-        const newNames = (newChildren.children || [])
-          .map((e) => e.name)
-          .sort()
-          .join(',');
-        if (oldNames !== newNames) changed = true;
-      } else if (!oldChildren !== !newChildren) {
-        changed = true;
+  // Prevent concurrent refresh
+  if (_refreshTreeBusy) return;
+  _refreshTreeBusy = true;
+  try {
+    // Refresh all expanded mount trees by reloading and comparing
+    const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
+    let changed = false;
+    for (const mountId of expandedMountIds) {
+      // Collect expanded dir paths for this mount
+      const expandedDirs = state.expandedMounts
+        .filter((k) => k.startsWith(mountId + ':'))
+        .map((k) => k.substring(mountId.length + 1));
+      expandedDirs.push('/'); // always refresh root
+      for (const dirPath of expandedDirs) {
+        const oldChildren = state.treeData[mountId]?.[dirPath];
+        // Force reload without clearing cache first
+        // This prevents the tree from collapsing if the reload fails
+        await loadTree(mountId, dirPath, true);
+        const newChildren = state.treeData[mountId]?.[dirPath];
+        // Quick check if tree changed
+        if (oldChildren && newChildren) {
+          const oldNames = (oldChildren.children || [])
+            .map((e) => e.name)
+            .sort()
+            .join(',');
+          const newNames = (newChildren.children || [])
+            .map((e) => e.name)
+            .sort()
+            .join(',');
+          if (oldNames !== newNames) changed = true;
+        } else if (!oldChildren !== !newChildren) {
+          changed = true;
+        }
       }
     }
+    if (changed) renderSidebar();
+  } finally {
+    _refreshTreeBusy = false;
   }
-  if (changed) renderSidebar();
 }
 
 // === Sidebar auto-refresh ===
