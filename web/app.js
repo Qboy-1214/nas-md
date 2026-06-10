@@ -786,7 +786,7 @@ function renderSidebar() {
       const isActive = state.currentPath === fullPath;
       const icon = e.isDir ? svgFolder : svgFile;
       const cls = `tree-item builtin-file ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
-      tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}','${builtin.id}')">
+      tree.innerHTML += `<div class="${cls}" onclick="if(!_renaming)openFile('${fullPath}','${builtin.id}')">
         <span class="tree-icon">${icon}</span>
         <span title="${e.name}">${e.name}</span>
         <span class="mount-builtin-badge" title="内置只读">${svgLock}</span>
@@ -803,7 +803,7 @@ function renderSidebar() {
     const isHostMount = !!mount.host;
 
     let html = `<div class="mount-group">`;
-    html += `<div class="mount-name-row">`;
+    html += `<div class="mount-name-row" ${canWrite ? `data-drop-mount="${mount.id}" data-drop-path="/"` : ''}>`;
     html += `<div class="mount-name" onclick="toggleMount('${mount.id}')">`;
     html += `<span class="mount-icon">${chevron}</span>`;
     html += `<span>${mount.name}</span>`;
@@ -902,7 +902,7 @@ function renderEntries(entries, mountId, _parentPath) {
 
         let html = `<div>`;
         html += `<div class="${cls} dir-row" ${dragAttr} ${dropAttr}>`;
-        html += `<span class="dir-label" onclick="toggleDir('${mountId}','${fullPath}')">`;
+        html += `<span class="dir-label" onclick="if(!_renaming)toggleDir('${mountId}','${fullPath}')">`;
         html += `<span class="tree-icon">${chevron}</span>`;
         html += `<span class="tree-folder" title="${e.name}" ${canWrite ? `ondblclick="event.stopPropagation();startRename('${mountId}','${fullPath}',true)"` : ''}>${e.name}</span>`;
         html += `</span>`;
@@ -931,7 +931,7 @@ function renderEntries(entries, mountId, _parentPath) {
       const dragAttr = canWrite
         ? `draggable="true" data-drag-mount="${mountId}" data-drag-path="${fullPath}" data-drag-isdir="false"`
         : '';
-      return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')" ${dragAttr}>
+      return `<div class="${cls}" onclick="if(!_renaming)openFile('${fullPath}','${mountId}')" ${dragAttr}>
       <span class="tree-icon">${icon}</span>
       <span title="${e.name}" ${canWrite ? `ondblclick="event.stopPropagation();startRename('${mountId}','${fullPath}',false)"` : ''}>${e.name}</span>
     </div>`;
@@ -984,8 +984,7 @@ function setupDragDrop() {
     if (!_dragData) return;
     const dropEl = e.target.closest('[data-drop-mount]');
     if (!dropEl) {
-      e.preventDefault(); // still allow default to show no-drop cursor
-      return;
+      return; // no valid drop target, browser will show no-drop cursor
     }
     const destMountId = dropEl.dataset.dropMount;
     const destPath = dropEl.dataset.dropPath;
@@ -1283,9 +1282,13 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
 }
 
 // === Rename ===
+let _renaming = false;
+
 function startRename(mountId, path, isDir) {
   // Don't allow renaming root directory
   if (path === '/') return;
+
+  _renaming = true;
 
   const tree = $('file-tree');
   // Find the element that contains the name text
@@ -1316,9 +1319,11 @@ function startRename(mountId, path, isDir) {
   }
 
   const finishRename = async () => {
+    _renaming = false;
     const newName = input.value.trim();
     if (!newName || newName === oldName) {
       nameSpan.textContent = oldName;
+      _renaming = false;
       return;
     }
     // Validate name
@@ -1345,6 +1350,7 @@ function startRename(mountId, path, isDir) {
       finishRename();
     } else if (e.key === 'Escape') {
       nameSpan.textContent = oldName;
+      _renaming = false;
     }
   });
   input.addEventListener('blur', finishRename);
@@ -1754,7 +1760,7 @@ async function loadBacklinks(page) {
     content.innerHTML = bls
       .map(
         (bl) =>
-          `<div class="backlink-item" onclick="openFile('${bl.path.replace(/'/g, "\\'")}')">
+          `<div class="backlink-item" onclick="if(!_renaming)openFile('${bl.path.replace(/'/g, "\\'")}')">
         <span class="backlink-page">${bl.title || bl.path}</span>
         <span class="backlink-line">第 ${bl.line} 行</span>
       </div>`,
@@ -2050,7 +2056,7 @@ async function showDashboard() {
         : recent
             .map(
               (p) =>
-                `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
+                `<div class="dash-recent-item" onclick="if(!_renaming)openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
           <span class="dash-recent-title">${p.title || p.path}</span>
           <span class="dash-recent-time">${p.rel_path || p.path}</span>
         </div>`,
@@ -2068,7 +2074,7 @@ async function showDashboard() {
             : orphans
                 .map(
                   (p) =>
-                    `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
+                    `<div class="dash-recent-item" onclick="if(!_renaming)openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
               <span class="dash-recent-title">${p.title || p.path}</span>
               <span class="dash-recent-time">孤立页面</span>
             </div>`,
@@ -2361,7 +2367,7 @@ function renderRecentFiles() {
   for (const f of state.recentFiles) {
     const accessTime = state.accessLog[f.mountId + ':' + f.path];
     const displayTime = accessTime ? formatTime(accessTime) : formatTime(f.modTime);
-    html += `<div class="recent-item" onclick="openFile('${f.path.replace(/'/g, "\\'")}', '${f.mountId}')">
+    html += `<div class="recent-item" onclick="if(!_renaming)openFile('${f.path.replace(/'/g, "\\'")}', '${f.mountId}')">
       <span class="recent-name">${f.name}</span>
       <span class="recent-time">${displayTime}</span>
     </div>`;
