@@ -447,14 +447,27 @@ function initEditor(content, mode, readonly) {
 
       // Intercept anchor link clicks and scroll to target heading
       // Use capture phase to intercept before Vditor's internal handlers
+      // Handle both: <a href="#..."> (preview/WYSIWYG) and <span data-type="a"> (IR mode)
       vditorEl.addEventListener(
         'click',
         (e) => {
+          let targetId = null;
           const anchorLink = e.target.closest('a[href^="#"]');
-          if (!anchorLink) return;
+          if (anchorLink) {
+            targetId = anchorLink.getAttribute('href').slice(1);
+          } else {
+            // IR mode: links are rendered as <span data-type="a" data-href="#...">
+            const irLink = e.target.closest('[data-type="a"]');
+            if (irLink) {
+              const href = irLink.getAttribute('data-href') || '';
+              if (href.startsWith('#')) {
+                targetId = href.slice(1);
+              }
+            }
+          }
+          if (targetId === null) return;
           e.preventDefault();
           e.stopPropagation();
-          const targetId = anchorLink.getAttribute('href').slice(1);
           const decodedId = decodeURIComponent(targetId);
           // Ensure heading IDs are up-to-date before searching
           _addHeadingIdsToEditor(vditorEl);
