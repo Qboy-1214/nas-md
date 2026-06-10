@@ -741,8 +741,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             # /api/mounts/{id}/file
             if "/api/mounts/" in path and path.endswith("/file"):
                 mount_id = path.split("/api/mounts/")[1].split("/file")[0]
-                if self._handle_write_file(mount_id, qs) and self.search_dirs:
-                    self._update_search_index()
+                written_path = self._handle_write_file(mount_id, qs)
+                if written_path and self.search_dirs:
+                    self._update_search_index(file_path=written_path)
                 return
 
             # /api/mounts/{id}/rename
@@ -1060,6 +1061,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             else:
                 shutil.copy2(src_abs, dest_abs)
                 os.remove(src_abs)
+            # Update search index: remove old, index new
+            if self.search_dirs:
+                from nas_md.search import remove_file, index_file
+
+                try:
+                    remove_file(src_abs)
+                    if os.path.isfile(dest_abs):
+                        with open(dest_abs, encoding="utf-8", errors="replace") as f:
+                            content = f.read()
+                        index_file(dest_abs, content)
+                except Exception as e:
+                    logger.error("Search index update after cross-mount move failed: %s", e)
             self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
         except OSError as e:
             logger.error(f"Cross-mount move failed: {e}")
@@ -1113,6 +1126,17 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 shutil.copytree(src_abs, dest_abs)
             else:
                 shutil.copy2(src_abs, dest_abs)
+            # Update search index: index new file
+            if self.search_dirs:
+                from nas_md.search import index_file
+
+                try:
+                    if os.path.isfile(dest_abs):
+                        with open(dest_abs, encoding="utf-8", errors="replace") as f:
+                            content = f.read()
+                        index_file(dest_abs, content)
+                except Exception as e:
+                    logger.error("Search index update after cross-mount copy failed: %s", e)
             self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
         except OSError as e:
             logger.error(f"Cross-mount copy failed: {e}")
@@ -1247,7 +1271,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             f.write(body)
         st = os.stat(abs_path)
         self._send_json({"status": "ok", "modTime": int(st.st_mtime * 1000), "size": st.st_size})
-        return True
+        return abs_path
 
     def _handle_rename(self, mount_id: str, qs: dict):
         if not self.mount_manager:
@@ -1277,6 +1301,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("Path escapes mount root", 403)
         os.makedirs(os.path.dirname(new_abs), exist_ok=True)
         os.rename(old_abs, new_abs)
+        # Update search index: remove old, index new
+        if self.search_dirs:
+            from nas_md.search import remove_file, index_file
+
+            try:
+                remove_file(old_abs)
+                if os.path.isfile(new_abs):
+                    with open(new_abs, encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    index_file(new_abs, content)
+            except Exception as e:
+                logger.error("Search index update after rename failed: %s", e)
         self._send_json({"status": "ok"})
 
     def _handle_mkdir(self, mount_id: str, qs: dict):
@@ -1328,6 +1364,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             shutil.rmtree(abs_path)
         else:
             os.remove(abs_path)
+        # Update search index: remove deleted file
+        if self.search_dirs:
+            from nas_md.search import remove_file
+
+            try:
+                remove_file(abs_path)
+            except Exception as e:
+                logger.error("Search index update after delete failed: %s", e)
         self._send_json({"status": "ok"})
 
     # --- Search handler ---
@@ -1924,13 +1968,19 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         self._send_json({"id": mount_id, "removed": True})
 
-    def _update_search_index(self):
-        """Rebuild search index after file write."""
-        from nas_md.search import rebuild_index
+    def _update_search_index(self, file_path: str | None = None):
+        """Update search index after file write. Uses incremental index if path given."""
+        from nas_md.search import index_file, remove_file, rebuild_index
 
         try:
-            count = rebuild_index(self.search_dirs)
-            logger.info("Search index updated: %d files", count)
+            if file_path and os.path.isfile(file_path):
+                with open(file_path, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                index_file(file_path, content)
+                logger.info("Search index updated for: %s", file_path)
+            else:
+                count = rebuild_index(self.search_dirs)
+                logger.info("Search index rebuilt: %d files", count)
         except Exception as e:
             logger.error("Search index update failed: %s", e)
 
@@ -2262,19 +2312,37 @@ def _init_search_index(mount_dirs: list[str]) -> None:
         try:
             row = conn.execute("SELECT COUNT(*) FROM pages").fetchone()
             count = row[0] if row else 0
+            need_rebuild = False
             if count == 0:
+                need_rebuild = True
                 logger.info("Building initial search index...")
-                count = rebuild_index(mount_dirs)
-                logger.info("Search index built: %d files indexed", count)
             else:
                 # Check if index uses relative paths (legacy) and needs rebuild
                 sample = conn.execute("SELECT path FROM pages LIMIT 1").fetchone()
                 if sample and sample[0] and not os.path.isabs(sample[0]):
+                    need_rebuild = True
                     logger.info("Rebuilding search index (upgrading to absolute paths)...")
-                    count = rebuild_index(mount_dirs)
-                    logger.info("Search index rebuilt: %d files indexed", count)
                 else:
-                    logger.info("Search index ready: %d files", count)
+                    # Check if indexed paths still exist on disk
+                    stale = conn.execute(
+                        "SELECT COUNT(*) FROM pages WHERE path NOT IN "
+                        "(SELECT path FROM pages WHERE 0)"
+                    ).fetchone()[0]
+                    # Sample up to 50 paths to detect stale entries
+                    samples = conn.execute("SELECT path FROM pages LIMIT 50").fetchall()
+                    missing = sum(1 for (p,) in samples if not os.path.exists(p))
+                    if missing > 0:
+                        need_rebuild = True
+                        logger.info(
+                            "Rebuilding search index (%d/%d sampled paths missing from disk)...",
+                            missing,
+                            len(samples),
+                        )
+            if need_rebuild:
+                count = rebuild_index(mount_dirs)
+                logger.info("Search index built: %d files indexed", count)
+            else:
+                logger.info("Search index ready: %d files", count)
         finally:
             conn.close()
     except Exception as e:
