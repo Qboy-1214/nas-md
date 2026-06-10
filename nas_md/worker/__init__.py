@@ -31,7 +31,7 @@ def beginning_of_the_day(t: float) -> float:
     """Return the beginning of the day for a given timestamp."""
     import datetime
 
-    dt = datetime.datetime.fromtimestamp(t, tz=datetime.timezone.utc)
+    dt = datetime.datetime.fromtimestamp(t, tz=datetime.UTC)
     beginning = dt.replace(hour=0, minute=0, second=0, microsecond=0)
     return beginning.timestamp()
 
@@ -40,7 +40,7 @@ def tomorrow() -> int:
     """Return tomorrow's beginning of day (UTC) as unix timestamp."""
     import datetime
 
-    t = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+    t = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
     beginning = t.replace(hour=0, minute=0, second=0, microsecond=0)
     return int(beginning.timestamp())
 
@@ -49,8 +49,8 @@ def format_task_date(scheduled_at: int) -> str:
     """Format a scheduled date for display."""
     import datetime
 
-    today = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    task_date = datetime.datetime.fromtimestamp(scheduled_at, tz=datetime.timezone.utc).replace(
+    today = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    task_date = datetime.datetime.fromtimestamp(scheduled_at, tz=datetime.UTC).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     diff_days = (task_date - today).days

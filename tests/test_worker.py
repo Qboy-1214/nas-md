@@ -43,7 +43,7 @@ class TestTomorrow:
         result = tomorrow()
         # Use UTC now for comparison since tomorrow() returns UTC-based timestamp
         import datetime
-        now_utc_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        now_utc_ts = int(datetime.datetime.now(datetime.UTC).timestamp())
         assert result > now_utc_ts
 
     def test_returns_timestamp_at_start_of_day(self):
@@ -57,14 +57,14 @@ class TestTomorrow:
 class TestFormatTaskDate:
     def test_today_label(self):
         """Task scheduled for today UTC should return 'Today'."""
-        now_utc = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        now_utc = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         ts = int(calendar.timegm(now_utc.timetuple()))
         result = format_task_date(ts)
         assert result == "Today"
 
     def test_tomorrow_label(self):
         """Task scheduled for tomorrow UTC should return 'Tomorrow'."""
-        tomorrow_utc = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+        tomorrow_utc = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
         tomorrow_utc = tomorrow_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         ts = int(calendar.timegm(tomorrow_utc.timetuple()))
         result = format_task_date(ts)
@@ -72,7 +72,7 @@ class TestFormatTaskDate:
 
     def test_this_week_label(self):
         """Task scheduled 2-6 days out should return weekday name."""
-        future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3)
+        future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=3)
         future = future.replace(hour=0, minute=0, second=0, microsecond=0)
         ts = int(calendar.timegm(future.timetuple()))
         result = format_task_date(ts)
@@ -80,7 +80,7 @@ class TestFormatTaskDate:
 
     def test_next_week_label(self):
         """Task scheduled 7-13 days out should start with 'Next'."""
-        future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=8)
+        future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=8)
         future = future.replace(hour=0, minute=0, second=0, microsecond=0)
         ts = int(calendar.timegm(future.timetuple()))
         result = format_task_date(ts)
@@ -88,7 +88,7 @@ class TestFormatTaskDate:
 
     def test_far_future(self):
         """Task scheduled far out should return date format."""
-        future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
+        future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
         future = future.replace(hour=0, minute=0, second=0, microsecond=0)
         ts = int(calendar.timegm(future.timetuple()))
         result = format_task_date(ts)
@@ -103,7 +103,7 @@ class TestScheduleReport:
 
     def test_single_schedule(self):
         """Single schedule should format correctly."""
-        now_utc = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        now_utc = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         ts = int(calendar.timegm(now_utc.timetuple()))
         schedules = [{"scheduledAt": ts, "filename": "task1.md"}]
         result = schedule_report(schedules)
@@ -112,7 +112,7 @@ class TestScheduleReport:
 
     def test_multiple_days(self):
         """Multiple schedules on different days should group by day."""
-        now_utc = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        now_utc = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         today_ts = int(calendar.timegm(now_utc.timetuple()))
         tomorrow_utc = now_utc + datetime.timedelta(days=1)
         tomorrow_ts = int(calendar.timegm(tomorrow_utc.timetuple()))

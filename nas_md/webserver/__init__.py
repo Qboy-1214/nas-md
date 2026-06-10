@@ -16,7 +16,7 @@ import subprocess
 import time
 import traceback
 import uuid
-from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from http.cookies import SimpleCookie
 from io import BytesIO
 from urllib.parse import parse_qs, urlparse

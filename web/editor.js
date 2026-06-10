@@ -398,12 +398,19 @@ function initEditor(content, mode, readonly) {
         const targetId = anchorLink.getAttribute('href').slice(1);
         const decodedId = decodeURIComponent(targetId);
         // Normalize ID for comparison: lowercase, trim spaces/dashes
-        const normalize = (s) => s.toLowerCase().replace(/^\s+|\s+$/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const normalize = (s) =>
+          s
+            .toLowerCase()
+            .replace(/^\s+|\s+$/g, '')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, '');
         const normTarget = normalize(decodedId);
 
         // Search by id attribute in editor areas (IR, WYSIWYG, preview)
+        // eslint-disable-next-line no-undef
         let target =
           vditorEl.querySelector(`[id="${CSS.escape(decodedId)}"]`) ||
+          // eslint-disable-next-line no-undef
           vditorEl.querySelector(`[id="${CSS.escape(targetId)}"]`);
         if (!target) {
           // Try matching by normalized id
@@ -428,7 +435,9 @@ function initEditor(content, mode, readonly) {
         }
         if (target) {
           // Determine which scrollable container the target is in
-          const scrollParent = target.closest('.vditor-ir, .vditor-wysiwyg, .vditor-preview, .vditor-sv');
+          const scrollParent = target.closest(
+            '.vditor-ir, .vditor-wysiwyg, .vditor-preview, .vditor-sv',
+          );
           if (scrollParent) {
             const parentRect = scrollParent.getBoundingClientRect();
             const targetRect = target.getBoundingClientRect();
