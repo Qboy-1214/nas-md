@@ -9,6 +9,48 @@ let _originalContent = '';
 let _editorMode = 'ir';
 
 /**
+ * Generate a heading ID from text, matching common markdown anchor conventions.
+ * e.g. "1.1 表格" → "11-表格", "Hello World" → "hello-world"
+ */
+function _headingId(text) {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w\u4e00-\u9fff-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+/**
+ * Add id attributes to heading tags in HTML string (for preview pane).
+ */
+function _addHeadingIds(html) {
+  return html.replace(/<(h[1-6])(\s[^>]*)?>([\s\S]*?)<\/\1>/gi, (match, tag, attrs, content) => {
+    attrs = attrs || '';
+    if (/id=/.test(attrs)) return match; // already has id
+    const text = content.replace(/<[^>]*>/g, '').trim();
+    if (!text) return match;
+    const id = _headingId(text);
+    return `<${tag}${attrs} id="${id}">${content}</${tag}>`;
+  });
+}
+
+/**
+ * Add id attributes to heading elements in editor panes (IR, WYSIWYG).
+ */
+function _addHeadingIdsToEditor(vditorEl) {
+  const areas = vditorEl.querySelectorAll('.vditor-ir, .vditor-wysiwyg');
+  areas.forEach((area) => {
+    area.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((h) => {
+      if (h.id) return;
+      const text = (h.innerText || h.textContent || '').trim();
+      if (text) h.id = _headingId(text);
+    });
+  });
+}
+
+/**
  * Rewrite relative image src to API path so images in mounted dirs display correctly.
  * e.g. ![](photo.png) in /notes/readme.md → /api/mounts/{id}/file?path=/notes/photo.png
  */
@@ -289,7 +331,6 @@ function initEditor(content, mode, readonly) {
     ],
     preview: {
       mode: 'both',
-      anchor: 1,
       markdown: { toc: true, autoSpace: true, fixTermTypo: true },
       hljs: {
         enable: true,
@@ -300,7 +341,7 @@ function initEditor(content, mode, readonly) {
         current: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
         path: '/lib/vditor-cdn/dist/css/content-theme',
       },
-      transform: (html) => rewriteImageSrc(html),
+      transform: (html) => _addHeadingIds(rewriteImageSrc(html)),
     },
     hint: {
       extend: [
@@ -360,6 +401,8 @@ function initEditor(content, mode, readonly) {
       const style = document.createElement('style');
       style.textContent = '.vditor-preview__action { display: none !important; }';
       vditorEl.appendChild(style);
+      // Add heading IDs to editor panes for anchor navigation
+      _addHeadingIdsToEditor(vditorEl);
       if (_editorMode === 'sv') setupSVSync();
       setupOutlineHighlight();
       _restoreOutlineVisibility();
@@ -450,17 +493,24 @@ function initEditor(content, mode, readonly) {
 
       // Rewrite relative image paths in editor content
       rewriteEditorImages();
+      _addHeadingIdsToEditor(vditorEl);
       const contentEl =
         vditorEl.querySelector('.vditor-ir') || vditorEl.querySelector('.vditor-wysiwyg');
       if (contentEl) {
-        new MutationObserver(() => rewriteEditorImages()).observe(contentEl, {
+        new MutationObserver(() => {
+          rewriteEditorImages();
+          _addHeadingIdsToEditor(vditorEl);
+        }).observe(contentEl, {
           childList: true,
           subtree: true,
         });
       }
       const previewEl = vditorEl.querySelector('.vditor-preview');
       if (previewEl) {
-        new MutationObserver(() => rewriteEditorImages()).observe(previewEl, {
+        new MutationObserver(() => {
+          rewriteEditorImages();
+          _addHeadingIdsToEditor(vditorEl);
+        }).observe(previewEl, {
           childList: true,
           subtree: true,
         });
