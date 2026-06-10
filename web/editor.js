@@ -11,13 +11,14 @@ let _editorMode = 'ir';
 /**
  * Generate a heading ID from text, matching common markdown anchor conventions.
  * e.g. "1.1 表格" → "11-表格", "Hello World" → "hello-world"
+ * Rules: lowercase, spaces→hyphens, remove punctuation (keep CJK, letters, digits, hyphens)
  */
 function _headingId(text) {
   return text
     .trim()
     .toLowerCase()
     .replace(/\s+/g, '-')
-    .replace(/[^\w\u4e00-\u9fff-]/g, '')
+    .replace(/[^\p{L}\p{N}-]/gu, '')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
 }
@@ -37,14 +38,25 @@ function _addHeadingIds(html) {
 }
 
 /**
- * Add id attributes to heading elements in editor panes (IR, WYSIWYG).
+ * Add id attributes to heading elements in all Vditor panes (IR, WYSIWYG, preview).
  */
 function _addHeadingIdsToEditor(vditorEl) {
-  const areas = vditorEl.querySelectorAll('.vditor-ir, .vditor-wysiwyg');
+  const areas = vditorEl.querySelectorAll('.vditor-ir, .vditor-wysiwyg, .vditor-preview');
   areas.forEach((area) => {
     area.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((h) => {
       if (h.id) return;
-      const text = (h.innerText || h.textContent || '').trim();
+      // In IR mode, heading markers (##) are in .vditor-ir__marker spans — exclude them
+      let text = h.textContent || '';
+      const markers = h.querySelectorAll('.vditor-ir__marker--heading, .vditor-ir__marker');
+      if (markers.length > 0) {
+        // Clone and remove markers to get clean text
+        const clone = h.cloneNode(true);
+        clone.querySelectorAll('.vditor-ir__marker--heading, .vditor-ir__marker').forEach((m) => {
+          m.remove();
+        });
+        text = clone.textContent || '';
+      }
+      text = text.trim();
       if (text) h.id = _headingId(text);
     });
   });
@@ -434,62 +446,70 @@ function initEditor(content, mode, readonly) {
       }
 
       // Intercept anchor link clicks and scroll to target heading
-      vditorEl.addEventListener('click', (e) => {
-        const anchorLink = e.target.closest('a[href^="#"]');
-        if (!anchorLink) return;
-        e.preventDefault();
-        const targetId = anchorLink.getAttribute('href').slice(1);
-        const decodedId = decodeURIComponent(targetId);
-        // Normalize ID for comparison: lowercase, trim spaces/dashes
-        const normalize = (s) =>
-          s
-            .toLowerCase()
-            .replace(/^\s+|\s+$/g, '')
-            .replace(/-+/g, '-')
-            .replace(/^-|-$/g, '');
-        const normTarget = normalize(decodedId);
+      // Use capture phase to intercept before Vditor's internal handlers
+      vditorEl.addEventListener(
+        'click',
+        (e) => {
+          const anchorLink = e.target.closest('a[href^="#"]');
+          if (!anchorLink) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const targetId = anchorLink.getAttribute('href').slice(1);
+          const decodedId = decodeURIComponent(targetId);
+          // Ensure heading IDs are up-to-date before searching
+          _addHeadingIdsToEditor(vditorEl);
+          // Normalize ID for comparison: lowercase, trim spaces/dashes
+          const normalize = (s) =>
+            s
+              .toLowerCase()
+              .replace(/^\s+|\s+$/g, '')
+              .replace(/-+/g, '-')
+              .replace(/^-|-$/g, '');
+          const normTarget = normalize(decodedId);
 
-        // Search by id attribute in editor areas (IR, WYSIWYG, preview)
-        /* eslint-disable no-undef */
-        let target =
-          vditorEl.querySelector(`[id="${CSS.escape(decodedId)}"]`) ||
-          vditorEl.querySelector(`[id="${CSS.escape(targetId)}"]`);
-        /* eslint-enable no-undef */
-        if (!target) {
-          // Try matching by normalized id
-          const allIds = vditorEl.querySelectorAll('[id]');
-          for (const el of allIds) {
-            if (normalize(el.id) === normTarget) {
-              target = el;
-              break;
+          // Search by id attribute in editor areas (IR, WYSIWYG, preview)
+          /* eslint-disable no-undef */
+          let target =
+            vditorEl.querySelector(`[id="${CSS.escape(decodedId)}"]`) ||
+            vditorEl.querySelector(`[id="${CSS.escape(targetId)}"]`);
+          /* eslint-enable no-undef */
+          if (!target) {
+            // Try matching by normalized id
+            const allIds = vditorEl.querySelectorAll('[id]');
+            for (const el of allIds) {
+              if (normalize(el.id) === normTarget) {
+                target = el;
+                break;
+              }
             }
           }
-        }
-        if (!target) {
-          // Fallback: try matching heading text content
-          const headings = vditorEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
-          for (const h of headings) {
-            const text = (h.innerText || h.textContent).trim();
-            if (normalize(text) === normTarget || text === decodedId || text === targetId) {
-              target = h;
-              break;
+          if (!target) {
+            // Fallback: try matching heading text content
+            const headings = vditorEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
+            for (const h of headings) {
+              const text = (h.innerText || h.textContent).trim();
+              if (normalize(text) === normTarget || text === decodedId || text === targetId) {
+                target = h;
+                break;
+              }
             }
           }
-        }
-        if (target) {
-          // Determine which scrollable container the target is in
-          const scrollParent = target.closest(
-            '.vditor-ir, .vditor-wysiwyg, .vditor-preview, .vditor-sv',
-          );
-          if (scrollParent) {
-            const parentRect = scrollParent.getBoundingClientRect();
-            const targetRect = target.getBoundingClientRect();
-            scrollParent.scrollTop += targetRect.top - parentRect.top - parentRect.height / 3;
-          } else {
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (target) {
+            // Determine which scrollable container the target is in
+            const scrollParent = target.closest(
+              '.vditor-ir, .vditor-wysiwyg, .vditor-preview, .vditor-sv',
+            );
+            if (scrollParent) {
+              const parentRect = scrollParent.getBoundingClientRect();
+              const targetRect = target.getBoundingClientRect();
+              scrollParent.scrollTop += targetRect.top - parentRect.top - parentRect.height / 3;
+            } else {
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
           }
-        }
-      });
+        },
+        true,
+      );
 
       // Rewrite relative image paths in editor content
       rewriteEditorImages();
