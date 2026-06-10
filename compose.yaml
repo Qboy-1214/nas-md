@@ -18,6 +18,7 @@ services:
       WEB_ROOT: /app/web
       WEB_PORT: "8080"
       DOCKER_MODE: "1"
+      TZ: "Asia/Shanghai"  # 时区配置，影响定时任务和日期显示
       # MOUNT_DIRS: 无需设置，应用自动扫描 /mnt/ 子目录
       # 如需手动指定，可用 "显示名:路径" 格式，分号分隔
       # PUBLIC_MOUNTS: 指定哪些 /mnt/ 子目录对所有人可见（逗号分隔）

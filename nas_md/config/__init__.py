@@ -47,6 +47,7 @@ class Config:
     web_port: int = 8080
     web_host: str = "127.0.0.1"
     open_browser: bool = True
+    tz: str = "UTC"  # Timezone for scheduled tasks and date display (e.g. "Asia/Shanghai")
 
     def api_host(self) -> str:
         return _host_of(self.api_url)
@@ -161,6 +162,7 @@ def load_bot_config() -> None:
         "WEB_ROOT": "web_root",
         "WEB_PORT": ("web_port", int),
         "WEB_HOST": "web_host",
+        "TZ": "tz",
     }
     for env_key, cfg_key in env_map.items():
         val = os.environ.get(env_key)

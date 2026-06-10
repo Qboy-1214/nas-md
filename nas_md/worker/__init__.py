@@ -27,20 +27,36 @@ from nas_md.userconfig import UserConfig
 _now = time.time
 
 
+def _get_tz():
+    """Get timezone from config, defaults to UTC."""
+    import datetime
+
+    tz_name = server_cfg.tz or "UTC"
+    try:
+        return datetime.ZoneInfo(tz_name)
+    except (KeyError, Exception):
+        try:
+            from zoneinfo import ZoneInfo
+
+            return ZoneInfo(tz_name)
+        except Exception:
+            return datetime.UTC
+
+
 def beginning_of_the_day(t: float) -> float:
     """Return the beginning of the day for a given timestamp."""
     import datetime
 
-    dt = datetime.datetime.fromtimestamp(t, tz=datetime.UTC)
+    dt = datetime.datetime.fromtimestamp(t, tz=_get_tz())
     beginning = dt.replace(hour=0, minute=0, second=0, microsecond=0)
     return beginning.timestamp()
 
 
 def tomorrow() -> int:
-    """Return tomorrow's beginning of day (UTC) as unix timestamp."""
+    """Return tomorrow's beginning of day as unix timestamp."""
     import datetime
 
-    t = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+    t = datetime.datetime.now(_get_tz()) + datetime.timedelta(days=1)
     beginning = t.replace(hour=0, minute=0, second=0, microsecond=0)
     return int(beginning.timestamp())
 
@@ -49,8 +65,9 @@ def format_task_date(scheduled_at: int) -> str:
     """Format a scheduled date for display."""
     import datetime
 
-    today = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    task_date = datetime.datetime.fromtimestamp(scheduled_at, tz=datetime.UTC).replace(
+    tz = _get_tz()
+    today = datetime.datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    task_date = datetime.datetime.fromtimestamp(scheduled_at, tz=tz).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     diff_days = (task_date - today).days
@@ -181,7 +198,7 @@ def worker_remove_completed_checklist_items(storage_path: str, config_filename: 
             # Archive to Done.md
             done_content, _ = user_fs.read(DIR_ARCHIVE, DONE_FILENAME)
             done_content = done_content or ""
-            today = datetime.datetime.utcnow()
+            today = datetime.datetime.now(_get_tz())
             header = f"#### {today.day} {today.strftime('%B')} {today.year}, {today.strftime('%A')}"
             done_content = add_header_and_text(done_content, header, removed)
             user_fs.write(DIR_ARCHIVE, DONE_FILENAME, done_content)
@@ -277,7 +294,7 @@ class Worker:
         import datetime
 
         # Only run near end of day (23:50+)
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(_get_tz())
         if now.hour != 23 or now.minute < 50:
             return
         storage_path = server_cfg.storage_path

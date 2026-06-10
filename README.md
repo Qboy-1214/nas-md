@@ -96,6 +96,7 @@ python start.py
 | `PUBLIC_MOUNT_DIRS` | *(空)* | 公开宿主机挂载点（所有人可见可读写），分号分隔 |
 | `PUBLIC_MOUNTS` | *(空)* | Docker 自动扫描模式下，指定 `/mnt/` 中哪些子目录公开（逗号分隔目录名） |
 | `DOCKER_MODE` | `0` | 设为 `1` 启用自签名 HTTPS 和 Docker 特有逻辑 |
+| `TZ` | `UTC` | 时区配置，影响定时任务和日期显示（如 `Asia/Shanghai`） |
 
 ## 访问模式
 
