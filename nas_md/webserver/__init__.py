@@ -1429,9 +1429,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         # Normalize the file path
         file_path_norm = file_path.replace("\\", "/")
         for m in self.mount_manager.mounts:
-            # Try as absolute path
-            mount_path_norm = os.path.normcase(m.path.replace("\\", "/")).rstrip("/")
-            fp_norm = os.path.normcase(file_path_norm)
+            # Try as absolute path — normalize case and separators for comparison
+            mount_path_norm = os.path.normcase(m.path).replace("\\", "/").rstrip("/")
+            fp_norm = os.path.normcase(file_path).replace("\\", "/")
             if fp_norm.startswith(mount_path_norm + "/") or fp_norm == mount_path_norm:
                 rel = file_path_norm[len(mount_path_norm) :].lstrip("/")
                 return {"mount_id": m.id, "rel_path": rel}
