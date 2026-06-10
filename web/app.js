@@ -1038,14 +1038,15 @@ function setupDragDrop() {
     const destIsLocal = destMount && destMount._local;
 
     if (isCrossMount) {
-      // Cross-mount: ask user to choose move or copy
-      const choice = await showMoveCopyDialog();
+      const isCrossMachine = srcIsLocal !== destIsLocal;
+      const choice = await showMoveCopyDialog(isCrossMachine);
       if (!choice) return; // cancelled
       if (srcIsLocal && destIsLocal) {
         await crossMountLocal(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
-      } else if (srcIsLocal || destIsLocal) {
-        showToast('暂不支持本地与服务器挂载之间的跨挂载点操作');
-        return;
+      } else if (srcIsLocal && !destIsLocal) {
+        await localToServer(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
+      } else if (!srcIsLocal && destIsLocal) {
+        await serverToLocal(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
       } else {
         await crossMountServer(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
       }
@@ -1060,14 +1061,18 @@ function setupDragDrop() {
   });
 }
 
-function showMoveCopyDialog() {
+function showMoveCopyDialog(isCrossMachine = false) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
+    const title = isCrossMachine ? '跨机器操作' : '跨挂载点操作';
+    const body = isCrossMachine
+      ? '源文件与目标目录不在同一台机器上，请选择操作：'
+      : '目标目录与源文件不在同一挂载点，请选择操作：';
     overlay.innerHTML = `
       <div class="modal-box">
-        <div class="modal-title">跨挂载点操作</div>
-        <div class="modal-body">目标目录与源文件不在同一挂载点，请选择操作：</div>
+        <div class="modal-title">${title}</div>
+        <div class="modal-body">${body}</div>
         <div class="modal-actions">
           <button class="modal-btn primary" data-action="move">移动（删除原文件）</button>
           <button class="modal-btn" data-action="copy">复制（保留原文件）</button>
@@ -1277,6 +1282,100 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
     renderSidebar();
   } catch (e) {
     console.error('Cross-mount local operation failed:', e);
+    showToast('操作失败');
+  }
+}
+
+// Cross-machine: local → server
+async function localToServer(srcMountId, srcPath, destMountId, destDir, action) {
+  const srcLocalMount = state.localMounts[srcMountId];
+  if (!srcLocalMount) return;
+
+  // Only support single MD file
+  if (!srcPath.toLowerCase().endsWith('.md')) {
+    showToast('跨机器操作仅支持 MD 文件');
+    return;
+  }
+
+  try {
+    // Read file content from local
+    const content = await readLocalFile(srcMountId, srcPath);
+    if (content === null) {
+      showToast('读取本机文件失败');
+      return;
+    }
+
+    const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+    const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
+
+    // Write to server
+    const result = await API.putFile(destMountId, destFilePath, content);
+    if (!result || result.status === 'error') {
+      showToast(result?.error || '写入服务器文件失败');
+      return;
+    }
+
+    // If move, delete source
+    if (action === 'move') {
+      const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+      const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
+      if (srcParentHandle) {
+        await srcParentHandle.removeEntry(fileName);
+      }
+    }
+
+    showToast(action === 'move' ? '已移动到服务器' : '已复制到服务器');
+    await loadLocalTree(srcMountId);
+    delete state.treeData[destMountId];
+    await loadTree(destMountId, '/');
+    renderSidebar();
+  } catch (e) {
+    console.error('Local to server operation failed:', e);
+    showToast('操作失败');
+  }
+}
+
+// Cross-machine: server → local
+async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) {
+  const destLocalMount = state.localMounts[destMountId];
+  if (!destLocalMount) return;
+
+  // Only support single MD file
+  if (!srcPath.toLowerCase().endsWith('.md')) {
+    showToast('跨机器操作仅支持 MD 文件');
+    return;
+  }
+
+  try {
+    // Read file content from server
+    const content = await API.getFile(srcMountId, srcPath);
+    if (content === null) {
+      showToast('读取服务器文件失败');
+      return;
+    }
+
+    const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+
+    // Write to local
+    const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
+    const ok = await writeLocalFile(destMountId, destFilePath, content);
+    if (!ok) {
+      showToast('写入本机文件失败');
+      return;
+    }
+
+    // If move, delete source from server
+    if (action === 'move') {
+      await API.deleteFile(srcMountId, srcPath);
+    }
+
+    showToast(action === 'move' ? '已移动到本机' : '已复制到本机');
+    delete state.treeData[srcMountId];
+    await loadTree(srcMountId, '/');
+    await loadLocalTree(destMountId);
+    renderSidebar();
+  } catch (e) {
+    console.error('Server to local operation failed:', e);
     showToast('操作失败');
   }
 }
