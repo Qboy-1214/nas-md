@@ -63,6 +63,63 @@ function _addHeadingIdsToEditor(vditorEl) {
 }
 
 /**
+ * Scroll to an anchor target within the Vditor editor.
+ * Tries multiple matching strategies: exact ID, normalized ID, heading text.
+ */
+function _scrollToAnchor(targetId, vditorEl) {
+  const decodedId = decodeURIComponent(targetId);
+  // Ensure heading IDs are up-to-date before searching
+  _addHeadingIdsToEditor(vditorEl);
+  // Normalize ID for comparison: lowercase, trim spaces/dashes
+  const normalize = (s) =>
+    s
+      .toLowerCase()
+      .replace(/^\s+|\s+$/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  const normTarget = normalize(decodedId);
+
+  // Search by id attribute in editor areas (IR, WYSIWYG, preview)
+  /* eslint-disable no-undef */
+  let target =
+    vditorEl.querySelector(`[id="${CSS.escape(decodedId)}"]`) ||
+    vditorEl.querySelector(`[id="${CSS.escape(targetId)}"]`);
+  /* eslint-enable no-undef */
+  if (!target) {
+    // Try matching by normalized id
+    const allIds = vditorEl.querySelectorAll('[id]');
+    for (const el of allIds) {
+      if (normalize(el.id) === normTarget) {
+        target = el;
+        break;
+      }
+    }
+  }
+  if (!target) {
+    // Fallback: try matching heading text content
+    const headings = vditorEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    for (const h of headings) {
+      const text = (h.innerText || h.textContent).trim();
+      if (normalize(text) === normTarget || text === decodedId || text === targetId) {
+        target = h;
+        break;
+      }
+    }
+  }
+  if (target) {
+    // Determine which scrollable container the target is in
+    const scrollParent = target.closest('.vditor-ir, .vditor-wysiwyg, .vditor-preview, .vditor-sv');
+    if (scrollParent) {
+      const parentRect = scrollParent.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      scrollParent.scrollTop += targetRect.top - parentRect.top - parentRect.height / 3;
+    } else {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+}
+
+/**
  * Rewrite relative image src to API path so images in mounted dirs display correctly.
  * e.g. ![](photo.png) in /notes/readme.md → /api/mounts/{id}/file?path=/notes/photo.png
  */
@@ -292,6 +349,12 @@ window._reinitEditor = (mode) => {
 
   teardownSVSync();
   teardownOutlineHighlight();
+  // Clean up anchor click/hash listeners
+  const vditorEl = document.getElementById('vditor');
+  if (vditorEl && vditorEl._anchorCleanup) {
+    vditorEl._anchorCleanup();
+    delete vditorEl._anchorCleanup;
+  }
   _vditor.destroy();
   _pendingRestore = restore;
   initEditor(content, mode);
@@ -446,83 +509,49 @@ function initEditor(content, mode, readonly) {
       }
 
       // Intercept anchor link clicks and scroll to target heading
-      // Use capture phase to intercept before Vditor's internal handlers
+      // Use document-level capture to ensure we intercept before any other handler
       // Handle both: <a href="#..."> (preview/WYSIWYG) and <span data-type="a"> (IR mode)
-      vditorEl.addEventListener(
-        'click',
-        (e) => {
-          let targetId = null;
-          const anchorLink = e.target.closest('a[href^="#"]');
-          if (anchorLink) {
-            targetId = anchorLink.getAttribute('href').slice(1);
-          } else {
-            // IR mode: links are rendered as <span data-type="a" data-href="#...">
-            const irLink = e.target.closest('[data-type="a"]');
-            if (irLink) {
-              const href = irLink.getAttribute('data-href') || '';
-              if (href.startsWith('#')) {
-                targetId = href.slice(1);
-              }
+      const _anchorClickHandler = (e) => {
+        // Only handle clicks inside the vditor element
+        if (!vditorEl.contains(e.target)) return;
+        let targetId = null;
+        const anchorLink = e.target.closest('a[href^="#"]');
+        if (anchorLink) {
+          targetId = anchorLink.getAttribute('href').slice(1);
+        } else {
+          // IR mode: links are rendered as <span data-type="a" data-href="#...">
+          const irLink = e.target.closest('[data-type="a"]');
+          if (irLink) {
+            const href = irLink.getAttribute('data-href') || '';
+            if (href.startsWith('#')) {
+              targetId = href.slice(1);
             }
           }
-          if (targetId === null) return;
-          e.preventDefault();
-          e.stopPropagation();
-          const decodedId = decodeURIComponent(targetId);
-          // Ensure heading IDs are up-to-date before searching
-          _addHeadingIdsToEditor(vditorEl);
-          // Normalize ID for comparison: lowercase, trim spaces/dashes
-          const normalize = (s) =>
-            s
-              .toLowerCase()
-              .replace(/^\s+|\s+$/g, '')
-              .replace(/-+/g, '-')
-              .replace(/^-|-$/g, '');
-          const normTarget = normalize(decodedId);
+        }
+        if (targetId === null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        _scrollToAnchor(targetId, vditorEl);
+      };
+      document.addEventListener('click', _anchorClickHandler, true);
 
-          // Search by id attribute in editor areas (IR, WYSIWYG, preview)
-          /* eslint-disable no-undef */
-          let target =
-            vditorEl.querySelector(`[id="${CSS.escape(decodedId)}"]`) ||
-            vditorEl.querySelector(`[id="${CSS.escape(targetId)}"]`);
-          /* eslint-enable no-undef */
-          if (!target) {
-            // Try matching by normalized id
-            const allIds = vditorEl.querySelectorAll('[id]');
-            for (const el of allIds) {
-              if (normalize(el.id) === normTarget) {
-                target = el;
-                break;
-              }
-            }
-          }
-          if (!target) {
-            // Fallback: try matching heading text content
-            const headings = vditorEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
-            for (const h of headings) {
-              const text = (h.innerText || h.textContent).trim();
-              if (normalize(text) === normTarget || text === decodedId || text === targetId) {
-                target = h;
-                break;
-              }
-            }
-          }
-          if (target) {
-            // Determine which scrollable container the target is in
-            const scrollParent = target.closest(
-              '.vditor-ir, .vditor-wysiwyg, .vditor-preview, .vditor-sv',
-            );
-            if (scrollParent) {
-              const parentRect = scrollParent.getBoundingClientRect();
-              const targetRect = target.getBoundingClientRect();
-              scrollParent.scrollTop += targetRect.top - parentRect.top - parentRect.height / 3;
-            } else {
-              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-          }
-        },
-        true,
-      );
+      // Also handle hashchange as fallback (e.g. if Vditor programmatically sets location.hash)
+      const _hashChangeHandler = (e) => {
+        const hash = window.location.hash.slice(1);
+        if (!hash) return;
+        // Prevent browser default scroll and handle ourselves
+        e.preventDefault();
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+        _scrollToAnchor(hash, vditorEl);
+      };
+      window.addEventListener('hashchange', _hashChangeHandler);
+
+      // Store cleanup references
+      vditorEl._anchorCleanup = () => {
+        document.removeEventListener('click', _anchorClickHandler, true);
+        window.removeEventListener('hashchange', _hashChangeHandler);
+      };
 
       // Rewrite relative image paths in editor content
       rewriteEditorImages();
