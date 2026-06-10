@@ -349,12 +349,6 @@ window._reinitEditor = (mode) => {
 
   teardownSVSync();
   teardownOutlineHighlight();
-  // Clean up anchor click/hash listeners
-  const vditorEl = document.getElementById('vditor');
-  if (vditorEl && vditorEl._anchorCleanup) {
-    vditorEl._anchorCleanup();
-    delete vditorEl._anchorCleanup;
-  }
   _vditor.destroy();
   _pendingRestore = restore;
   initEditor(content, mode);
@@ -404,6 +398,24 @@ function initEditor(content, mode, readonly) {
       '|',
       { name: 'more', toolbar: ['edit-mode', 'preview', 'info', 'help'] },
     ],
+    link: {
+      isOpen: false,
+      click: (el) => {
+        // el can be <a> (preview/WYSIWYG) or .vditor-ir__marker--link (IR mode)
+        let href = el.getAttribute('href') || '';
+        // IR mode: the element is a marker span, get URL from its text content
+        if (!href && el.classList && el.classList.contains('vditor-ir__marker--link')) {
+          href = (el.textContent || '').trim();
+        }
+        if (href.startsWith('#')) {
+          const targetId = href.slice(1);
+          const vditorEl = document.getElementById('vditor');
+          if (vditorEl) _scrollToAnchor(targetId, vditorEl);
+        } else if (href) {
+          window.open(href);
+        }
+      },
+    },
     preview: {
       mode: 'both',
       markdown: { toc: true, autoSpace: true, fixTermTypo: true },
@@ -507,51 +519,6 @@ function initEditor(content, mode, readonly) {
           attributeFilter: ['aria-label', 'class'],
         });
       }
-
-      // Intercept anchor link clicks and scroll to target heading
-      // Use document-level capture to ensure we intercept before any other handler
-      // Handle both: <a href="#..."> (preview/WYSIWYG) and <span data-type="a"> (IR mode)
-      const _anchorClickHandler = (e) => {
-        // Only handle clicks inside the vditor element
-        if (!vditorEl.contains(e.target)) return;
-        let targetId = null;
-        const anchorLink = e.target.closest('a[href^="#"]');
-        if (anchorLink) {
-          targetId = anchorLink.getAttribute('href').slice(1);
-        } else {
-          // IR mode: links are rendered as <span data-type="a" data-href="#...">
-          const irLink = e.target.closest('[data-type="a"]');
-          if (irLink) {
-            const href = irLink.getAttribute('data-href') || '';
-            if (href.startsWith('#')) {
-              targetId = href.slice(1);
-            }
-          }
-        }
-        if (targetId === null) return;
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        _scrollToAnchor(targetId, vditorEl);
-      };
-      document.addEventListener('click', _anchorClickHandler, true);
-
-      // Also handle hashchange as fallback (e.g. if Vditor programmatically sets location.hash)
-      const _hashChangeHandler = (e) => {
-        const hash = window.location.hash.slice(1);
-        if (!hash) return;
-        // Prevent browser default scroll and handle ourselves
-        e.preventDefault();
-        history.replaceState(null, '', window.location.pathname + window.location.search);
-        _scrollToAnchor(hash, vditorEl);
-      };
-      window.addEventListener('hashchange', _hashChangeHandler);
-
-      // Store cleanup references
-      vditorEl._anchorCleanup = () => {
-        document.removeEventListener('click', _anchorClickHandler, true);
-        window.removeEventListener('hashchange', _hashChangeHandler);
-      };
 
       // Rewrite relative image paths in editor content
       rewriteEditorImages();
