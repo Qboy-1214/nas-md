@@ -1970,7 +1970,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     def _update_search_index(self, file_path: str | None = None):
         """Update search index after file write. Uses incremental index if path given."""
-        from nas_md.search import index_file, remove_file, rebuild_index
+        from nas_md.search import index_file, rebuild_index
 
         try:
             if file_path and os.path.isfile(file_path):
@@ -2323,11 +2323,6 @@ def _init_search_index(mount_dirs: list[str]) -> None:
                     need_rebuild = True
                     logger.info("Rebuilding search index (upgrading to absolute paths)...")
                 else:
-                    # Check if indexed paths still exist on disk
-                    stale = conn.execute(
-                        "SELECT COUNT(*) FROM pages WHERE path NOT IN "
-                        "(SELECT path FROM pages WHERE 0)"
-                    ).fetchone()[0]
                     # Sample up to 50 paths to detect stale entries
                     samples = conn.execute("SELECT path FROM pages LIMIT 50").fetchall()
                     missing = sum(1 for (p,) in samples if not os.path.exists(p))
