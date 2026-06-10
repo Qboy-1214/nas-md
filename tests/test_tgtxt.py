@@ -21,7 +21,7 @@ class TestTelegramEntitiesToMarkdown:
         text = "hello world"
         entities = [FakeEntity("bold", 0, 11)]
         result = telegram_entities_to_markdown(text, entities)
-        assert "**hello world**" == result
+        assert result == "**hello world**"
 
     def test_italic(self):
         text = "hello world"
@@ -54,7 +54,7 @@ class TestTelegramEntitiesToMarkdown:
         text = "clickhere"
         entities = [FakeEntity("text_link", 0, 9, url="https://example.com")]
         result = telegram_entities_to_markdown(text, entities)
-        assert "[clickhere](https://example.com)" == result
+        assert result == "[clickhere](https://example.com)"
 
     def test_strikethrough(self):
         text = "deleted text"
@@ -81,24 +81,24 @@ class TestTelegramEntitiesToMarkdown:
 class TestExtractTextImgsLinks:
     def test_extract_image(self):
         text = "Look at this ![](photo.tg_abc123.jpg) image"
-        clean_text, images, links = extract_text_imgs_links(text)
+        clean_text, images, _links = extract_text_imgs_links(text)
         assert "abc123" in images
         assert "🖼" in clean_text
 
     def test_extract_link(self):
         text = "[My Note](notes/test.md)"
-        clean_text, images, links = extract_text_imgs_links(text)
+        _clean_text, _images, links = extract_text_imgs_links(text)
         assert "My Note" in links or "test" in links
 
     def test_no_images_or_links(self):
         text = "Just plain text"
-        clean_text, images, links = extract_text_imgs_links(text)
+        _clean_text, images, links = extract_text_imgs_links(text)
         assert images == []
         assert links == {}
 
     def test_wiki_link(self):
         text = "[[notes/test]]"
-        clean_text, images, links = extract_text_imgs_links(text)
+        _clean_text, _images, links = extract_text_imgs_links(text)
         assert "test" in links
 
 

@@ -104,8 +104,6 @@ test.describe('Toast 提示', () => {
   });
 });
 
-
-
 test.describe('键盘快捷键', () => {
   test('Ctrl+K 聚焦搜索框', async ({ page }) => {
     await page.goto('/admin');

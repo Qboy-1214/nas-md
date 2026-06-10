@@ -154,7 +154,7 @@ class TestRemoveCompletedItems:
     def test_mixed_with_continuation(self):
         """Completed items with continuation lines should be fully removed."""
         md = "- [x] Done task\n  continuation line\n- [ ] Pending"
-        kept, removed = _remove_completed_items(md)
+        kept, _removed = _remove_completed_items(md)
         assert "Done task" not in kept
         assert "continuation line" not in kept
         assert "Pending" in kept

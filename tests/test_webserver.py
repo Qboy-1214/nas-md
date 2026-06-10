@@ -113,7 +113,10 @@ def _get(url: str, headers: dict | None = None) -> tuple[int, str, dict]:
 
 
 def _post(
-    url: str, data: dict | None = None, content_type: str = "application/json", headers: dict | None = None
+    url: str,
+    data: dict | None = None,
+    content_type: str = "application/json",
+    headers: dict | None = None,
 ) -> tuple[int, str]:
     """Send POST request, return (status, body_text)."""
     import urllib.request
@@ -458,7 +461,7 @@ class TestWriteFileAPI:
     def test_write_file_overwrites_existing(self, writable_server_url, writable_dir):
         """PUT /api/mounts/{id}/file overwrites an existing file."""
         new_content = "# Updated\n"
-        status, body = _put(
+        status, _body = _put(
             f"{writable_server_url}/api/mounts/writable/file?path=/hello.md",
             data=new_content.encode("utf-8"),
         )
@@ -522,7 +525,7 @@ class TestRenameAPI:
 
     def test_rename_directory(self, writable_server_url, writable_dir):
         """PUT /api/mounts/{id}/rename renames a directory."""
-        status, body = _put(
+        status, _body = _put(
             f"{writable_server_url}/api/mounts/writable/rename?oldPath=/subdir&newPath=/renamed-dir",
         )
         assert status == 200
