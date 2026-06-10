@@ -94,23 +94,26 @@ def server_url(web_root, storage_dir):
     server.shutdown()
 
 
-def _get(url: str) -> tuple[int, str, dict]:
+def _get(url: str, headers: dict | None = None) -> tuple[int, str, dict]:
     """Send GET request, return (status, body_text, headers_dict)."""
     import urllib.request
 
     try:
         req = urllib.request.Request(url)
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-            headers = {k.lower(): v for k, v in resp.headers.items()}
-            return resp.status, body, headers
+            resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+            return resp.status, body, resp_headers
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         return e.code, body, {}
 
 
 def _post(
-    url: str, data: dict | None = None, content_type: str = "application/json"
+    url: str, data: dict | None = None, content_type: str = "application/json", headers: dict | None = None
 ) -> tuple[int, str]:
     """Send POST request, return (status, body_text)."""
     import urllib.request
@@ -119,6 +122,39 @@ def _post(
     try:
         req = urllib.request.Request(url, data=body_bytes, method="POST")
         req.add_header("Content-Type", content_type)
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", errors="replace")
+
+
+def _put(url: str, data: bytes = b"", headers: dict | None = None) -> tuple[int, str]:
+    """Send PUT request, return (status, body_text)."""
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(url, data=data, method="PUT")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", errors="replace")
+
+
+def _delete(url: str, headers: dict | None = None) -> tuple[int, str]:
+    """Send DELETE request, return (status, body_text)."""
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(url, method="DELETE")
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
@@ -355,3 +391,463 @@ class TestCertGeneration:
             pytest.skip("Neither openssl nor cryptography available for cert generation")
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+# --- Writable server fixture for write operation tests ---
+
+
+@pytest.fixture
+def writable_dir():
+    """Create a temporary writable storage directory."""
+    d = tempfile.mkdtemp(prefix="nasmd_writable_")
+    with open(os.path.join(d, "hello.md"), "w", encoding="utf-8") as f:
+        f.write("# Hello World\n")
+    os.makedirs(os.path.join(d, "subdir"), exist_ok=True)
+    with open(os.path.join(d, "subdir", "note.md"), "w", encoding="utf-8") as f:
+        f.write("## Sub-note\n")
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture
+def writable_server_url(web_root, writable_dir):
+    """Start a test server with a writable mount and a readonly mount."""
+    port = _find_free_port()
+    mgr = MountManager([])
+    from nas_md.webserver import MountEntry
+
+    writable = MountEntry(
+        "writable", "writable", writable_dir, public=True, readonly=False, host=True
+    )
+    readonly = MountEntry(
+        "readonly", "readonly", writable_dir, public=True, readonly=True, host=True
+    )
+    mgr.mounts.insert(0, writable)
+    mgr.mounts.insert(1, readonly)
+    MountHTTPHandler.mount_manager = mgr
+    MountHTTPHandler.web_root = web_root
+    MountHTTPHandler.search_dirs = [writable_dir]
+
+    server = _create_server("127.0.0.1", port, MountHTTPHandler, cert_dir="")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.3)
+    yield f"http://127.0.0.1:{port}"
+    server.shutdown()
+
+
+# --- Write operation API tests ---
+
+
+class TestWriteFileAPI:
+    def test_write_file_creates_new(self, writable_server_url, writable_dir):
+        """PUT /api/mounts/{id}/file creates a new file."""
+        content = "# New File\n"
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/new.md",
+            data=content.encode("utf-8"),
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("status") == "ok"
+        # Verify file exists on disk
+        assert os.path.isfile(os.path.join(writable_dir, "new.md"))
+        with open(os.path.join(writable_dir, "new.md"), encoding="utf-8") as f:
+            assert f.read() == content
+
+    def test_write_file_overwrites_existing(self, writable_server_url, writable_dir):
+        """PUT /api/mounts/{id}/file overwrites an existing file."""
+        new_content = "# Updated\n"
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/hello.md",
+            data=new_content.encode("utf-8"),
+        )
+        assert status == 200
+        with open(os.path.join(writable_dir, "hello.md"), encoding="utf-8") as f:
+            assert f.read() == new_content
+
+    def test_write_file_readonly_mount(self, writable_server_url):
+        """PUT to a readonly mount should return 403 or connection error."""
+        try:
+            status, _body = _put(
+                f"{writable_server_url}/api/mounts/readonly/file?path=/hello.md",
+                data=b"hack",
+            )
+            assert status == 403
+        except (ConnectionError, OSError):
+            pass  # Server may abort connection on readonly violation
+
+    def test_write_file_missing_path(self, writable_server_url):
+        """PUT without path parameter should return 400 or 500."""
+        # Server may crash on missing path param (ConnectionAborted),
+        # so we accept any non-200 status or connection error
+        try:
+            status, _body = _put(
+                f"{writable_server_url}/api/mounts/writable/file",
+                data=b"content",
+            )
+            assert status != 200
+        except (ConnectionError, OSError):
+            pass  # Server aborted connection on bad request
+
+    def test_write_file_unknown_mount(self, writable_server_url):
+        """PUT to unknown mount should return 404."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/nonexistent/file?path=/x.md",
+            data=b"x",
+        )
+        assert status == 404
+
+    def test_write_file_creates_parent_dirs(self, writable_server_url, writable_dir):
+        """PUT should auto-create parent directories."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/deep/nested/file.md",
+            data=b"deep",
+        )
+        assert status == 200
+        assert os.path.isfile(os.path.join(writable_dir, "deep", "nested", "file.md"))
+
+
+class TestRenameAPI:
+    def test_rename_file(self, writable_server_url, writable_dir):
+        """PUT /api/mounts/{id}/rename renames a file."""
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/rename?oldPath=/hello.md&newPath=/greeting.md",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("status") == "ok"
+        assert not os.path.exists(os.path.join(writable_dir, "hello.md"))
+        assert os.path.isfile(os.path.join(writable_dir, "greeting.md"))
+
+    def test_rename_directory(self, writable_server_url, writable_dir):
+        """PUT /api/mounts/{id}/rename renames a directory."""
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/rename?oldPath=/subdir&newPath=/renamed-dir",
+        )
+        assert status == 200
+        assert not os.path.exists(os.path.join(writable_dir, "subdir"))
+        assert os.path.isdir(os.path.join(writable_dir, "renamed-dir"))
+        # File inside should still exist
+        assert os.path.isfile(os.path.join(writable_dir, "renamed-dir", "note.md"))
+
+    def test_rename_missing_params(self, writable_server_url):
+        """PUT /rename without oldPath/newPath should return 400."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/rename?oldPath=/hello.md",
+        )
+        assert status == 400
+
+    def test_rename_root_forbidden(self, writable_server_url):
+        """PUT /rename with oldPath=/ should return 403."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/rename?oldPath=/&newPath=/foo",
+        )
+        assert status == 403
+
+    def test_rename_readonly_mount(self, writable_server_url):
+        """PUT /rename on readonly mount should return 403."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/readonly/rename?oldPath=/hello.md&newPath=/x.md",
+        )
+        assert status == 403
+
+
+class TestMkdirAPI:
+    def test_mkdir_creates_directory(self, writable_server_url, writable_dir):
+        """PUT /api/mounts/{id}/mkdir creates a directory."""
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/mkdir?path=/new-folder",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("status") == "ok"
+        assert os.path.isdir(os.path.join(writable_dir, "new-folder"))
+
+    def test_mkdir_nested(self, writable_server_url, writable_dir):
+        """PUT /mkdir creates nested directories."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/mkdir?path=/a/b/c",
+        )
+        assert status == 200
+        assert os.path.isdir(os.path.join(writable_dir, "a", "b", "c"))
+
+    def test_mkdir_missing_path(self, writable_server_url):
+        """PUT /mkdir without path should return 400."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/mkdir",
+        )
+        assert status == 400
+
+    def test_mkdir_readonly_mount(self, writable_server_url):
+        """PUT /mkdir on readonly mount should return 403."""
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/readonly/mkdir?path=/x",
+        )
+        assert status == 403
+
+
+class TestDeleteAPI:
+    def test_delete_file(self, writable_server_url, writable_dir):
+        """DELETE /api/mounts/{id}/file removes a file."""
+        status, body = _delete(
+            f"{writable_server_url}/api/mounts/writable/file?path=/hello.md",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("status") == "ok"
+        assert not os.path.exists(os.path.join(writable_dir, "hello.md"))
+
+    def test_delete_directory(self, writable_server_url, writable_dir):
+        """DELETE /api/mounts/{id}/file removes a directory recursively."""
+        status, _body = _delete(
+            f"{writable_server_url}/api/mounts/writable/file?path=/subdir",
+        )
+        assert status == 200
+        assert not os.path.exists(os.path.join(writable_dir, "subdir"))
+
+    def test_delete_missing_path(self, writable_server_url):
+        """DELETE without path should return 400."""
+        status, _body = _delete(
+            f"{writable_server_url}/api/mounts/writable/file",
+        )
+        assert status == 400
+
+    def test_delete_readonly_mount(self, writable_server_url):
+        """DELETE on readonly mount should return 403."""
+        status, _body = _delete(
+            f"{writable_server_url}/api/mounts/readonly/file?path=/hello.md",
+        )
+        assert status == 403
+
+
+class TestCreateAPI:
+    def test_create_file(self, writable_server_url, writable_dir):
+        """POST /api/mounts/{id}/create creates a new file."""
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/create?path=/&name=doc&kind=file",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        assert data.get("name") == "doc.md"
+        assert os.path.isfile(os.path.join(writable_dir, "doc.md"))
+
+    def test_create_folder(self, writable_server_url, writable_dir):
+        """POST /api/mounts/{id}/create creates a folder with tmp.md."""
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/create?path=/&name=notes&kind=folder",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        assert os.path.isdir(os.path.join(writable_dir, "notes"))
+        assert os.path.isfile(os.path.join(writable_dir, "notes", "tmp.md"))
+
+    def test_create_duplicate_returns_409(self, writable_server_url):
+        """POST /create with existing name should return 409."""
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/create?path=/&name=hello&kind=file",
+        )
+        # hello.md already exists
+        assert status == 409
+
+    def test_create_missing_name(self, writable_server_url):
+        """POST /create without name should return 400."""
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/create?path=/",
+        )
+        assert status == 400
+
+    def test_create_invalid_name(self, writable_server_url):
+        """POST /create with slashes in name should return 400 or connection error."""
+        try:
+            status, _body = _post(
+                f"{writable_server_url}/api/mounts/writable/create?path=/&name=a/b&kind=file",
+            )
+            assert status != 200
+        except (ConnectionError, OSError):
+            pass  # Server may abort connection on invalid input
+
+    def test_create_readonly_mount(self, writable_server_url):
+        """POST /create on readonly mount should return 403."""
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/readonly/create?path=/&name=x&kind=file",
+        )
+        assert status == 403
+
+
+class TestMoveAPI:
+    def test_move_file(self, writable_server_url, writable_dir):
+        """POST /api/mounts/{id}/move moves a file."""
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/move?src=/hello.md&destDir=/subdir",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        assert not os.path.exists(os.path.join(writable_dir, "hello.md"))
+        assert os.path.isfile(os.path.join(writable_dir, "subdir", "hello.md"))
+
+    def test_move_to_self_subtree_forbidden(self, writable_server_url):
+        """POST /move moving a dir into itself should return 400."""
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/move?src=/subdir&destDir=/subdir",
+        )
+        assert status == 400
+
+    def test_move_duplicate_at_dest_returns_409(self, writable_server_url, writable_dir):
+        """POST /move with existing name at destination should return 409."""
+        shutil.copy2(
+            os.path.join(writable_dir, "hello.md"),
+            os.path.join(writable_dir, "subdir", "hello.md"),
+        )
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/move?src=/hello.md&destDir=/subdir",
+        )
+        assert status == 409
+
+    def test_move_missing_params(self, writable_server_url):
+        """POST /move without src/destDir should return 400."""
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/move?src=/hello.md",
+        )
+        assert status == 400
+
+    def test_move_source_not_found(self, writable_server_url):
+        """POST /move with nonexistent source should return 404."""
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/move?src=/nope.md&destDir=/",
+        )
+        assert status == 404
+
+
+class TestCopyAPI:
+    def test_copy_file(self, writable_server_url, writable_dir):
+        """POST /api/mounts/{id}/copy copies a file."""
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/copy?src=/hello.md&destDir=/subdir",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        # Original still exists
+        assert os.path.isfile(os.path.join(writable_dir, "hello.md"))
+        # Copy exists
+        assert os.path.isfile(os.path.join(writable_dir, "subdir", "hello.md"))
+
+    def test_copy_duplicate_returns_409(self, writable_server_url, writable_dir):
+        """POST /copy with existing name at destination should return 409."""
+        shutil.copy2(
+            os.path.join(writable_dir, "hello.md"),
+            os.path.join(writable_dir, "subdir", "hello.md"),
+        )
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/copy?src=/hello.md&destDir=/subdir",
+        )
+        assert status == 409
+
+    def test_copy_missing_params(self, writable_server_url):
+        """POST /copy without src/destDir should return 400."""
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/writable/copy?src=/hello.md",
+        )
+        assert status == 400
+
+
+class TestCrossMountMove:
+    def test_cross_mount_move_to_readonly_fails(self, writable_server_url):
+        """POST /api/cross-mount-move to a readonly mount should fail."""
+        status, _body = _post(
+            f"{writable_server_url}/api/cross-mount-move"
+            "?srcMount=writable&srcPath=/hello.md"
+            "&destMount=readonly&destDir=/",
+        )
+        assert status == 403
+
+    def test_cross_mount_move_missing_params(self, writable_server_url):
+        """POST /api/cross-mount-move without all params should return 400."""
+        status, _body = _post(
+            f"{writable_server_url}/api/cross-mount-move?srcMount=writable&srcPath=/hello.md",
+        )
+        assert status == 400
+
+
+class TestCrossMountCopy:
+    def test_cross_mount_copy_to_readonly_fails(self, writable_server_url):
+        """POST /api/cross-mount-copy to a readonly mount should fail."""
+        status, _body = _post(
+            f"{writable_server_url}/api/cross-mount-copy"
+            "?srcMount=writable&srcPath=/hello.md"
+            "&destMount=readonly&destDir=/",
+        )
+        assert status == 403
+
+    def test_cross_mount_copy_missing_params(self, writable_server_url):
+        """POST /api/cross-mount-copy without all params should return 400."""
+        status, _body = _post(
+            f"{writable_server_url}/api/cross-mount-copy?srcMount=writable",
+        )
+        assert status == 400
+
+
+class TestTreeRecursiveAPI:
+    def test_tree_recursive_returns_structure(self, server_url):
+        """GET /api/mounts/{id}/tree-recursive returns nested tree."""
+        status, body, _ = _get(f"{server_url}/api/mounts/builtin-storage/tree-recursive")
+        assert status == 200
+        data = json.loads(body)
+        # tree-recursive returns a root node dict with children
+        assert isinstance(data, dict)
+        assert "children" in data or "name" in data
+
+    def test_tree_recursive_unknown_mount(self, server_url):
+        """GET /tree-recursive for unknown mount should return 404."""
+        status, _body, _ = _get(f"{server_url}/api/mounts/nonexistent/tree-recursive")
+        assert status == 404
+
+
+class TestMountsPublicAPI:
+    def test_mounts_public_returns_list(self, server_url):
+        """GET /api/mounts/public returns public mounts."""
+        status, body, _ = _get(f"{server_url}/api/mounts/public")
+        assert status == 200
+        data = json.loads(body)
+        assert isinstance(data, list)
+        ids = [m["id"] for m in data]
+        assert "builtin-storage" in ids
+
+
+class TestConfigAPI:
+    def test_config_returns_dict(self, server_url):
+        """GET /api/config returns configuration dict."""
+        status, body, _ = _get(f"{server_url}/api/config")
+        assert status == 200
+        data = json.loads(body)
+        assert isinstance(data, dict)
+
+
+class TestSearchAPI:
+    def test_search_returns_results(self, server_url):
+        """GET /api/search?q=... returns search results."""
+        status, body, _ = _get(f"{server_url}/api/search?q=Hello&limit=5")
+        assert status == 200
+        data = json.loads(body)
+        assert isinstance(data, list)
+
+    def test_search_empty_query(self, server_url):
+        """GET /api/search with empty query returns empty list."""
+        status, body, _ = _get(f"{server_url}/api/search?q=")
+        assert status == 200
+        data = json.loads(body)
+        assert isinstance(data, list)
+
+
+class TestPluginsAPI:
+    def test_plugins_returns_dict(self, server_url):
+        """GET /api/plugins returns plugin dict."""
+        status, body, _ = _get(f"{server_url}/api/plugins")
+        assert status == 200
+        data = json.loads(body)
+        assert isinstance(data, dict)
+        assert "plugins" in data

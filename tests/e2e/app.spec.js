@@ -122,3 +122,123 @@ test.describe('API 健康检查', () => {
     expect(data.status).toBe('ok');
   });
 });
+
+test.describe('文件操作', () => {
+  test('点击侧边栏文件打开编辑器', async ({ page }) => {
+    await page.goto('/admin');
+    // 等待侧边栏加载
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+    // 找到第一个 .md 文件条目并点击
+    const firstFile = page.locator('#file-tree .tree-file').first();
+    if ((await firstFile.count()) > 0) {
+      await firstFile.click();
+      // 编辑器区域应该显示内容
+      await page.waitForTimeout(500);
+      // breadcrumb 应该更新
+      const breadcrumb = page.locator('#breadcrumb');
+      await expect(breadcrumb).not.toHaveText('');
+    }
+  });
+
+  test('重命名按钮显示在打开文件后', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+    const firstFile = page.locator('#file-tree .tree-file').first();
+    if ((await firstFile.count()) > 0) {
+      await firstFile.click();
+      await page.waitForTimeout(500);
+      // 重命名按钮应该可见
+      const renameBtn = page.locator('#rename-top-btn');
+      await expect(renameBtn).toBeVisible();
+    }
+  });
+
+  test('重命名模态框弹出和关闭', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+    const firstFile = page.locator('#file-tree .tree-file').first();
+    if ((await firstFile.count()) > 0) {
+      await firstFile.click();
+      await page.waitForTimeout(500);
+      const renameBtn = page.locator('#rename-top-btn');
+      await renameBtn.click();
+      // 模态框应该出现
+      const modal = page.locator('.modal-overlay');
+      await expect(modal).toBeVisible();
+      // 点击取消关闭
+      await modal.locator('.modal-cancel').click();
+      await expect(modal).not.toBeVisible();
+    }
+  });
+
+  test('重命名模态框 Escape 关闭', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+    const firstFile = page.locator('#file-tree .tree-file').first();
+    if ((await firstFile.count()) > 0) {
+      await firstFile.click();
+      await page.waitForTimeout(500);
+      await page.locator('#rename-top-btn').click();
+      const modal = page.locator('.modal-overlay');
+      await expect(modal).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(modal).not.toBeVisible();
+    }
+  });
+});
+
+test.describe('拖拽功能', () => {
+  test('文件条目可拖拽', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+    const draggable = page.locator('#file-tree [draggable="true"]').first();
+    if ((await draggable.count()) > 0) {
+      // 验证 draggable 属性存在
+      const attr = await draggable.getAttribute('draggable');
+      expect(attr).toBe('true');
+    }
+  });
+
+  test('目录作为拖放目标', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+    const dirEntry = page.locator('#file-tree .tree-dir').first();
+    if ((await dirEntry.count()) > 0) {
+      // 目录条目应该存在
+      await expect(dirEntry).toBeVisible();
+    }
+  });
+});
+
+test.describe('挂载点管理', () => {
+  test('挂载列表 API 可用', async ({ request }) => {
+    const resp = await request.get('/api/mounts');
+    expect(resp.ok()).toBeTruthy();
+    const data = await resp.json();
+    expect(Array.isArray(data)).toBeTruthy();
+  });
+
+  test('公开挂载列表 API 可用', async ({ request }) => {
+    const resp = await request.get('/api/mounts/public');
+    expect(resp.ok()).toBeTruthy();
+    const data = await resp.json();
+    expect(Array.isArray(data)).toBeTruthy();
+  });
+});
+
+test.describe('配置和插件 API', () => {
+  test('配置 API 返回数据', async ({ request }) => {
+    const resp = await request.get('/api/config');
+    expect(resp.ok()).toBeTruthy();
+    const data = await resp.json();
+    expect(typeof data).toBe('object');
+  });
+
+  test('插件 API 返回数据', async ({ request }) => {
+    const resp = await request.get('/api/plugins');
+    expect(resp.ok()).toBeTruthy();
+    const data = await resp.json();
+    expect(typeof data).toBe('object');
+    expect('plugins' in data).toBeTruthy();
+  });
+});

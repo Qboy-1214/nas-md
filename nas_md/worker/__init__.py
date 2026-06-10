@@ -20,8 +20,8 @@ from nas_md.pkg.txt.md import (
     checklist_items,
     remove_completed_checklist_items,
     add_header_and_text,
+    strip_chat_timestamp,
 )
-from nas_md.pkg.txt.str import strip_chat_timestamp
 from nas_md.userconfig import UserConfig
 
 _now = time.time
