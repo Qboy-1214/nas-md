@@ -16,7 +16,7 @@ import subprocess
 import time
 import traceback
 import uuid
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
 from http.cookies import SimpleCookie
 from io import BytesIO
 from urllib.parse import parse_qs, urlparse
@@ -2271,10 +2271,10 @@ def _generate_self_signed_cert(cert_dir: str) -> tuple[str, str]:
     )
 
 
-def _create_server(host: str, port: int, handler: type, cert_dir: str = "") -> HTTPServer:
-    """Create HTTPServer with SO_REUSEADDR. If cert_dir is provided, enable HTTPS."""
+def _create_server(host: str, port: int, handler: type, cert_dir: str = "") -> ThreadingHTTPServer:
+    """Create ThreadingHTTPServer with SO_REUSEADDR. If cert_dir is provided, enable HTTPS."""
 
-    class ReusableHTTPServer(HTTPServer):
+    class ReusableHTTPServer(ThreadingHTTPServer):
         allow_reuse_address = True
 
         def server_bind(self) -> None:

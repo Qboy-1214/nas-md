@@ -289,6 +289,7 @@ function initEditor(content, mode, readonly) {
     ],
     preview: {
       mode: 'both',
+      anchor: 1,
       markdown: { toc: true, autoSpace: true, fixTermTypo: true },
       hljs: {
         enable: true,
@@ -388,6 +389,55 @@ function initEditor(content, mode, readonly) {
           attributeFilter: ['aria-label', 'class'],
         });
       }
+
+      // Intercept anchor link clicks and scroll to target heading
+      vditorEl.addEventListener('click', (e) => {
+        const anchorLink = e.target.closest('a[href^="#"]');
+        if (!anchorLink) return;
+        e.preventDefault();
+        const targetId = anchorLink.getAttribute('href').slice(1);
+        const decodedId = decodeURIComponent(targetId);
+        // Normalize ID for comparison: lowercase, trim spaces/dashes
+        const normalize = (s) => s.toLowerCase().replace(/^\s+|\s+$/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const normTarget = normalize(decodedId);
+
+        // Search by id attribute in editor areas (IR, WYSIWYG, preview)
+        let target =
+          vditorEl.querySelector(`[id="${CSS.escape(decodedId)}"]`) ||
+          vditorEl.querySelector(`[id="${CSS.escape(targetId)}"]`);
+        if (!target) {
+          // Try matching by normalized id
+          const allIds = vditorEl.querySelectorAll('[id]');
+          for (const el of allIds) {
+            if (normalize(el.id) === normTarget) {
+              target = el;
+              break;
+            }
+          }
+        }
+        if (!target) {
+          // Fallback: try matching heading text content
+          const headings = vditorEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
+          for (const h of headings) {
+            const text = (h.innerText || h.textContent).trim();
+            if (normalize(text) === normTarget || text === decodedId || text === targetId) {
+              target = h;
+              break;
+            }
+          }
+        }
+        if (target) {
+          // Determine which scrollable container the target is in
+          const scrollParent = target.closest('.vditor-ir, .vditor-wysiwyg, .vditor-preview, .vditor-sv');
+          if (scrollParent) {
+            const parentRect = scrollParent.getBoundingClientRect();
+            const targetRect = target.getBoundingClientRect();
+            scrollParent.scrollTop += targetRect.top - parentRect.top - parentRect.height / 3;
+          } else {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }
+      });
 
       // Rewrite relative image paths in editor content
       rewriteEditorImages();
