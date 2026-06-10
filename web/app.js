@@ -2492,7 +2492,7 @@ async function searchLocalMounts(query) {
             _local: true,
           });
         }
-      } catch (e) {
+      } catch (_e) {
         // Skip unreadable files
       }
     }

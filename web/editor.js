@@ -407,11 +407,11 @@ function initEditor(content, mode, readonly) {
         const normTarget = normalize(decodedId);
 
         // Search by id attribute in editor areas (IR, WYSIWYG, preview)
-        // eslint-disable-next-line no-undef
+        /* eslint-disable no-undef */
         let target =
           vditorEl.querySelector(`[id="${CSS.escape(decodedId)}"]`) ||
-          // eslint-disable-next-line no-undef
           vditorEl.querySelector(`[id="${CSS.escape(targetId)}"]`);
+        /* eslint-enable no-undef */
         if (!target) {
           // Try matching by normalized id
           const allIds = vditorEl.querySelectorAll('[id]');

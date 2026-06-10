@@ -43,6 +43,7 @@ class TestTomorrow:
         result = tomorrow()
         # Use UTC now for comparison since tomorrow() returns UTC-based timestamp
         import datetime
+
         now_utc_ts = int(datetime.datetime.now(datetime.UTC).timestamp())
         assert result > now_utc_ts
 
@@ -57,7 +58,9 @@ class TestTomorrow:
 class TestFormatTaskDate:
     def test_today_label(self):
         """Task scheduled for today UTC should return 'Today'."""
-        now_utc = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        now_utc = datetime.datetime.now(datetime.UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         ts = int(calendar.timegm(now_utc.timetuple()))
         result = format_task_date(ts)
         assert result == "Today"
@@ -103,7 +106,9 @@ class TestScheduleReport:
 
     def test_single_schedule(self):
         """Single schedule should format correctly."""
-        now_utc = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        now_utc = datetime.datetime.now(datetime.UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         ts = int(calendar.timegm(now_utc.timetuple()))
         schedules = [{"scheduledAt": ts, "filename": "task1.md"}]
         result = schedule_report(schedules)
@@ -112,7 +117,9 @@ class TestScheduleReport:
 
     def test_multiple_days(self):
         """Multiple schedules on different days should group by day."""
-        now_utc = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        now_utc = datetime.datetime.now(datetime.UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         today_ts = int(calendar.timegm(now_utc.timetuple()))
         tomorrow_utc = now_utc + datetime.timedelta(days=1)
         tomorrow_ts = int(calendar.timegm(tomorrow_utc.timetuple()))
