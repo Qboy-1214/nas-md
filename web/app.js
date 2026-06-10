@@ -2379,7 +2379,15 @@ async function doSearch() {
     return;
   }
   try {
-    state.searchResults = await API.search(query);
+    // Search server-side mounts
+    const serverResults = await API.search(query);
+
+    // Search client-side local mounts
+    const localResults = await searchLocalMounts(query);
+
+    // Merge results (local first, then server)
+    state.searchResults = [...localResults, ...serverResults];
+
     if (state.searchResults.length === 0) {
       resultsEl.innerHTML = '<div style="padding:8px;color:var(--c-muted)">无结果</div>';
       return;
@@ -2390,8 +2398,9 @@ async function doSearch() {
         const displayTitle = r.title || r.filename;
         const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
         const snippet = (r.snippet || '').replace(/<[^>]*>/g, ''); // strip HTML tags from snippet
+        const localBadge = r._local ? ' 📁' : '';
         return `<div class="search-result-item" data-idx="${i}">
-        <span class="result-path">${displayTitle} <small style="color:var(--c-muted)">${displayPath}</small></span>
+        <span class="result-path">${displayTitle}${localBadge} <small style="color:var(--c-muted)">${displayPath}</small></span>
         <span class="result-snippet">${snippet}</span>
       </div>`;
       })
@@ -2412,6 +2421,83 @@ async function doSearch() {
   } catch (e) {
     console.error('Search failed:', e);
   }
+}
+
+/**
+ * Search local (client-side) mounts by reading .md files and matching query.
+ * Returns results in the same format as the server search API.
+ */
+async function searchLocalMounts(query) {
+  const results = [];
+  const lowerQuery = query.toLowerCase();
+  const localMountIds = Object.keys(state.localMounts);
+
+  for (const mountId of localMountIds) {
+    const mount = state.mounts.find((m) => m.id === mountId);
+    if (!mount || mount.readonly) continue;
+
+    const tree = state.treeData[mountId];
+    if (!tree || !tree['/']) continue;
+
+    // Collect all .md file paths from the tree
+    const mdFiles = [];
+    function collectMdFiles(entries) {
+      for (const entry of entries) {
+        if (entry.isDir) {
+          if (entry.children) collectMdFiles(entry.children);
+        } else if (entry.name.toLowerCase().endsWith('.md')) {
+          mdFiles.push(entry);
+        }
+      }
+    }
+    collectMdFiles(tree['/'].children || []);
+
+    // Read and search each file (limit to 50 files for performance)
+    const filesToSearch = mdFiles.slice(0, 50);
+    for (const entry of filesToSearch) {
+      try {
+        const content = await readLocalFile(mountId, entry.path);
+        if (content === null) continue;
+        const lowerContent = content.toLowerCase();
+
+        // Match in filename or content
+        const nameMatch = entry.name.toLowerCase().includes(lowerQuery);
+        const contentMatch = lowerContent.includes(lowerQuery);
+
+        if (nameMatch || contentMatch) {
+          // Extract title from first heading or use filename
+          let title = entry.name.replace(/\.md$/i, '');
+          const headingMatch = content.match(/^#\s+(.+)$/m);
+          if (headingMatch) title = headingMatch[1].trim();
+
+          // Extract snippet around first match
+          let snippet = '';
+          const matchIdx = lowerContent.indexOf(lowerQuery);
+          if (matchIdx >= 0) {
+            const start = Math.max(0, matchIdx - 40);
+            const end = Math.min(content.length, matchIdx + query.length + 60);
+            snippet =
+              (start > 0 ? '...' : '') +
+              content.slice(start, end).replace(/\n/g, ' ') +
+              (end < content.length ? '...' : '');
+          }
+
+          results.push({
+            path: entry.path,
+            rel_path: entry.path,
+            filename: entry.name,
+            title: title,
+            snippet: snippet,
+            mount_id: mountId,
+            _local: true,
+          });
+        }
+      } catch (e) {
+        // Skip unreadable files
+      }
+    }
+  }
+  return results;
 }
 
 // === 编辑器模式 ===
