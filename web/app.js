@@ -156,6 +156,11 @@ document.addEventListener('DOMContentLoaded', async () => {
               ? ''
               : 'none';
           $('save-group').style.display = mount.readonly ? 'none' : '';
+          // Show rename/delete buttons if writable and not root
+          const _renameBtn = $('rename-top-btn');
+          const _deleteBtn = $('delete-top-btn');
+          if (_renameBtn) _renameBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
+          if (_deleteBtn) _deleteBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
@@ -1460,6 +1465,56 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
 }
 
 // === Rename (modal dialog) ===
+async function deleteCurrentFile() {
+  const path = state.currentPath;
+  const mountId = state.currentMountId;
+  if (!path || !mountId || path === '/') return;
+  const name = path.split('/').pop();
+  if (!confirm(`确定要删除「${name}」吗？此操作不可撤销。`)) return;
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount) return;
+  try {
+    if (mount._local && state.localMounts[mountId]) {
+      const localMount = state.localMounts[mountId];
+      if (!(await ensureWritePermission(mountId))) return;
+      const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+      const parentHandle = await getLocalDirHandle(localMount.handle, parentPath);
+      if (!parentHandle) {
+        showToast('目录不存在');
+        return;
+      }
+      await parentHandle.removeEntry(name);
+      showToast('已删除');
+      await loadLocalTree(mountId);
+    } else {
+      const result = await API.deleteFile(mountId, path);
+      if (!result || result.error) {
+        showToast(result?.error || '删除失败');
+        return;
+      }
+      showToast('已删除');
+      delete state.treeData[mountId];
+      await loadTree(mountId, '/');
+    }
+    // Navigate away from deleted file
+    state.currentPath = null;
+    state.currentMountId = null;
+    localStorage.removeItem('nasmd_last_path');
+    localStorage.removeItem('nasmd_last_mount');
+    $('breadcrumb').textContent = '';
+    $('rename-top-btn').style.display = 'none';
+    $('delete-top-btn').style.display = 'none';
+    $('editor-modes').style.display = 'none';
+    $('save-group').style.display = 'none';
+    if (window._vditor) window._vditor.destroy();
+    showPage('welcome');
+    renderSidebar();
+  } catch (e) {
+    console.error('Delete failed:', e);
+    showToast('删除失败');
+  }
+}
+
 function showRenameModal() {
   const path = state.currentPath;
   const mountId = state.currentMountId;
@@ -1822,10 +1877,14 @@ async function openFile(path, preferredMountId, searchKeyword) {
     localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
 
     $('breadcrumb').textContent = mount.name + path + (mount.readonly ? ' (只读)' : '');
-    // Show rename button if file is writable and not root
+    // Show rename/delete buttons if file is writable and not root
     const renameBtn = $('rename-top-btn');
+    const deleteBtn = $('delete-top-btn');
     if (renameBtn) {
       renameBtn.style.display = !mount.readonly && path !== '/' ? '' : 'none';
+    }
+    if (deleteBtn) {
+      deleteBtn.style.display = !mount.readonly && path !== '/' ? '' : 'none';
     }
     $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
@@ -2129,6 +2188,8 @@ function navigateHome() {
   $('breadcrumb').textContent = '';
   $('editor-modes').style.display = 'none';
   $('save-group').style.display = 'none';
+  $('rename-top-btn').style.display = 'none';
+  $('delete-top-btn').style.display = 'none';
   if (window._vditor) {
     window._vditor.destroy();
     window._vditor = null;

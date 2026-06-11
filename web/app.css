@@ -687,6 +687,10 @@ a:hover {
   color: var(--c-primary);
   background: rgba(99, 102, 241, 0.08);
 }
+.delete-top-btn:hover {
+  color: #e53e3e;
+  background: rgba(229, 62, 62, 0.08);
+}
 
 .topbar-actions {
   display: flex;
