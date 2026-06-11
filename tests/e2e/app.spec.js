@@ -24,15 +24,15 @@ test.describe('应用加载', () => {
     await page.goto('/admin');
     const footer = page.locator('.sidebar-footer');
     await expect(footer).toBeVisible();
-    await expect(footer.getByText('挂载')).toBeVisible();
+    await expect(footer.getByText('挂载文件夹')).toBeVisible();
   });
 
-  test('欢迎页内容', async ({ page }) => {
+  test('默认打开欢迎.md', async ({ page }) => {
     await page.goto('/admin');
-    await page.locator('.sidebar-footer').getByText('挂载').click();
-    await expect(page.locator('#welcome-page')).toBeVisible();
-    // Browse button for mounting local directory
-    await expect(page.locator('.browse-btn')).toBeVisible();
+    // Editor should be visible with welcome content
+    await expect(page.locator('#editor-container')).toBeVisible();
+    // Breadcrumb should show 欢迎.md
+    await expect(page.locator('#breadcrumb')).toContainText('欢迎');
   });
 });
 
