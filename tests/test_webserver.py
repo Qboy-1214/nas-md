@@ -910,7 +910,7 @@ class TestSearchVisibility:
 
     def test_admin_sees_all_mounts(self, search_server):
         """Admin user should see files from all mounts in search results."""
-        url, admin_dir, pub_dir = search_server
+        url, _admin_dir, _pub_dir = search_server
         status, body, _ = _get(
             f"{url}/api/search?q=uniquekeyword123&limit=20",
             headers={"X-Admin": "1"},
@@ -925,7 +925,7 @@ class TestSearchVisibility:
 
     def test_non_admin_sees_only_public(self, search_server):
         """Non-admin user should only see files from public mounts."""
-        url, admin_dir, pub_dir = search_server
+        url, _admin_dir, _pub_dir = search_server
         status, body, _ = _get(f"{url}/api/search?q=uniquekeyword123&limit=20")
         assert status == 200
         data = json.loads(body)
