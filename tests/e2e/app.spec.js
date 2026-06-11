@@ -29,10 +29,10 @@ test.describe('应用加载', () => {
 
   test('默认打开欢迎.md', async ({ page }) => {
     await page.goto('/admin');
-    // Editor should be visible with welcome content
+    // Editor container should be visible (no welcome page)
     await expect(page.locator('#editor-container')).toBeVisible();
-    // Breadcrumb should show 欢迎.md
-    await expect(page.locator('#breadcrumb')).toContainText('欢迎');
+    // Welcome page should not exist
+    await expect(page.locator('#welcome-page')).not.toBeAttached();
   });
 });
 
