@@ -1544,6 +1544,13 @@ async function renameServerItem(mountId, oldPath, newPath) {
       return;
     }
     showToast('已重命名');
+    // Update current path and breadcrumb if the renamed file is currently open
+    if (state.currentPath === oldPath) {
+      state.currentPath = newPath;
+      localStorage.setItem('nasmd_last_path', newPath);
+      const mount = state.mounts.find((m) => m.id === mountId);
+      $('breadcrumb').textContent = (mount ? mount.name : '') + newPath + (mount && mount.readonly ? ' (只读)' : '');
+    }
     delete state.treeData[mountId];
     await loadTree(mountId, '/');
     renderSidebar();
@@ -1608,6 +1615,13 @@ async function renameLocalItem(mountId, oldPath, newPath, newName) {
     }
 
     showToast('已重命名');
+    // Update current path and breadcrumb if the renamed file is currently open
+    if (state.currentPath === oldPath) {
+      state.currentPath = newPath;
+      localStorage.setItem('nasmd_last_path', newPath);
+      const mount = state.mounts.find((m) => m.id === mountId);
+      $('breadcrumb').textContent = (mount ? mount.name : '') + newPath + (mount && mount.readonly ? ' (只读)' : '');
+    }
     await loadLocalTree(mountId);
     renderSidebar();
   } catch (e) {
