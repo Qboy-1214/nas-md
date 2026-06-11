@@ -159,8 +159,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           // Show rename/delete buttons if writable and not root
           const _renameBtn = $('rename-top-btn');
           const _deleteBtn = $('delete-top-btn');
-          if (_renameBtn) _renameBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
-          if (_deleteBtn) _deleteBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
+          if (_renameBtn)
+            _renameBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
+          if (_deleteBtn)
+            _deleteBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
@@ -1470,7 +1472,7 @@ async function deleteCurrentFile() {
   const mountId = state.currentMountId;
   if (!path || !mountId || path === '/') return;
   const name = path.split('/').pop();
-  if (!confirm(`确定要删除「${name}」吗？此操作不可撤销。`)) return;
+  if (!window.confirm(`确定要删除「${name}」吗？此操作不可撤销。`)) return;
   const mount = state.mounts.find((m) => m.id === mountId);
   if (!mount) return;
   try {

@@ -44,6 +44,7 @@ export default [
         location: "readonly",
         alert: "readonly",
         prompt: "readonly",
+        confirm: "readonly",
         // Third-party libraries
         Alpine: "readonly",
         Vditor: "readonly",
@@ -68,7 +69,7 @@ export default [
         {
           argsIgnorePattern: "^_",
           varsIgnorePattern:
-            "^(openFile|saveFile|showNewFile|hideNewFile|confirmNewFile|toggleSidebar|toggleDarkMode|toggleAutoSave|toggleBacklinks|toggleMount|toggleDir|toggleMountPublic|removeMount|navigateHome|showGraph|showDashboard|doSearch|setEditorMode|markDirty|markClean|markSaved|chooseDirectory|onDirPicked|loadMounts|loadTree|getTreeCached|clearTreeCache|findMountForPath|getRelativePath|getMountPath|restoreCursorPosition|isDirty|getCurrentFileInfo|setFileInfo|openDirectory|createItem|renderSidebar|loadLocalTree|getLocalDirHandle|_treeHasPath|refreshTree|startSidebarRefresh|stopSidebarRefresh|startSyncPolling|stopSyncPolling|performSync|collectFileMtimes|saveToLocalStorage|loadFromLocalStorage|clearLocalStorage|loadRecentFiles|collectFiles|renderRecentFiles|formatTime|renderGraph|updateSyncIndicator|startDirtyCheck|scheduleAutoSave|_scrollToKeyword|readLocalDir|readLocalFile|getLocalFileHandle|writeLocalFile|mountLocalDirectory|showPage|showToast|findMountForPath|idbOpen|idbPut|idbGet|idbDelete|idbGetAllKeys|setupDragDrop|showMoveCopyDialog|moveServerItem|moveLocalItem|copyLocalDir|crossMountServer|crossMountLocal|showRenameModal|renameServerItem|renameLocalItem|localToServer|serverToLocal|_dragData|_dragDropSetup|_refreshTreeBusy)$",
+            "^(openFile|saveFile|showNewFile|hideNewFile|confirmNewFile|toggleSidebar|toggleDarkMode|toggleAutoSave|toggleBacklinks|toggleMount|toggleDir|toggleMountPublic|removeMount|navigateHome|showGraph|showDashboard|doSearch|setEditorMode|markDirty|markClean|markSaved|chooseDirectory|onDirPicked|loadMounts|loadTree|getTreeCached|clearTreeCache|findMountForPath|getRelativePath|getMountPath|restoreCursorPosition|isDirty|getCurrentFileInfo|setFileInfo|openDirectory|createItem|renderSidebar|loadLocalTree|getLocalDirHandle|_treeHasPath|refreshTree|startSidebarRefresh|stopSidebarRefresh|startSyncPolling|stopSyncPolling|performSync|collectFileMtimes|saveToLocalStorage|loadFromLocalStorage|clearLocalStorage|loadRecentFiles|collectFiles|renderRecentFiles|formatTime|renderGraph|updateSyncIndicator|startDirtyCheck|scheduleAutoSave|_scrollToKeyword|readLocalDir|readLocalFile|getLocalFileHandle|writeLocalFile|mountLocalDirectory|showPage|showToast|findMountForPath|idbOpen|idbPut|idbGet|idbDelete|idbGetAllKeys|setupDragDrop|showMoveCopyDialog|moveServerItem|moveLocalItem|copyLocalDir|crossMountServer|crossMountLocal|showRenameModal|renameServerItem|renameLocalItem|localToServer|serverToLocal|_dragData|_dragDropSetup|_refreshTreeBusy|deleteCurrentFile)$",
           caughtErrorsIgnorePattern: "^_",
         },
       ],
