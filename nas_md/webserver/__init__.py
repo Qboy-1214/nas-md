@@ -1397,23 +1397,29 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             stale_paths = []
             filtered = []
             for r in results:
-                # Skip files that no longer exist on disk
-                if not os.path.isfile(r["path"]):
-                    stale_paths.append(r["path"])
-                    continue
                 mount_info = self._find_mount_for_path(r["path"])
                 if mount_info:
                     r["mount_id"] = mount_info["mount_id"]
                     r["rel_path"] = mount_info["rel_path"]
-                    # Check if this mount is visible to the user
+                    # Verify file is accessible through current mount configuration
                     mount = (
                         self.mount_manager.find_mount(mount_info["mount_id"])
                         if self.mount_manager
                         else None
                     )
-                    if mount and mount in visible:
-                        filtered.append(r)
+                    if not mount or mount not in visible:
+                        continue
+                    # Resolve through mount and check file actually exists
+                    resolved = self.mount_manager._safe_path(mount, mount_info["rel_path"])
+                    if not resolved or not os.path.isfile(resolved):
+                        stale_paths.append(r["path"])
+                        continue
+                    filtered.append(r)
                 else:
+                    # No mount found for this path — check if file still exists on disk
+                    if not os.path.isfile(r["path"]):
+                        stale_paths.append(r["path"])
+                        continue
                     r["mount_id"] = None
                     r["rel_path"] = r["path"]
                     # No mount found — skip if we have mounts configured
