@@ -1008,22 +1008,25 @@ function setupDragDrop() {
 
   // Dragover: highlight valid drop targets
   tree.addEventListener('dragover', (e) => {
-    if (!_dragData) return;
     const dropEl = e.target.closest('[data-drop-mount]');
-    if (!dropEl) {
-      return; // no valid drop target, browser will show no-drop cursor
-    }
-    const destMountId = dropEl.dataset.dropMount;
-    const destPath = dropEl.dataset.dropPath;
+    if (!dropEl) return;
 
-    // Don't allow dropping on self or into own subtree
-    if (_dragData.mountId === destMountId) {
-      if (_dragData.path === destPath) return;
-      if (destPath.startsWith(_dragData.path + '/')) return;
+    // Internal drag (within sidebar)
+    if (_dragData) {
+      const destMountId = dropEl.dataset.dropMount;
+      const destPath = dropEl.dataset.dropPath;
+      if (_dragData.mountId === destMountId) {
+        if (_dragData.path === destPath) return;
+        if (destPath.startsWith(_dragData.path + '/')) return;
+      }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    } else if (e.dataTransfer.types.includes('Files')) {
+      // External file drag (from OS file manager)
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
     }
 
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
     // Clear previous highlights
     tree.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));
     dropEl.classList.add('drop-target');
@@ -1036,10 +1039,9 @@ function setupDragDrop() {
     }
   });
 
-  // Drop: perform move or copy
+  // Drop: perform move, copy, or external file import
   tree.addEventListener('drop', async (e) => {
     e.preventDefault();
-    if (!_dragData) return;
     if (state._fileOpInProgress) {
       showToast('请等待当前操作完成');
       return;
@@ -1047,12 +1049,94 @@ function setupDragDrop() {
     const dropEl = e.target.closest('[data-drop-mount]');
     if (!dropEl) return;
 
+    const destMountId = dropEl.dataset.dropMount;
+    const destPath = dropEl.dataset.dropPath;
+
+    dropEl.classList.remove('drop-target');
+
+    // Handle external file drop (from OS file manager)
+    if (!_dragData && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files);
+      // Check all files are .md
+      const nonMd = files.find((f) => !f.name.toLowerCase().endsWith('.md'));
+      if (nonMd) {
+        showToast('请放入受支持的文件格式（仅支持 .md 文件）');
+        return;
+      }
+      const destMount = state.mounts.find((m) => m.id === destMountId);
+      if (!destMount || destMount.readonly) {
+        showToast('该目录不可写');
+        return;
+      }
+      state._fileOpInProgress = true;
+      try {
+        for (const file of files) {
+          const content = await file.text();
+          const fileName = file.name;
+          if (destMount._local && state.localMounts[destMountId]) {
+            // Write to local mount
+            if (!(await ensureWritePermission(destMountId))) return;
+            const dirHandle = await getLocalDirHandle(
+              state.localMounts[destMountId].handle,
+              destPath,
+            );
+            if (!dirHandle) {
+              showToast('目录不存在');
+              return;
+            }
+            let destName = fileName;
+            let renamed = false;
+            if (await localEntryExists(dirHandle, fileName, false)) {
+              destName = applyAutoRename(fileName);
+              renamed = true;
+            }
+            const fh = await dirHandle.getFileHandle(destName, { create: true });
+            const writable = await fh.createWritable();
+            await writable.write(content);
+            await writable.close();
+            showToast(renamed ? `有重名，已自动重命名为 ${destName}` : `已导入: ${destName}`);
+          } else {
+            // Write to server mount
+            let destName = fileName;
+            const checkPath = destPath === '/' ? '/' + fileName : destPath + '/' + fileName;
+            const existing = await API.getFile(destMountId, checkPath);
+            let renamed = false;
+            if (existing !== null) {
+              destName = applyAutoRename(fileName);
+              renamed = true;
+            }
+            const writePath = destPath === '/' ? '/' + destName : destPath + '/' + destName;
+            const result = await API.putFile(destMountId, writePath, content);
+            if (!result || result.status === 'error') {
+              showToast(result?.error || '导入失败');
+              return;
+            }
+            showToast(renamed ? `有重名，已自动重命名为 ${destName}` : `已导入: ${destName}`);
+          }
+        }
+        // Refresh tree
+        if (destMount._local && state.localMounts[destMountId]) {
+          await loadLocalTree(destMountId);
+        } else {
+          delete state.treeData[destMountId];
+          await loadTree(destMountId, '/');
+        }
+        renderSidebar();
+      } catch (err) {
+        console.error('External file import failed:', err);
+        showToast('导入失败');
+      } finally {
+        state._fileOpInProgress = false;
+      }
+      return;
+    }
+
+    // Internal drag & drop
+    if (!_dragData) return;
+
     // Save drag data to local vars before any await — dragend may clear _dragData
     const srcMountId = _dragData.mountId;
     const srcPath = _dragData.path;
-
-    const destMountId = dropEl.dataset.dropMount;
-    const destPath = dropEl.dataset.dropPath;
 
     // Don't allow dropping on self or into own subtree
     if (srcMountId === destMountId) {
