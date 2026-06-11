@@ -1154,67 +1154,73 @@ async function moveServerItem(mountId, srcPath, destDir) {
 async function moveLocalItem(mountId, srcPath, destDir) {
   const localMount = state.localMounts[mountId];
   if (!localMount) return;
-  try {
-    if (!(await ensureWritePermission(mountId))) return;
-    const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
-    const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
-    const srcParentHandle = await getLocalDirHandle(localMount.handle, srcParentPath);
-    const destDirHandle = await getLocalDirHandle(localMount.handle, destDir);
-    if (!srcParentHandle || !destDirHandle) {
-      showToast('目录不存在');
-      return;
-    }
-
-    // Check if destination already exists
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      if (srcPath.endsWith('.md') || !srcPath.includes('/')) {
-        // Could be file or dir, try file first
-        await destDirHandle.getFileHandle(srcName);
-        showToast('目标位置已存在同名文件');
+      if (!(await ensureWritePermission(mountId))) return;
+      const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+      const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+      const srcParentHandle = await getLocalDirHandle(localMount.handle, srcParentPath);
+      const destDirHandle = await getLocalDirHandle(localMount.handle, destDir);
+      if (!srcParentHandle || !destDirHandle) {
+        showToast('目录不存在');
         return;
       }
-    } catch {
-      // Not found as file, check dir
-    }
-    try {
-      await destDirHandle.getDirectoryHandle(srcName);
-      showToast('目标位置已存在同名文件夹');
-      return;
-    } catch {
-      // OK, doesn't exist
-    }
 
-    // Read source, write to dest, remove source
-    const isDir = await (async () => {
+      // Check if destination already exists
       try {
-        await srcParentHandle.getDirectoryHandle(srcName);
-        return true;
+        if (srcPath.endsWith('.md') || !srcPath.includes('/')) {
+          await destDirHandle.getFileHandle(srcName);
+          showToast('目标位置已存在同名文件');
+          return;
+        }
       } catch {
-        return false;
+        // Not found as file, check dir
       }
-    })();
+      try {
+        await destDirHandle.getDirectoryHandle(srcName);
+        showToast('目标位置已存在同名文件夹');
+        return;
+      } catch {
+        // OK, doesn't exist
+      }
 
-    if (isDir) {
-      // Move directory: copy recursively then remove original
-      const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
-      await copyLocalDir(srcDirHandle, destDirHandle, srcName);
-      await srcParentHandle.removeEntry(srcName, { recursive: true });
-    } else {
-      const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
-      const file = await srcFileHandle.getFile();
-      const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
-      const writable = await destFileHandle.createWritable();
-      await writable.write(await file.arrayBuffer());
-      await writable.close();
-      await srcParentHandle.removeEntry(srcName);
+      // Read source, write to dest, remove source
+      const isDir = await (async () => {
+        try {
+          await srcParentHandle.getDirectoryHandle(srcName);
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+
+      if (isDir) {
+        // Move directory: copy recursively then remove original
+        const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
+        await copyLocalDir(srcDirHandle, destDirHandle, srcName);
+        await srcParentHandle.removeEntry(srcName, { recursive: true });
+      } else {
+        const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
+        const file = await srcFileHandle.getFile();
+        const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
+        const writable = await destFileHandle.createWritable();
+        await writable.write(await file.arrayBuffer());
+        await writable.close();
+        await srcParentHandle.removeEntry(srcName);
+      }
+
+      showToast('已移动');
+      await loadLocalTree(mountId);
+      renderSidebar();
+      return; // success
+    } catch (e) {
+      if (attempt === 0 && e.name === 'InvalidStateError') {
+        continue; // retry with fresh handles
+      }
+      console.error('Local move failed:', e);
+      showToast('移动失败');
+      return;
     }
-
-    showToast('已移动');
-    await loadLocalTree(mountId);
-    renderSidebar();
-  } catch (e) {
-    console.error('Local move failed:', e);
-    showToast('移动失败');
   }
 }
 
@@ -1274,53 +1280,63 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
   const destLocalMount = state.localMounts[destMountId];
   if (!srcLocalMount || !destLocalMount) return;
 
-  try {
-    // Request write permission on both mounts
-    if (!(await ensureWritePermission(srcMountId))) return;
-    if (!(await ensureWritePermission(destMountId))) return;
-    const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
-    const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
-    const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
-    const destDirHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
-    if (!srcParentHandle || !destDirHandle) {
-      showToast('目录不存在');
+  // Retry once on InvalidStateError (File System Access API handle cache staleness)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      // Request write permission on both mounts
+      if (!(await ensureWritePermission(srcMountId))) return;
+      if (!(await ensureWritePermission(destMountId))) return;
+      // Always re-resolve handles from root to avoid stale cache
+      const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+      const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+      const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
+      const destDirHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
+      if (!srcParentHandle || !destDirHandle) {
+        showToast('目录不存在');
+        return;
+      }
+
+      const isDir = await (async () => {
+        try {
+          await srcParentHandle.getDirectoryHandle(srcName);
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+
+      if (isDir) {
+        const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
+        await copyLocalDir(srcDirHandle, destDirHandle, srcName);
+        if (action === 'move') {
+          await srcParentHandle.removeEntry(srcName, { recursive: true });
+        }
+      } else {
+        const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
+        const file = await srcFileHandle.getFile();
+        const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
+        const writable = await destFileHandle.createWritable();
+        await writable.write(await file.arrayBuffer());
+        await writable.close();
+        if (action === 'move') {
+          await srcParentHandle.removeEntry(srcName);
+        }
+      }
+
+      showToast(action === 'move' ? '已移动' : '已复制');
+      await loadLocalTree(srcMountId);
+      await loadLocalTree(destMountId);
+      renderSidebar();
+      return; // success
+    } catch (e) {
+      if (attempt === 0 && e.name === 'InvalidStateError') {
+        // Stale handle — retry with fresh handles
+        continue;
+      }
+      console.error('Cross-mount local operation failed:', e);
+      showToast('操作失败');
       return;
     }
-
-    const isDir = await (async () => {
-      try {
-        await srcParentHandle.getDirectoryHandle(srcName);
-        return true;
-      } catch {
-        return false;
-      }
-    })();
-
-    if (isDir) {
-      const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
-      await copyLocalDir(srcDirHandle, destDirHandle, srcName);
-      if (action === 'move') {
-        await srcParentHandle.removeEntry(srcName, { recursive: true });
-      }
-    } else {
-      const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
-      const file = await srcFileHandle.getFile();
-      const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
-      const writable = await destFileHandle.createWritable();
-      await writable.write(await file.arrayBuffer());
-      await writable.close();
-      if (action === 'move') {
-        await srcParentHandle.removeEntry(srcName);
-      }
-    }
-
-    showToast(action === 'move' ? '已移动' : '已复制');
-    await loadLocalTree(srcMountId);
-    await loadLocalTree(destMountId);
-    renderSidebar();
-  } catch (e) {
-    console.error('Cross-mount local operation failed:', e);
-    showToast('操作失败');
   }
 }
 
@@ -1335,41 +1351,49 @@ async function localToServer(srcMountId, srcPath, destMountId, destDir, action) 
     return;
   }
 
-  try {
-    // Read file content from local
-    const content = await readLocalFile(srcMountId, srcPath);
-    if (content === null) {
-      showToast('读取本机文件失败');
-      return;
-    }
-
-    const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
-    const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
-
-    // Write to server
-    const result = await API.putFile(destMountId, destFilePath, content);
-    if (!result || result.status === 'error') {
-      showToast(result?.error || '写入服务器文件失败');
-      return;
-    }
-
-    // If move, delete source
-    if (action === 'move') {
-      const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
-      const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
-      if (srcParentHandle) {
-        await srcParentHandle.removeEntry(fileName);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      // Read file content from local
+      const content = await readLocalFile(srcMountId, srcPath);
+      if (content === null) {
+        showToast('读取本机文件失败');
+        return;
       }
-    }
 
-    showToast(action === 'move' ? '已移动到服务器' : '已复制到服务器');
-    await loadLocalTree(srcMountId);
-    delete state.treeData[destMountId];
-    await loadTree(destMountId, '/');
-    renderSidebar();
-  } catch (e) {
-    console.error('Local to server operation failed:', e);
-    showToast('操作失败');
+      const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+      const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
+
+      // Write to server
+      const result = await API.putFile(destMountId, destFilePath, content);
+      if (!result || result.status === 'error') {
+        showToast(result?.error || '写入服务器文件失败');
+        return;
+      }
+
+      // If move, delete source
+      if (action === 'move') {
+        if (!(await ensureWritePermission(srcMountId))) return;
+        const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+        const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
+        if (srcParentHandle) {
+          await srcParentHandle.removeEntry(fileName);
+        }
+      }
+
+      showToast(action === 'move' ? '已移动到服务器' : '已复制到服务器');
+      await loadLocalTree(srcMountId);
+      delete state.treeData[destMountId];
+      await loadTree(destMountId, '/');
+      renderSidebar();
+      return; // success
+    } catch (e) {
+      if (attempt === 0 && e.name === 'InvalidStateError') {
+        continue; // retry with fresh handles
+      }
+      console.error('Local to server operation failed:', e);
+      showToast('操作失败');
+      return;
+    }
   }
 }
 
@@ -1384,37 +1408,44 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
     return;
   }
 
-  try {
-    // Read file content from server
-    const content = await API.getFile(srcMountId, srcPath);
-    if (content === null) {
-      showToast('读取服务器文件失败');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      // Read file content from server
+      const content = await API.getFile(srcMountId, srcPath);
+      if (content === null) {
+        showToast('读取服务器文件失败');
+        return;
+      }
+
+      const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+
+      // Write to local
+      const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
+      const ok = await writeLocalFile(destMountId, destFilePath, content);
+      if (!ok) {
+        showToast('写入本机文件失败');
+        return;
+      }
+
+      // If move, delete source from server
+      if (action === 'move') {
+        await API.deleteFile(srcMountId, srcPath);
+      }
+
+      showToast(action === 'move' ? '已移动到本机' : '已复制到本机');
+      delete state.treeData[srcMountId];
+      await loadTree(srcMountId, '/');
+      await loadLocalTree(destMountId);
+      renderSidebar();
+      return; // success
+    } catch (e) {
+      if (attempt === 0 && e.name === 'InvalidStateError') {
+        continue; // retry with fresh handles
+      }
+      console.error('Server to local operation failed:', e);
+      showToast('操作失败');
       return;
     }
-
-    const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
-
-    // Write to local
-    const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
-    const ok = await writeLocalFile(destMountId, destFilePath, content);
-    if (!ok) {
-      showToast('写入本机文件失败');
-      return;
-    }
-
-    // If move, delete source from server
-    if (action === 'move') {
-      await API.deleteFile(srcMountId, srcPath);
-    }
-
-    showToast(action === 'move' ? '已移动到本机' : '已复制到本机');
-    delete state.treeData[srcMountId];
-    await loadTree(srcMountId, '/');
-    await loadLocalTree(destMountId);
-    renderSidebar();
-  } catch (e) {
-    console.error('Server to local operation failed:', e);
-    showToast('操作失败');
   }
 }
 
