@@ -1577,7 +1577,11 @@ async function renameServerItem(mountId, oldPath, newPath) {
     // Update recent files: replace old path with new path
     const ri = state.recentFiles.findIndex((f) => f.mountId === mountId && f.path === oldPath);
     if (ri >= 0) {
-      state.recentFiles[ri] = { ...state.recentFiles[ri], path: newPath, name: newPath.split('/').pop() };
+      state.recentFiles[ri] = {
+        ...state.recentFiles[ri],
+        path: newPath,
+        name: newPath.split('/').pop(),
+      };
     }
     // Update accessLog key
     const oldKey = mountId + ':' + oldPath;
@@ -1663,7 +1667,11 @@ async function renameLocalItem(mountId, oldPath, newPath, newName) {
     // Update recent files: replace old path with new path
     const ri = state.recentFiles.findIndex((f) => f.mountId === mountId && f.path === oldPath);
     if (ri >= 0) {
-      state.recentFiles[ri] = { ...state.recentFiles[ri], path: newPath, name: newPath.split('/').pop() };
+      state.recentFiles[ri] = {
+        ...state.recentFiles[ri],
+        path: newPath,
+        name: newPath.split('/').pop(),
+      };
     }
     // Update accessLog key
     const oldKey = mountId + ':' + oldPath;
