@@ -515,20 +515,25 @@ a:hover {
 
 /* Rename input */
 .rename-input {
+  width: 100%;
   background: var(--c-surface);
-  border: 1px solid var(--c-primary);
-  border-radius: 3px;
-  padding: 1px 4px;
-  font-size: inherit;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md);
+  padding: 6px 8px;
+  font-size: var(--f-body-sm);
   font-family: inherit;
   color: var(--c-ink);
   outline: none;
   min-width: 40px;
 }
+.rename-input:focus {
+  border-color: var(--c-primary);
+  border-width: 2px;
+}
 
 /* Move/Copy dialog */
 .modal-box {
-  background: var(--c-surface);
+  background: var(--c-canvas);
   border-radius: var(--r-lg);
   padding: var(--s-lg);
   min-width: 300px;
@@ -556,11 +561,12 @@ a:hover {
 .modal-btn {
   padding: var(--s-xs) var(--s-md);
   border: 1px solid var(--c-border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   background: var(--c-surface);
   color: var(--c-ink);
   cursor: pointer;
   font-size: var(--f-body-sm);
+  font-weight: 500;
   transition: all 0.15s ease;
 }
 
@@ -580,6 +586,38 @@ a:hover {
 
 .modal-btn.cancel {
   color: var(--c-muted);
+}
+
+.modal-confirm {
+  padding: var(--s-xs) var(--s-md);
+  border: none;
+  border-radius: var(--r-md);
+  background: var(--c-primary);
+  color: var(--c-on-primary);
+  cursor: pointer;
+  font-size: var(--f-body-sm);
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.modal-confirm:hover {
+  background: var(--c-primary-pressed);
+}
+
+.modal-cancel {
+  padding: var(--s-xs) var(--s-md);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md);
+  background: var(--c-canvas);
+  color: var(--c-ink);
+  cursor: pointer;
+  font-size: var(--f-body-sm);
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.modal-cancel:hover {
+  background: var(--c-bg-hover);
 }
 
 /* Sidebar hint */
@@ -678,7 +716,7 @@ a:hover {
   color: var(--c-muted);
   cursor: pointer;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
@@ -688,8 +726,8 @@ a:hover {
   background: rgba(99, 102, 241, 0.08);
 }
 .delete-top-btn:hover {
-  color: #e53e3e;
-  background: rgba(229, 62, 62, 0.08);
+  color: var(--c-error);
+  background: rgba(224, 49, 49, 0.08);
 }
 
 .topbar-actions {

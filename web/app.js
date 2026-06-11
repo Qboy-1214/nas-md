@@ -1534,7 +1534,7 @@ function showRenameModal() {
     <div class="modal-box">
       <div class="modal-title">重命名</div>
       <div class="modal-body">
-        <input type="text" id="rename-modal-input" class="rename-input" value="${oldName}" style="width:100%;padding:6px 8px;font-size:14px" />
+        <input type="text" id="rename-modal-input" class="rename-input" value="${oldName}" />
       </div>
       <div class="modal-actions">
         <button class="modal-cancel" onclick="this.closest('.modal-overlay').remove()">取消</button>
@@ -1708,7 +1708,7 @@ async function createItem(mountId, dirPath, kind) {
       <div class="modal-box">
         <div class="modal-title">${title}</div>
         <div class="modal-body">
-          <input type="text" id="create-modal-input" class="rename-input" placeholder="${placeholder}" style="width:100%;padding:6px 8px;font-size:14px" />
+          <input type="text" id="create-modal-input" class="rename-input" placeholder="${placeholder}" />
         </div>
         <div class="modal-actions">
           <button class="modal-cancel" id="create-modal-cancel">取消</button>
