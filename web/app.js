@@ -1574,6 +1574,20 @@ async function renameServerItem(mountId, oldPath, newPath) {
       $('breadcrumb').textContent =
         (mount ? mount.name : '') + newPath + (mount && mount.readonly ? ' (只读)' : '');
     }
+    // Update recent files: replace old path with new path
+    const ri = state.recentFiles.findIndex((f) => f.mountId === mountId && f.path === oldPath);
+    if (ri >= 0) {
+      state.recentFiles[ri] = { ...state.recentFiles[ri], path: newPath, name: newPath.split('/').pop() };
+    }
+    // Update accessLog key
+    const oldKey = mountId + ':' + oldPath;
+    const newKey = mountId + ':' + newPath;
+    if (state.accessLog[oldKey] !== undefined) {
+      state.accessLog[newKey] = state.accessLog[oldKey];
+      delete state.accessLog[oldKey];
+      localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
+    }
+    renderRecentFiles();
     delete state.treeData[mountId];
     await loadTree(mountId, '/');
     renderSidebar();
@@ -1646,6 +1660,20 @@ async function renameLocalItem(mountId, oldPath, newPath, newName) {
       $('breadcrumb').textContent =
         (mount ? mount.name : '') + newPath + (mount && mount.readonly ? ' (只读)' : '');
     }
+    // Update recent files: replace old path with new path
+    const ri = state.recentFiles.findIndex((f) => f.mountId === mountId && f.path === oldPath);
+    if (ri >= 0) {
+      state.recentFiles[ri] = { ...state.recentFiles[ri], path: newPath, name: newPath.split('/').pop() };
+    }
+    // Update accessLog key
+    const oldKey = mountId + ':' + oldPath;
+    const newKey = mountId + ':' + newPath;
+    if (state.accessLog[oldKey] !== undefined) {
+      state.accessLog[newKey] = state.accessLog[oldKey];
+      delete state.accessLog[oldKey];
+      localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
+    }
+    renderRecentFiles();
     await loadLocalTree(mountId);
     renderSidebar();
   } catch (e) {
