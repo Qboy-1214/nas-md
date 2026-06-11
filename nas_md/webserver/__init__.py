@@ -1421,13 +1421,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         filtered.append(r)
             # Clean up stale entries from search index
             if stale_paths:
+                import contextlib
+
                 from nas_md.search import remove_file
 
                 for p in stale_paths:
-                    try:
+                    with contextlib.suppress(Exception):
                         remove_file(p)
-                    except Exception:
-                        pass
                 logger.info("Cleaned %d stale entries from search index", len(stale_paths))
             self._send_json(filtered)
         except Exception as e:
