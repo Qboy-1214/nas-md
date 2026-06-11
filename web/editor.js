@@ -63,6 +63,58 @@ function _addHeadingIdsToEditor(vditorEl) {
 }
 
 /**
+ * Handle a link click from any Vditor mode (IR, WYSIWYG, preview).
+ * Extracts href from the element using multiple strategies.
+ */
+function _handleLinkClick(el) {
+  let href = '';
+  // Strategy 1: <a> element with href attribute (WYSIWYG / preview)
+  if (el.tagName === 'A' || el.getAttribute('href')) {
+    href = el.getAttribute('href') || '';
+  }
+  // Strategy 2: IR mode link marker — textContent is the URL
+  if (!href && el.classList && el.classList.contains('vditor-ir__marker--link')) {
+    href = (el.textContent || '').trim();
+  }
+  // Strategy 3: data-href attribute
+  if (!href) {
+    href = el.getAttribute('data-href') || '';
+  }
+  // Strategy 4: Walk up to find <a> or data-type="a" parent
+  if (!href) {
+    let parent = el.parentElement;
+    while (parent) {
+      if (parent.tagName === 'A') {
+        href = parent.getAttribute('href') || '';
+        break;
+      }
+      if (parent.getAttribute('data-type') === 'a') {
+        // IR mode link container — find the link marker inside
+        const linkMarker = parent.querySelector('.vditor-ir__marker--link');
+        if (linkMarker) {
+          href = (linkMarker.textContent || '').trim();
+          break;
+        }
+      }
+      const pHref = parent.getAttribute('href') || parent.getAttribute('data-href') || '';
+      if (pHref) {
+        href = pHref;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+  }
+
+  if (href.startsWith('#')) {
+    const targetId = href.slice(1);
+    const vditorEl = document.getElementById('vditor');
+    if (vditorEl) _scrollToAnchor(targetId, vditorEl);
+  } else if (href) {
+    window.open(href);
+  }
+}
+
+/**
  * Scroll to an anchor target within the Vditor editor.
  * Tries multiple matching strategies: exact ID, normalized ID, heading text.
  */
@@ -401,19 +453,7 @@ function initEditor(content, mode, readonly) {
     link: {
       isOpen: false,
       click: (el) => {
-        // el can be <a> (preview/WYSIWYG) or .vditor-ir__marker--link (IR mode)
-        let href = el.getAttribute('href') || '';
-        // IR mode: the element is a marker span, get URL from its text content
-        if (!href && el.classList && el.classList.contains('vditor-ir__marker--link')) {
-          href = (el.textContent || '').trim();
-        }
-        if (href.startsWith('#')) {
-          const targetId = href.slice(1);
-          const vditorEl = document.getElementById('vditor');
-          if (vditorEl) _scrollToAnchor(targetId, vditorEl);
-        } else if (href) {
-          window.open(href);
-        }
+        _handleLinkClick(el);
       },
     },
     preview: {
@@ -542,6 +582,19 @@ function initEditor(content, mode, readonly) {
         }).observe(previewEl, {
           childList: true,
           subtree: true,
+        });
+        // Handle link clicks in preview pane (Vditor doesn't use link.click for preview)
+        previewEl.addEventListener('click', (e) => {
+          const a = e.target.closest('a');
+          if (!a) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const href = a.getAttribute('href') || '';
+          if (href.startsWith('#')) {
+            _scrollToAnchor(href.slice(1), vditorEl);
+          } else if (href) {
+            window.open(href);
+          }
         });
       }
 

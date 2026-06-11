@@ -419,10 +419,31 @@ async function getLocalFileHandle(dirHandle, path) {
   return null;
 }
 
+/**
+ * Ensure a local mount handle has readwrite permission.
+ * If already granted, returns immediately. Otherwise prompts the user once.
+ * Returns true if permission is granted, false otherwise.
+ */
+async function ensureWritePermission(mountId) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount || !localMount.handle) return false;
+  // Check if already granted (no prompt)
+  const current = await localMount.handle.queryPermission({ mode: 'readwrite' });
+  if (current === 'granted') return true;
+  // Request permission (may show browser prompt)
+  const result = await localMount.handle.requestPermission({ mode: 'readwrite' });
+  if (result !== 'granted') {
+    showToast('需要授予目录写入权限');
+    return false;
+  }
+  return true;
+}
+
 async function writeLocalFile(mountId, path, content) {
   const localMount = state.localMounts[mountId];
   if (!localMount) return false;
   try {
+    if (!(await ensureWritePermission(mountId))) return false;
     const parts = path.split('/').filter(Boolean);
     let current = localMount.handle;
     // Navigate to parent directory
@@ -438,6 +459,9 @@ async function writeLocalFile(mountId, path, content) {
     return true;
   } catch (e) {
     console.error('writeLocalFile error:', e);
+    if (e.name === 'NotAllowedError') {
+      showToast('权限不足，无法写入文件');
+    }
     return false;
   }
 }
@@ -1022,23 +1046,27 @@ function setupDragDrop() {
     const dropEl = e.target.closest('[data-drop-mount]');
     if (!dropEl) return;
 
+    // Save drag data to local vars before any await — dragend may clear _dragData
+    const srcMountId = _dragData.mountId;
+    const srcPath = _dragData.path;
+
     const destMountId = dropEl.dataset.dropMount;
     const destPath = dropEl.dataset.dropPath;
 
     // Don't allow dropping on self or into own subtree
-    if (_dragData.mountId === destMountId) {
-      if (_dragData.path === destPath) return;
-      if (destPath.startsWith(_dragData.path + '/')) return;
+    if (srcMountId === destMountId) {
+      if (srcPath === destPath) return;
+      if (destPath.startsWith(srcPath + '/')) return;
     }
 
     // Don't allow dropping into the same parent directory (no-op)
-    const srcParent = _dragData.path.substring(0, _dragData.path.lastIndexOf('/')) || '/';
-    if (_dragData.mountId === destMountId && srcParent === destPath) return;
+    const srcParent = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+    if (srcMountId === destMountId && srcParent === destPath) return;
 
     dropEl.classList.remove('drop-target');
 
-    const isCrossMount = _dragData.mountId !== destMountId;
-    const srcMount = state.mounts.find((m) => m.id === _dragData.mountId);
+    const isCrossMount = srcMountId !== destMountId;
+    const srcMount = state.mounts.find((m) => m.id === srcMountId);
     const srcIsLocal = srcMount && srcMount._local;
     const destMount = state.mounts.find((m) => m.id === destMountId);
     const destIsLocal = destMount && destMount._local;
@@ -1048,20 +1076,20 @@ function setupDragDrop() {
       const choice = await showMoveCopyDialog(isCrossMachine);
       if (!choice) return; // cancelled
       if (srcIsLocal && destIsLocal) {
-        await crossMountLocal(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
+        await crossMountLocal(srcMountId, srcPath, destMountId, destPath, choice);
       } else if (srcIsLocal && !destIsLocal) {
-        await localToServer(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
+        await localToServer(srcMountId, srcPath, destMountId, destPath, choice);
       } else if (!srcIsLocal && destIsLocal) {
-        await serverToLocal(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
+        await serverToLocal(srcMountId, srcPath, destMountId, destPath, choice);
       } else {
-        await crossMountServer(_dragData.mountId, _dragData.path, destMountId, destPath, choice);
+        await crossMountServer(srcMountId, srcPath, destMountId, destPath, choice);
       }
     } else {
       // Same mount: always move
       if (srcIsLocal) {
-        await moveLocalItem(_dragData.mountId, _dragData.path, destPath);
+        await moveLocalItem(srcMountId, srcPath, destPath);
       } else {
-        await moveServerItem(_dragData.mountId, _dragData.path, destPath);
+        await moveServerItem(srcMountId, srcPath, destPath);
       }
     }
   });
@@ -1127,6 +1155,7 @@ async function moveLocalItem(mountId, srcPath, destDir) {
   const localMount = state.localMounts[mountId];
   if (!localMount) return;
   try {
+    if (!(await ensureWritePermission(mountId))) return;
     const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
     const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
     const srcParentHandle = await getLocalDirHandle(localMount.handle, srcParentPath);
@@ -1246,6 +1275,9 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
   if (!srcLocalMount || !destLocalMount) return;
 
   try {
+    // Request write permission on both mounts
+    if (!(await ensureWritePermission(srcMountId))) return;
+    if (!(await ensureWritePermission(destMountId))) return;
     const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
     const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
     const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
@@ -1485,6 +1517,7 @@ async function renameLocalItem(mountId, oldPath, newPath, newName) {
   const localMount = state.localMounts[mountId];
   if (!localMount) return;
   try {
+    if (!(await ensureWritePermission(mountId))) return;
     const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/')) || '/';
     const oldName = oldPath.substring(oldPath.lastIndexOf('/') + 1);
     const parentHandle = await getLocalDirHandle(localMount.handle, parentPath);
@@ -1550,15 +1583,50 @@ async function createItem(mountId, dirPath, kind) {
     showToast('该目录不可写');
     return;
   }
-  const label = kind === 'folder' ? '文件夹名称' : '文件名称（无需输入 .md 后缀）';
-  const name = prompt(label);
+  const title = kind === 'folder' ? '新建文件夹' : '新建文件';
+  const placeholder = kind === 'folder' ? '文件夹名称' : '文件名称（无需输入 .md 后缀）';
+
+  // Use modal dialog instead of prompt() which is blocked in iframes
+  const name = await new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-title">${title}</div>
+        <div class="modal-body">
+          <input type="text" id="create-modal-input" class="rename-input" placeholder="${placeholder}" style="width:100%;padding:6px 8px;font-size:14px" />
+        </div>
+        <div class="modal-actions">
+          <button class="modal-cancel" id="create-modal-cancel">取消</button>
+          <button class="modal-confirm" id="create-modal-confirm">确定</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const input = document.getElementById('create-modal-input');
+    input.focus();
+    const done = (val) => {
+      overlay.remove();
+      resolve(val);
+    };
+    document.getElementById('create-modal-cancel').onclick = () => done(null);
+    document.getElementById('create-modal-confirm').onclick = () => done(input.value);
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') done(input.value);
+      if (e.key === 'Escape') done(null);
+    };
+    overlay.onclick = (e) => { if (e.target === overlay) done(null); };
+  });
+
   if (!name || !name.trim()) return;
   const trimmedName = name.trim();
 
   // Local mount: use File System Access API
   if (mount._local && state.localMounts[mountId]) {
     try {
-      const dirHandle = await getLocalDirHandle(state.localMounts[mountId].handle, dirPath);
+      if (!(await ensureWritePermission(mountId))) return;
+      const localHandle = state.localMounts[mountId].handle;
+      const dirHandle = await getLocalDirHandle(localHandle, dirPath);
       if (!dirHandle) {
         showToast('目录不存在');
         return;
@@ -1590,10 +1658,10 @@ async function createItem(mountId, dirPath, kind) {
       renderSidebar();
     } catch (e) {
       if (e.name === 'NotAllowedError') {
-        showToast('已存在同名项');
+        showToast('权限不足，请重新授权目录访问');
       } else {
         console.error('Local create failed:', e);
-        showToast('创建失败');
+        showToast('创建失败: ' + (e.message || e));
       }
     }
     return;
