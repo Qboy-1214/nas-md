@@ -1394,8 +1394,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             session_id = self._get_session_id()
             visible = self._visible_mounts(session_id)
             # Enrich results with mount_id and relative path, filter by visibility
+            stale_paths = []
             filtered = []
             for r in results:
+                # Skip files that no longer exist on disk
+                if not os.path.isfile(r["path"]):
+                    stale_paths.append(r["path"])
+                    continue
                 mount_info = self._find_mount_for_path(r["path"])
                 if mount_info:
                     r["mount_id"] = mount_info["mount_id"]
@@ -1414,6 +1419,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     # No mount found — skip if we have mounts configured
                     if not self.mount_manager or self.mount_manager.is_empty():
                         filtered.append(r)
+            # Clean up stale entries from search index
+            if stale_paths:
+                from nas_md.search import remove_file
+
+                for p in stale_paths:
+                    try:
+                        remove_file(p)
+                    except Exception:
+                        pass
+                logger.info("Cleaned %d stale entries from search index", len(stale_paths))
             self._send_json(filtered)
         except Exception as e:
             logger.error("Search error: %s", e)
