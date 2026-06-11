@@ -1396,6 +1396,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             # Enrich results with mount_id and relative path, filter by visibility
             stale_paths = []
             filtered = []
+            visible_ids = {m.id for m in visible}
+            logger.debug(
+                "Search: %d raw results, visible mounts: %s, all mounts: %s",
+                len(results),
+                visible_ids,
+                [m.id for m in self.mount_manager.mounts] if self.mount_manager else [],
+            )
             for r in results:
                 mount_info = self._find_mount_for_path(r["path"])
                 if mount_info:
@@ -1408,6 +1415,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         else None
                     )
                     if not mount or mount not in visible:
+                        logger.debug(
+                            "Search: skipping %s (mount %s not visible for this session)",
+                            r["path"],
+                            mount_info["mount_id"],
+                        )
                         continue
                     # Resolve through mount and check file actually exists
                     resolved = self.mount_manager._safe_path(mount, mount_info["rel_path"])
@@ -1416,15 +1428,24 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         continue
                     filtered.append(r)
                 else:
-                    # No mount found for this path — check if file still exists on disk
-                    if not os.path.isfile(r["path"]):
-                        stale_paths.append(r["path"])
-                        continue
+                    # No mount found for this path
                     r["mount_id"] = None
                     r["rel_path"] = r["path"]
-                    # No mount found — skip if we have mounts configured
+                    logger.debug(
+                        "Search: no mount found for path %s (mounts: %s)",
+                        r["path"],
+                        [m.path for m in self.mount_manager.mounts] if self.mount_manager else [],
+                    )
                     if not self.mount_manager or self.mount_manager.is_empty():
+                        # No mounts configured — just check file exists on disk
+                        if not os.path.isfile(r["path"]):
+                            stale_paths.append(r["path"])
+                            continue
                         filtered.append(r)
+                    else:
+                        # Mounts exist but path doesn't match any — file is under
+                        # an unmounted/unregistered directory, should not be accessible
+                        stale_paths.append(r["path"])
             # Clean up stale entries from search index
             if stale_paths:
                 import contextlib

@@ -149,7 +149,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           state.currentPath = lastPath;
           state.currentMountId = mount.id;
           state.searchResults = [];
-          $('breadcrumb').textContent = lastPath + (mount.readonly ? ' 🔒' : '');
+          $('breadcrumb').textContent = mount.name + lastPath + (mount.readonly ? ' 🔒' : '');
           $('editor-modes').style.display = mount.readonly
             ? 'none'
             : lastPath.endsWith('.md')
@@ -808,7 +808,7 @@ function renderSidebar() {
       });
     for (const e of items) {
       const fullPath = e.path;
-      const isActive = state.currentPath === fullPath;
+      const isActive = state.currentPath === fullPath && state.currentMountId === builtin.id;
       const icon = e.isDir ? svgFolder : svgFile;
       const cls = `tree-item builtin-file ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
       tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}','${builtin.id}')">
@@ -907,7 +907,7 @@ function renderEntries(entries, mountId, _parentPath) {
   return items
     .map((e) => {
       const fullPath = e.path;
-      const isActive = state.currentPath === fullPath;
+      const isActive = state.currentPath === fullPath && state.currentMountId === mountId;
       const icon = e.isDir ? svgFolder : svgFile;
       const cls = `tree-item ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
 
@@ -1805,7 +1805,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
     state.accessLog[accessKey] = Date.now();
     localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
 
-    $('breadcrumb').textContent = path + (mount.readonly ? ' (只读)' : '');
+    $('breadcrumb').textContent = mount.name + path + (mount.readonly ? ' (只读)' : '');
     // Show rename button if file is writable and not root
     const renameBtn = $('rename-top-btn');
     if (renameBtn) {
@@ -2534,7 +2534,17 @@ async function doSearch() {
       if (!r) return;
       const mountId = r.mount_id || '';
       const relPath = r.rel_path || r.path;
-      openFile(relPath, mountId, query);
+      if (!mountId) {
+        // No mount_id from server — try to find matching mount in treeData
+        const found = findMountForPath(relPath);
+        if (!found) {
+          showToast('无法确定文件的挂载点，请从侧边栏打开');
+          return;
+        }
+        openFile(relPath, found.id, query);
+      } else {
+        openFile(relPath, mountId, query);
+      }
       resultsEl.innerHTML = '';
       $('search-input').value = '';
     };
