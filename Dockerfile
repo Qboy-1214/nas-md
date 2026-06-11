@@ -6,6 +6,7 @@ WORKDIR /src
 
 COPY pyproject.toml ./
 COPY nas_md/ ./nas_md/
+RUN pip install --no-cache-dir .
 
 # --- runtime stage ---
 FROM python:3.13-slim AS runtime
@@ -16,6 +17,8 @@ WORKDIR /app
 
 COPY --from=build /src/nas_md/ /app/nas_md/
 COPY --from=build /src/pyproject.toml /app/pyproject.toml
+COPY --from=build /usr/local/lib/python3.13/site-packages/ /usr/local/lib/python3.13/site-packages/
+COPY --from=build /usr/local/bin/ /usr/local/bin/
 COPY web/ /app/web/
 
 RUN mkdir -p /app/storage /app/tokens && chown -R app:app /app
