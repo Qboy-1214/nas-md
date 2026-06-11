@@ -22,6 +22,7 @@ const state = {
   dockerMode: false,
   // Local mounts via File System Access API (browser-side only, no server)
   localMounts: {}, // mountId -> { handle: FileSystemDirectoryHandle, name: string }
+  _fileOpInProgress: false, // lock to prevent concurrent file operations
 };
 
 // Expose state globally so files.js can access isAdmin
@@ -1043,6 +1044,10 @@ function setupDragDrop() {
   tree.addEventListener('drop', async (e) => {
     e.preventDefault();
     if (!_dragData) return;
+    if (state._fileOpInProgress) {
+      showToast('请等待当前操作完成');
+      return;
+    }
     const dropEl = e.target.closest('[data-drop-mount]');
     if (!dropEl) return;
 
@@ -1065,32 +1070,37 @@ function setupDragDrop() {
 
     dropEl.classList.remove('drop-target');
 
-    const isCrossMount = srcMountId !== destMountId;
-    const srcMount = state.mounts.find((m) => m.id === srcMountId);
-    const srcIsLocal = srcMount && srcMount._local;
-    const destMount = state.mounts.find((m) => m.id === destMountId);
-    const destIsLocal = destMount && destMount._local;
+    state._fileOpInProgress = true;
+    try {
+      const isCrossMount = srcMountId !== destMountId;
+      const srcMount = state.mounts.find((m) => m.id === srcMountId);
+      const srcIsLocal = srcMount && srcMount._local;
+      const destMount = state.mounts.find((m) => m.id === destMountId);
+      const destIsLocal = destMount && destMount._local;
 
-    if (isCrossMount) {
-      const isCrossMachine = srcIsLocal !== destIsLocal;
-      const choice = await showMoveCopyDialog(isCrossMachine);
-      if (!choice) return; // cancelled
-      if (srcIsLocal && destIsLocal) {
-        await crossMountLocal(srcMountId, srcPath, destMountId, destPath, choice);
-      } else if (srcIsLocal && !destIsLocal) {
-        await localToServer(srcMountId, srcPath, destMountId, destPath, choice);
-      } else if (!srcIsLocal && destIsLocal) {
-        await serverToLocal(srcMountId, srcPath, destMountId, destPath, choice);
+      if (isCrossMount) {
+        const isCrossMachine = srcIsLocal !== destIsLocal;
+        const choice = await showMoveCopyDialog(isCrossMachine);
+        if (!choice) return; // cancelled
+        if (srcIsLocal && destIsLocal) {
+          await crossMountLocal(srcMountId, srcPath, destMountId, destPath, choice);
+        } else if (srcIsLocal && !destIsLocal) {
+          await localToServer(srcMountId, srcPath, destMountId, destPath, choice);
+        } else if (!srcIsLocal && destIsLocal) {
+          await serverToLocal(srcMountId, srcPath, destMountId, destPath, choice);
+        } else {
+          await crossMountServer(srcMountId, srcPath, destMountId, destPath, choice);
+        }
       } else {
-        await crossMountServer(srcMountId, srcPath, destMountId, destPath, choice);
+        // Same mount: always move
+        if (srcIsLocal) {
+          await moveLocalItem(srcMountId, srcPath, destPath);
+        } else {
+          await moveServerItem(srcMountId, srcPath, destPath);
+        }
       }
-    } else {
-      // Same mount: always move
-      if (srcIsLocal) {
-        await moveLocalItem(srcMountId, srcPath, destPath);
-      } else {
-        await moveServerItem(srcMountId, srcPath, destPath);
-      }
+    } finally {
+      state._fileOpInProgress = false;
     }
   });
 }
@@ -2480,6 +2490,15 @@ async function doSearch() {
     return;
   }
   try {
+    // Refresh local mount trees before searching to avoid stale results
+    for (const mountId of Object.keys(state.localMounts)) {
+      try {
+        await loadLocalTree(mountId);
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+
     // Search server-side mounts
     const serverResults = await API.search(query);
 
