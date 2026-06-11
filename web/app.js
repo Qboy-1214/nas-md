@@ -1615,7 +1615,9 @@ async function createItem(mountId, dirPath, kind) {
       if (e.key === 'Enter') done(input.value);
       if (e.key === 'Escape') done(null);
     };
-    overlay.onclick = (e) => { if (e.target === overlay) done(null); };
+    overlay.onclick = (e) => {
+      if (e.target === overlay) done(null);
+    };
   });
 
   if (!name || !name.trim()) return;
