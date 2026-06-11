@@ -235,7 +235,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // === UI 更新 ===
 function showPage(page) {
-  $('welcome-page').style.display = page === 'welcome' ? '' : 'none';
   $('editor-container').style.display = page === 'editor' ? '' : 'none';
   $('graph-page').style.display = page === 'graph' ? '' : 'none';
   $('dashboard-page').style.display = page === 'dashboard' ? '' : 'none';
@@ -265,13 +264,6 @@ async function loadMounts() {
   try {
     state.mounts = await API.getMounts();
     renderSidebar();
-    // Hide input and mount button; browse button uses File System Access API
-    const dirInput = $('new-dir-path');
-    const browseBtn = document.querySelector('.browse-btn');
-    const mountBtn = document.querySelector('.primary-btn');
-    if (dirInput) dirInput.style.display = 'none';
-    if (mountBtn) mountBtn.style.display = 'none';
-    if (browseBtn) browseBtn.textContent = '挂载本机目录…';
   } catch (_e) {
     showToast('加载挂载点失败');
   } finally {
@@ -577,38 +569,6 @@ function onDirPicked(event) {
   event.target.value = '';
 }
 
-async function openDirectory() {
-  const dirPath = $('new-dir-path').value.trim();
-  if (!dirPath) {
-    showToast(state.dockerMode ? '请输入容器内目录路径' : '请输入目录路径或点击浏览选择');
-    return;
-  }
-  try {
-    const resp = await API.addMount(dirPath, '');
-    if (resp && resp.id) {
-      showToast(`已挂载: ${resp.name || resp.path}`);
-      $('new-dir-path').value = '';
-      $('new-dir-path').placeholder = state.dockerMode
-        ? '输入容器内路径，如 /mnt/docs'
-        : '输入目录路径';
-      await loadMounts();
-    } else {
-      const errMsg = resp?.error || '';
-      if (errMsg.includes('Not a valid directory')) {
-        showToast(
-          state.dockerMode
-            ? '目录不存在，请确认容器内路径是否正确（需在 compose.yaml 中配置 volumes）'
-            : '目录不存在，请检查路径是否正确',
-        );
-      } else {
-        showToast('挂载失败: ' + errMsg);
-      }
-    }
-  } catch (e) {
-    showToast('挂载失败: ' + (e.message || '未知错误'));
-  }
-}
-
 async function toggleMountPublic(mountId, isPublic) {
   try {
     const resp = await API.updateMount(mountId, { public: isPublic });
@@ -775,7 +735,7 @@ async function removeMount(mountId) {
         window._vditor.destroy();
         window._vditor = null;
       }
-      showPage('welcome');
+      navigateHome();
     }
     renderSidebar();
     loadRecentFiles();
@@ -1509,7 +1469,7 @@ async function deleteCurrentFile() {
     $('editor-modes').style.display = 'none';
     $('save-group').style.display = 'none';
     if (window._vditor) window._vditor.destroy();
-    showPage('welcome');
+    navigateHome();
     renderSidebar();
   } catch (e) {
     console.error('Delete failed:', e);
@@ -2183,29 +2143,21 @@ function hideNewFile() {
 
 // === 导航 ===
 function navigateHome() {
-  localStorage.removeItem('nasmd_last_path');
-  localStorage.removeItem('nasmd_last_mount');
-  state.currentPath = null;
-  state.currentMountId = null;
-  $('breadcrumb').textContent = '';
-  $('editor-modes').style.display = 'none';
-  $('save-group').style.display = 'none';
-  $('rename-top-btn').style.display = 'none';
-  $('delete-top-btn').style.display = 'none';
-  if (window._vditor) {
-    window._vditor.destroy();
-    window._vditor = null;
+  // Open welcome.md from builtin-storage
+  const builtin = state.mounts.find((m) => m.id === 'builtin-storage');
+  if (builtin) {
+    if (!state.treeData[builtin.id]) {
+      loadTree(builtin.id, '/').then(() => {
+        const root = state.treeData[builtin.id]?.['/'];
+        const welcome = (root?.children || []).find((e) => e.name === '欢迎.md');
+        if (welcome) openFile(welcome.path, builtin.id);
+      });
+    } else {
+      const root = state.treeData[builtin.id]?.['/'];
+      const welcome = (root?.children || []).find((e) => e.name === '欢迎.md');
+      if (welcome) openFile(welcome.path, builtin.id);
+    }
   }
-  if (window._dirtyTimer) {
-    clearInterval(window._dirtyTimer);
-    window._dirtyTimer = null;
-  }
-  if (window._autoSaveTimer) {
-    clearTimeout(window._autoSaveTimer);
-    window._autoSaveTimer = null;
-  }
-  showPage('welcome');
-  renderSidebar();
 }
 
 async function showGraph() {

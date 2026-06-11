@@ -43,9 +43,12 @@
         <!-- 文件树 -->
         <nav id="file-tree" class="file-tree"></nav>
 
+        <!-- 最近访问 -->
+        <div class="recent-files" id="recent-files"></div>
+
         <!-- 底部按钮 -->
         <div class="sidebar-footer">
-          <button class="nav-btn" onclick="navigateHome()">挂载</button>
+          <button class="nav-btn" onclick="chooseDirectory()">挂载文件夹</button>
         </div>
       </aside>
 
@@ -175,40 +178,8 @@
 
         <!-- 编辑器区域 -->
         <div class="editor-area">
-          <!-- 欢迎页 -->
-          <div id="welcome-page" class="welcome-page">
-            <!-- 挂载目录 -->
-            <div class="open-dir-section">
-              <label class="section-label">挂载目录</label>
-              <div class="open-dir-input-group">
-                <input
-                  type="text"
-                  id="new-dir-path"
-                  placeholder="输入目录路径"
-                  class="open-dir-input"
-                />
-                <button class="browse-btn" onclick="chooseDirectory()">浏览…</button>
-                <button class="primary-btn" onclick="openDirectory()">挂载</button>
-                <!-- 隐藏的文件选择器，用于选择文件夹 -->
-                <input
-                  type="file"
-                  id="dir-picker"
-                  webkitdirectory
-                  style="display: none"
-                  onchange="onDirPicked(event)"
-                />
-              </div>
-            </div>
-
-            <!-- 已挂载的目录 -->
-            <div class="mounted-dirs" id="mounted-dirs"></div>
-
-            <!-- 最近访问 -->
-            <div class="recent-files" id="recent-files"></div>
-          </div>
-
           <!-- 编辑器 -->
-          <div class="editor-container" id="editor-container" style="display: none">
+          <div class="editor-container" id="editor-container">
             <div id="vditor"></div>
             <!-- 反向链接面板 -->
             <div id="backlinks-panel" class="backlinks-panel" style="display: none">
@@ -219,6 +190,15 @@
               <div class="backlinks-content" id="backlinks-content"></div>
             </div>
           </div>
+
+          <!-- 隐藏的文件选择器，用于选择文件夹（非安全上下文 fallback） -->
+          <input
+            type="file"
+            id="dir-picker"
+            webkitdirectory
+            style="display: none"
+            onchange="onDirPicked(event)"
+          />
 
           <!-- 知识图谱页 -->
           <div id="graph-page" class="graph-page" style="display: none">
