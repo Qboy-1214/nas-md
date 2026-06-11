@@ -854,3 +854,96 @@ class TestPluginsAPI:
         data = json.loads(body)
         assert isinstance(data, dict)
         assert "plugins" in data
+
+
+class TestSearchVisibility:
+    """Test that search results respect mount visibility for admin vs non-admin."""
+
+    @pytest.fixture
+    def search_server(self, web_root, storage_dir, tmp_path):
+        """Server with a public mount and a private (admin-only) mount."""
+        # Create admin-only mount dir with a unique file
+        admin_dir = tmp_path / "admin_mount"
+        admin_dir.mkdir()
+        with open(admin_dir / "secret.md", "w", encoding="utf-8") as f:
+            f.write("# Secret Admin Doc\nThis is admin-only content with uniquekeyword123.\n")
+
+        # Create public mount dir with a unique file
+        pub_dir = tmp_path / "public_mount"
+        pub_dir.mkdir()
+        with open(pub_dir / "public.md", "w", encoding="utf-8") as f:
+            f.write("# Public Doc\nThis is public content with uniquekeyword123.\n")
+
+        # Also put a file in storage_dir (builtin)
+        with open(os.path.join(storage_dir, "builtin.md"), "w", encoding="utf-8") as f:
+            f.write("# Builtin Doc\nThis is builtin content with uniquekeyword123.\n")
+
+        port = _find_free_port()
+        mgr = MountManager([])
+        from nas_md.webserver import MountEntry
+
+        builtin = MountEntry("builtin-storage", "nas-md", storage_dir, public=True, readonly=True)
+        admin_mount = MountEntry(
+            "admin-mount", "admin-only", str(admin_dir), public=False, readonly=False, host=True
+        )
+        public_mount = MountEntry(
+            "public-mount", "public", str(pub_dir), public=True, readonly=False, host=True
+        )
+        mgr.mounts = [builtin, admin_mount, public_mount]
+
+        MountHTTPHandler.mount_manager = mgr
+        MountHTTPHandler.web_root = web_root
+        MountHTTPHandler.search_dirs = [storage_dir, str(admin_dir), str(pub_dir)]
+
+        # Build search index
+        from nas_md.search import init_db, rebuild_index
+
+        init_db()
+        rebuild_index([storage_dir, str(admin_dir), str(pub_dir)])
+
+        server = _create_server("127.0.0.1", port, MountHTTPHandler, cert_dir="")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        yield f"http://127.0.0.1:{port}", str(admin_dir), str(pub_dir)
+        server.shutdown()
+
+    def test_admin_sees_all_mounts(self, search_server):
+        """Admin user should see files from all mounts in search results."""
+        url, admin_dir, pub_dir = search_server
+        status, body, _ = _get(
+            f"{url}/api/search?q=uniquekeyword123&limit=20",
+            headers={"X-Admin": "1"},
+        )
+        assert status == 200
+        data = json.loads(body)
+        # Admin should see results from all 3 mounts
+        mount_ids = {r.get("mount_id") for r in data}
+        assert "builtin-storage" in mount_ids, f"Admin should see builtin, got mounts: {mount_ids}"
+        assert "admin-mount" in mount_ids, f"Admin should see admin-mount, got mounts: {mount_ids}"
+        assert "public-mount" in mount_ids, f"Admin should see public-mount, got mounts: {mount_ids}"
+
+    def test_non_admin_sees_only_public(self, search_server):
+        """Non-admin user should only see files from public mounts."""
+        url, admin_dir, pub_dir = search_server
+        status, body, _ = _get(f"{url}/api/search?q=uniquekeyword123&limit=20")
+        assert status == 200
+        data = json.loads(body)
+        mount_ids = {r.get("mount_id") for r in data}
+        assert "admin-mount" not in mount_ids, f"Non-admin should NOT see admin-mount, got: {mount_ids}"
+        assert "public-mount" in mount_ids, f"Non-admin should see public-mount, got: {mount_ids}"
+        assert "builtin-storage" in mount_ids, f"Non-admin should see builtin, got: {mount_ids}"
+
+    def test_search_result_has_mount_id_and_rel_path(self, search_server):
+        """Search results should include mount_id and rel_path for opening files."""
+        url, _, _ = search_server
+        status, body, _ = _get(
+            f"{url}/api/search?q=uniquekeyword123&limit=20",
+            headers={"X-Admin": "1"},
+        )
+        assert status == 200
+        data = json.loads(body)
+        for r in data:
+            assert "mount_id" in r, f"Result missing mount_id: {r}"
+            assert "rel_path" in r, f"Result missing rel_path: {r}"
+            assert r["mount_id"] is not None, f"mount_id should not be None: {r}"

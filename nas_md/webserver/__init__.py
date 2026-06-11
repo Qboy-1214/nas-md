@@ -1423,12 +1423,25 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         continue
                     # Resolve through mount and check file actually exists
                     resolved = self.mount_manager._safe_path(mount, mount_info["rel_path"])
-                    if not resolved or not os.path.isfile(resolved):
+                    if not resolved:
+                        logger.warning(
+                            "Search: _safe_path returned None for mount=%s rel_path=%s",
+                            mount.id,
+                            mount_info["rel_path"],
+                        )
+                        continue
+                    if not os.path.isfile(resolved):
+                        logger.debug(
+                            "Search: file not found on disk: %s (resolved from %s)",
+                            resolved,
+                            r["path"],
+                        )
                         stale_paths.append(r["path"])
                         continue
                     filtered.append(r)
                 else:
-                    # No mount found for this path
+                    # No mount found for this path — skip from results but don't
+                    # remove from index (the mount may be temporarily unavailable)
                     r["mount_id"] = None
                     r["rel_path"] = r["path"]
                     logger.debug(
@@ -1442,10 +1455,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                             stale_paths.append(r["path"])
                             continue
                         filtered.append(r)
-                    else:
-                        # Mounts exist but path doesn't match any — file is under
-                        # an unmounted/unregistered directory, should not be accessible
-                        stale_paths.append(r["path"])
+                    # else: mounts exist but path doesn't match any — skip silently
             # Clean up stale entries from search index
             if stale_paths:
                 import contextlib
@@ -1477,10 +1487,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             if fp_norm.startswith(mount_path_norm + "/") or fp_norm == mount_path_norm:
                 rel = file_path_norm[len(mount_path_norm) :].lstrip("/")
                 return {"mount_id": m.id, "rel_path": rel}
-            # Try as relative path — check if file exists under mount root
-            abs_candidate = os.path.join(m.path, file_path)
-            if os.path.isfile(abs_candidate):
-                return {"mount_id": m.id, "rel_path": file_path_norm}
+            # Try as relative path — only if file_path is not absolute
+            if not os.path.isabs(file_path):
+                abs_candidate = os.path.join(m.path, file_path)
+                if os.path.isfile(abs_candidate):
+                    return {"mount_id": m.id, "rel_path": file_path_norm}
         return None
 
     def _handle_query(self, qs: dict):
