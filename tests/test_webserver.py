@@ -647,13 +647,17 @@ class TestCreateAPI:
         assert os.path.isdir(os.path.join(writable_dir, "notes"))
         assert os.path.isfile(os.path.join(writable_dir, "notes", "tmp.md"))
 
-    def test_create_duplicate_returns_409(self, writable_server_url):
-        """POST /create with existing name should return 409."""
-        status, _body = _post(
+    def test_create_duplicate_auto_renames(self, writable_server_url):
+        """POST /create with existing name should auto-rename and return 200 with renamed flag."""
+        status, body = _post(
             f"{writable_server_url}/api/mounts/writable/create?path=/&name=hello&kind=file",
         )
-        # hello.md already exists
-        assert status == 409
+        # hello.md already exists → auto-rename
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("renamed") is True
+        assert data["name"] != "hello.md"
+        assert data["name"].startswith("hello_")
 
     def test_create_missing_name(self, writable_server_url):
         """POST /create without name should return 400."""
@@ -699,16 +703,18 @@ class TestMoveAPI:
         )
         assert status == 400
 
-    def test_move_duplicate_at_dest_returns_409(self, writable_server_url, writable_dir):
-        """POST /move with existing name at destination should return 409."""
+    def test_move_duplicate_at_dest_auto_renames(self, writable_server_url, writable_dir):
+        """POST /move with existing name at destination should auto-rename."""
         shutil.copy2(
             os.path.join(writable_dir, "hello.md"),
             os.path.join(writable_dir, "subdir", "hello.md"),
         )
-        status, _body = _post(
+        status, body = _post(
             f"{writable_server_url}/api/mounts/writable/move?src=/hello.md&destDir=/subdir",
         )
-        assert status == 409
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("renamed") is True
 
     def test_move_missing_params(self, writable_server_url):
         """POST /move without src/destDir should return 400."""
@@ -739,16 +745,18 @@ class TestCopyAPI:
         # Copy exists
         assert os.path.isfile(os.path.join(writable_dir, "subdir", "hello.md"))
 
-    def test_copy_duplicate_returns_409(self, writable_server_url, writable_dir):
-        """POST /copy with existing name at destination should return 409."""
+    def test_copy_duplicate_auto_renames(self, writable_server_url, writable_dir):
+        """POST /copy with existing name at destination should auto-rename."""
         shutil.copy2(
             os.path.join(writable_dir, "hello.md"),
             os.path.join(writable_dir, "subdir", "hello.md"),
         )
-        status, _body = _post(
+        status, body = _post(
             f"{writable_server_url}/api/mounts/writable/copy?src=/hello.md&destDir=/subdir",
         )
-        assert status == 409
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("renamed") is True
 
     def test_copy_missing_params(self, writable_server_url):
         """POST /copy without src/destDir should return 400."""

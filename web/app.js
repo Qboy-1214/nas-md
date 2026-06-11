@@ -942,6 +942,35 @@ function findMountForPath(path) {
   return null;
 }
 
+// === Auto-rename helper ===
+function autoRenameSuffix() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+async function localEntryExists(dirHandle, name, isDir) {
+  try {
+    if (isDir) {
+      await dirHandle.getDirectoryHandle(name);
+    } else {
+      await dirHandle.getFileHandle(name);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function applyAutoRename(name) {
+  const ts = autoRenameSuffix();
+  const dotIdx = name.lastIndexOf('.');
+  if (dotIdx > 0) {
+    return name.slice(0, dotIdx) + ts + name.slice(dotIdx);
+  }
+  return name + ts;
+}
+
 // === Drag & Drop ===
 let _dragData = null; // { mountId, path, isDir }
 
@@ -1117,7 +1146,8 @@ async function moveServerItem(mountId, srcPath, destDir) {
       showToast(data.error || '移动失败');
       return;
     }
-    showToast('已移动');
+    const result = await resp.json().catch(() => ({}));
+    showToast(result.renamed ? `有重名，已自动重命名` : '已移动');
     delete state.treeData[mountId];
     await loadTree(mountId, '/');
     renderSidebar();
@@ -1143,26 +1173,8 @@ async function moveLocalItem(mountId, srcPath, destDir) {
         return;
       }
 
-      // Check if destination already exists
-      try {
-        if (srcPath.endsWith('.md') || !srcPath.includes('/')) {
-          await destDirHandle.getFileHandle(srcName);
-          showToast('目标位置已存在同名文件');
-          return;
-        }
-      } catch {
-        // Not found as file, check dir
-      }
-      try {
-        await destDirHandle.getDirectoryHandle(srcName);
-        showToast('目标位置已存在同名文件夹');
-        return;
-      } catch {
-        // OK, doesn't exist
-      }
-
-      // Read source, write to dest, remove source
-      const isDir = await (async () => {
+      // Check if destination already exists and auto-rename
+      const isSrcDir = await (async () => {
         try {
           await srcParentHandle.getDirectoryHandle(srcName);
           return true;
@@ -1170,23 +1182,29 @@ async function moveLocalItem(mountId, srcPath, destDir) {
           return false;
         }
       })();
+      let destName = srcName;
+      let renamed = false;
+      if (await localEntryExists(destDirHandle, srcName, isSrcDir)) {
+        destName = applyAutoRename(srcName);
+        renamed = true;
+      }
 
-      if (isDir) {
+      if (isSrcDir) {
         // Move directory: copy recursively then remove original
         const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
-        await copyLocalDir(srcDirHandle, destDirHandle, srcName);
+        await copyLocalDir(srcDirHandle, destDirHandle, destName);
         await srcParentHandle.removeEntry(srcName, { recursive: true });
       } else {
         const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
         const file = await srcFileHandle.getFile();
-        const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
+        const destFileHandle = await destDirHandle.getFileHandle(destName, { create: true });
         const writable = await destFileHandle.createWritable();
         await writable.write(await file.arrayBuffer());
         await writable.close();
         await srcParentHandle.removeEntry(srcName);
       }
 
-      showToast('已移动');
+      showToast(renamed ? `有重名，已自动重命名为 ${destName}` : '已移动');
       await loadLocalTree(mountId);
       renderSidebar();
       return; // success
@@ -1238,7 +1256,9 @@ async function crossMountServer(srcMountId, srcPath, destMountId, destDir, actio
       showToast(data.error || '操作失败');
       return;
     }
-    showToast(action === 'move' ? '已移动' : '已复制');
+    const result = await resp.json().catch(() => ({}));
+    const actionText = action === 'move' ? '移动' : '复制';
+    showToast(result.renamed ? `有重名，已自动重命名` : `已${actionText}`);
     // Refresh both mounts
     delete state.treeData[srcMountId];
     delete state.treeData[destMountId];
@@ -1284,23 +1304,39 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
 
       if (isDir) {
         const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
-        await copyLocalDir(srcDirHandle, destDirHandle, srcName);
+        let destName = srcName;
+        let renamed = false;
+        if (await localEntryExists(destDirHandle, srcName, true)) {
+          destName = applyAutoRename(srcName);
+          renamed = true;
+        }
+        await copyLocalDir(srcDirHandle, destDirHandle, destName);
         if (action === 'move') {
           await srcParentHandle.removeEntry(srcName, { recursive: true });
         }
+        showToast(
+          renamed ? `有重名，已自动重命名为 ${destName}` : action === 'move' ? '已移动' : '已复制',
+        );
       } else {
+        let destName = srcName;
+        let renamed = false;
+        if (await localEntryExists(destDirHandle, srcName, false)) {
+          destName = applyAutoRename(srcName);
+          renamed = true;
+        }
         const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
         const file = await srcFileHandle.getFile();
-        const destFileHandle = await destDirHandle.getFileHandle(srcName, { create: true });
+        const destFileHandle = await destDirHandle.getFileHandle(destName, { create: true });
         const writable = await destFileHandle.createWritable();
         await writable.write(await file.arrayBuffer());
         await writable.close();
         if (action === 'move') {
           await srcParentHandle.removeEntry(srcName);
         }
+        showToast(
+          renamed ? `有重名，已自动重命名为 ${destName}` : action === 'move' ? '已移动' : '已复制',
+        );
       }
-
-      showToast(action === 'move' ? '已移动' : '已复制');
       await loadLocalTree(srcMountId);
       await loadLocalTree(destMountId);
       renderSidebar();
@@ -1338,7 +1374,18 @@ async function localToServer(srcMountId, srcPath, destMountId, destDir, action) 
       }
 
       const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
-      const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
+      // Check if destination file already exists on server
+      let destFileName = fileName;
+      const existingContent = await API.getFile(
+        destMountId,
+        destDir === '/' ? '/' + fileName : destDir + '/' + fileName,
+      );
+      let renamed = false;
+      if (existingContent !== null) {
+        destFileName = applyAutoRename(fileName);
+        renamed = true;
+      }
+      const destFilePath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
 
       // Write to server
       const result = await API.putFile(destMountId, destFilePath, content);
@@ -1357,7 +1404,13 @@ async function localToServer(srcMountId, srcPath, destMountId, destDir, action) 
         }
       }
 
-      showToast(action === 'move' ? '已移动到服务器' : '已复制到服务器');
+      showToast(
+        renamed
+          ? `有重名，已自动重命名为 ${destFileName}`
+          : action === 'move'
+            ? '已移动到服务器'
+            : '已复制到服务器',
+      );
       await loadLocalTree(srcMountId);
       delete state.treeData[destMountId];
       await loadTree(destMountId, '/');
@@ -1396,8 +1449,17 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
 
       const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
 
+      // Check if destination file already exists locally
+      const destDirHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
+      let destFileName = fileName;
+      let renamed = false;
+      if (destDirHandle && (await localEntryExists(destDirHandle, fileName, false))) {
+        destFileName = applyAutoRename(fileName);
+        renamed = true;
+      }
+
       // Write to local
-      const destFilePath = destDir === '/' ? '/' + fileName : destDir + '/' + fileName;
+      const destFilePath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
       const ok = await writeLocalFile(destMountId, destFilePath, content);
       if (!ok) {
         showToast('写入本机文件失败');
@@ -1409,7 +1471,13 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
         await API.deleteFile(srcMountId, srcPath);
       }
 
-      showToast(action === 'move' ? '已移动到本机' : '已复制到本机');
+      showToast(
+        renamed
+          ? `有重名，已自动重命名为 ${destFileName}`
+          : action === 'move'
+            ? '已移动到本机'
+            : '已复制到本机',
+      );
       delete state.treeData[srcMountId];
       await loadTree(srcMountId, '/');
       await loadLocalTree(destMountId);
@@ -1749,7 +1817,13 @@ async function createItem(mountId, dirPath, kind) {
         return;
       }
       if (kind === 'folder') {
-        const newDir = await dirHandle.getDirectoryHandle(trimmedName, { create: true });
+        let folderName = trimmedName;
+        let renamed = false;
+        if (await localEntryExists(dirHandle, folderName, true)) {
+          folderName = applyAutoRename(folderName);
+          renamed = true;
+        }
+        const newDir = await dirHandle.getDirectoryHandle(folderName, { create: true });
         // Auto-create tmp.md so the folder is visible in sidebar
         const tmpHandle = await newDir.getFileHandle('tmp.md', { create: true });
         const tmpWritable = await tmpHandle.createWritable();
@@ -1757,14 +1831,19 @@ async function createItem(mountId, dirPath, kind) {
           '为了让目录可见，所以自动创建了这个文件，不需要可以去对应文件夹删掉\n',
         );
         await tmpWritable.close();
-        showToast(`已创建文件夹: ${trimmedName}`);
+        showToast(renamed ? `有重名，已自动重命名为 ${folderName}` : `已创建文件夹: ${folderName}`);
       } else {
-        const fileName = trimmedName.endsWith('.md') ? trimmedName : trimmedName + '.md';
+        let fileName = trimmedName.endsWith('.md') ? trimmedName : trimmedName + '.md';
+        let renamed = false;
+        if (await localEntryExists(dirHandle, fileName, false)) {
+          fileName = applyAutoRename(fileName);
+          renamed = true;
+        }
         const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write('');
         await writable.close();
-        showToast(`已创建: ${fileName}`);
+        showToast(renamed ? `有重名，已自动重命名为 ${fileName}` : `已创建: ${fileName}`);
         const filePath = dirPath === '/' ? '/' + fileName : dirPath + '/' + fileName;
         await loadLocalTree(mountId);
         renderSidebar();
@@ -1799,15 +1878,11 @@ async function createItem(mountId, dirPath, kind) {
     });
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
-      if (resp.status === 409) {
-        showToast('已存在同名文件或文件夹');
-      } else {
-        showToast(data.error || '创建失败');
-      }
+      showToast(data.error || '创建失败');
       return;
     }
     const result = await resp.json();
-    showToast(`已创建: ${result.name}`);
+    showToast(result.renamed ? `有重名，已自动重命名为 ${result.name}` : `已创建: ${result.name}`);
     // Force refresh the entire mount tree (recursive tree is nested from root)
     delete state.treeData[mountId];
     await loadTree(mountId, '/');

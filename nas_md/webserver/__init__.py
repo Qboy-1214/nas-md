@@ -863,6 +863,26 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     # --- Mount API handlers ---
 
+    @staticmethod
+    def _auto_rename_if_exists(base_dir: str, name: str) -> str:
+        """If name already exists in base_dir, append _yyyymmddhhmmss suffix.
+        For files like 'test.md' -> 'test_20250611143025.md'
+        For folders like 'mydir' -> 'mydir_20250611143025'
+        """
+        target = os.path.join(base_dir, name)
+        if not os.path.exists(target):
+            return name
+        from datetime import datetime
+
+        ts = datetime.now().strftime("_%Y%m%d%H%M%S")
+        base, ext = os.path.splitext(name)
+        new_name = f"{base}{ts}{ext}"
+        # Extremely unlikely collision, but handle it
+        while os.path.exists(os.path.join(base_dir, new_name)):
+            ts = datetime.now().strftime("_%Y%m%d%H%M%S")
+            new_name = f"{base}{ts}{ext}"
+        return new_name
+
     def _handle_create(self, mount_id: str, qs: dict):
         """Create a new file or folder in a mount point."""
         if not self.mount_manager:
@@ -891,13 +911,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("Invalid name", 400)
         name = name.strip()
 
-        # Check for duplicate
+        # Check for duplicate and auto-rename
         abs_parent = self.mount_manager._safe_path(mount, parent_path)
         if abs_parent is None:
             return self._send_error("Path escapes mount root", 403)
+        renamed = False
         target = os.path.join(abs_parent, name)
         if os.path.exists(target):
-            return self._send_error("A file or folder with this name already exists", 409)
+            name = self._auto_rename_if_exists(abs_parent, name)
+            target = os.path.join(abs_parent, name)
+            renamed = True
 
         try:
             if kind == "folder":
@@ -912,12 +935,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     name += ".md"
                     target = os.path.join(abs_parent, name)
                     if os.path.exists(target):
-                        return self._send_error(
-                            "A file or folder with this name already exists", 409
-                        )
+                        name = self._auto_rename_if_exists(abs_parent, name)
+                        target = os.path.join(abs_parent, name)
+                        renamed = True
                 with open(target, "w", encoding="utf-8") as f:
                     f.write("")
-            self._send_json({"ok": True, "name": name, "kind": kind})
+            result = {"ok": True, "name": name, "kind": kind}
+            if renamed:
+                result["renamed"] = True
+            self._send_json(result)
         except OSError as e:
             logger.error(f"Create failed: {e}")
             self._send_error(f"Failed to create: {e}", 500)
@@ -962,10 +988,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
+        renamed = False
         if os.path.exists(dest_abs):
-            return self._send_error(
-                "A file or folder with this name already exists at destination", 409
-            )
+            name = self._auto_rename_if_exists(dest_dir_abs, name)
+            dest_abs = os.path.join(dest_dir_abs, name)
+            renamed = True
 
         # Prevent moving a directory into itself or its subtree
         if dest_dir_abs.startswith(src_abs + os.sep) or dest_dir_abs == src_abs:
@@ -973,7 +1000,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         try:
             os.rename(src_abs, dest_abs)
-            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+            result = {"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name}
+            if renamed:
+                result["renamed"] = True
+            self._send_json(result)
         except OSError as e:
             logger.error(f"Move failed: {e}")
             self._send_error(f"Failed to move: {e}", 500)
@@ -1002,17 +1032,21 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
+        renamed = False
         if os.path.exists(dest_abs):
-            return self._send_error(
-                "A file or folder with this name already exists at destination", 409
-            )
+            name = self._auto_rename_if_exists(dest_dir_abs, name)
+            dest_abs = os.path.join(dest_dir_abs, name)
+            renamed = True
 
         try:
             if os.path.isdir(src_abs):
                 shutil.copytree(src_abs, dest_abs)
             else:
                 shutil.copy2(src_abs, dest_abs)
-            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+            result = {"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name}
+            if renamed:
+                result["renamed"] = True
+            self._send_json(result)
         except OSError as e:
             logger.error(f"Copy failed: {e}")
             self._send_error(f"Failed to copy: {e}", 500)
@@ -1049,10 +1083,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
+        renamed = False
         if os.path.exists(dest_abs):
-            return self._send_error(
-                "A file or folder with this name already exists at destination", 409
-            )
+            name = self._auto_rename_if_exists(dest_dir_abs, name)
+            dest_abs = os.path.join(dest_dir_abs, name)
+            renamed = True
 
         try:
             if os.path.isdir(src_abs):
@@ -1073,7 +1108,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         index_file(dest_abs, content)
                 except Exception as e:
                     logger.error("Search index update after cross-mount move failed: %s", e)
-            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+            result = {"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name}
+            if renamed:
+                result["renamed"] = True
+            self._send_json(result)
         except OSError as e:
             logger.error(f"Cross-mount move failed: {e}")
             self._send_error(f"Failed to move: {e}", 500)
@@ -1116,10 +1154,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         name = os.path.basename(src_path)
         dest_abs = os.path.join(dest_dir_abs, name)
+        renamed = False
         if os.path.exists(dest_abs):
-            return self._send_error(
-                "A file or folder with this name already exists at destination", 409
-            )
+            name = self._auto_rename_if_exists(dest_dir_abs, name)
+            dest_abs = os.path.join(dest_dir_abs, name)
+            renamed = True
 
         try:
             if os.path.isdir(src_abs):
@@ -1137,7 +1176,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         index_file(dest_abs, content)
                 except Exception as e:
                     logger.error("Search index update after cross-mount copy failed: %s", e)
-            self._send_json({"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name})
+            result = {"ok": True, "newPath": dest_dir.rstrip("/") + "/" + name}
+            if renamed:
+                result["renamed"] = True
+            self._send_json(result)
         except OSError as e:
             logger.error(f"Cross-mount copy failed: {e}")
             self._send_error(f"Failed to copy: {e}", 500)
