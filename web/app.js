@@ -1457,6 +1457,11 @@ async function deleteCurrentFile() {
       showToast('已删除');
       delete state.treeData[mountId];
       await loadTree(mountId, '/');
+      // Remove from recent files
+      state.recentFiles = state.recentFiles.filter(
+        (f) => !(f.mountId === mountId && f.path === path),
+      );
+      renderRecentFiles();
     }
     // Navigate away from deleted file
     state.currentPath = null;
@@ -1837,6 +1842,15 @@ async function openFile(path, preferredMountId, searchKeyword) {
     const accessKey = mount.id + ':' + path;
     state.accessLog[accessKey] = Date.now();
     localStorage.setItem('nasmd_access_log', JSON.stringify(state.accessLog));
+    // Update recent files list and re-render
+    const existing = state.recentFiles.findIndex((f) => f.mountId === mount.id && f.path === path);
+    const entry = { name: path.split('/').pop(), path, modTime: Date.now(), mountId: mount.id };
+    if (existing >= 0) {
+      state.recentFiles.splice(existing, 1);
+    }
+    state.recentFiles.unshift(entry);
+    state.recentFiles = state.recentFiles.slice(0, 10);
+    renderRecentFiles();
 
     $('breadcrumb').textContent = mount.name + path + (mount.readonly ? ' (只读)' : '');
     // Show rename/delete buttons if file is writable and not root
