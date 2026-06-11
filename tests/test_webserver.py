@@ -921,7 +921,9 @@ class TestSearchVisibility:
         mount_ids = {r.get("mount_id") for r in data}
         assert "builtin-storage" in mount_ids, f"Admin should see builtin, got mounts: {mount_ids}"
         assert "admin-mount" in mount_ids, f"Admin should see admin-mount, got mounts: {mount_ids}"
-        assert "public-mount" in mount_ids, f"Admin should see public-mount, got mounts: {mount_ids}"
+        assert (
+            "public-mount" in mount_ids
+        ), f"Admin should see public-mount, got mounts: {mount_ids}"
 
     def test_non_admin_sees_only_public(self, search_server):
         """Non-admin user should only see files from public mounts."""
@@ -930,7 +932,9 @@ class TestSearchVisibility:
         assert status == 200
         data = json.loads(body)
         mount_ids = {r.get("mount_id") for r in data}
-        assert "admin-mount" not in mount_ids, f"Non-admin should NOT see admin-mount, got: {mount_ids}"
+        assert (
+            "admin-mount" not in mount_ids
+        ), f"Non-admin should NOT see admin-mount, got: {mount_ids}"
         assert "public-mount" in mount_ids, f"Non-admin should see public-mount, got: {mount_ids}"
         assert "builtin-storage" in mount_ids, f"Non-admin should see builtin, got: {mount_ids}"
 
