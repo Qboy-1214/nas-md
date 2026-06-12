@@ -2144,7 +2144,7 @@ async function createItem(mountId, dirPath, kind) {
  * Called before switching files or destroying the editor.
  */
 function saveCursorScrollToStorage() {
-  if (!window._vditor) return;
+  if (!window._vditor) { console.log('[saveCursor] skip: no _vditor'); return; }
   try {
     const vd = window._vditor.vditor;
     const mode = window._vditor.getCurrentMode();
@@ -2152,6 +2152,7 @@ function saveCursorScrollToStorage() {
       mode === 'sv' ? vd.sv.element : mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
     const maxScroll = scrollEl ? scrollEl.scrollHeight - scrollEl.clientHeight : 0;
     const scrollPercent = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 0;
+    console.log('[saveCursor] mode:', mode, 'scrollEl:', !!scrollEl, 'scrollH:', scrollEl?.scrollHeight, 'clientH:', scrollEl?.clientHeight, 'scrollTop:', scrollEl?.scrollTop, 'maxScroll:', maxScroll, 'scrollPercent:', scrollPercent);
 
     let headingText = null;
     let cursorViewportOffset = 0;
