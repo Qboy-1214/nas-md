@@ -2172,8 +2172,10 @@ async function openFile(path, preferredMountId, searchKeyword) {
     if (existing >= 0) {
       state.recentFiles.splice(existing, 1);
     }
-    state.recentFiles.unshift(entry);
-    state.recentFiles = state.recentFiles.slice(0, 10);
+    if (entry.name !== '欢迎.md') {
+      state.recentFiles.unshift(entry);
+      state.recentFiles = state.recentFiles.slice(0, 10);
+    }
     renderRecentFiles();
 
     $('breadcrumb').textContent = mount.name + path + (mount.readonly ? ' (只读)' : '');
@@ -3067,6 +3069,7 @@ function renderRecentFiles() {
   }
   let html = '<h3 class="section-title">最近访问</h3><div class="recent-list">';
   for (const f of state.recentFiles) {
+    if (f.name === '欢迎.md') continue;
     const accessTime = state.accessLog[f.mountId + ':' + f.path];
     const displayTime = accessTime ? formatTime(accessTime) : formatTime(f.modTime);
     html += `<div class="recent-item" onclick="openFile('${f.path.replace(/'/g, "\\'")}', '${f.mountId}')">
