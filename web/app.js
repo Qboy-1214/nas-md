@@ -2295,6 +2295,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
       showToast('已恢复本地缓存版本');
     }
     initEditor(finalContent, state.editorMode, !!mount.readonly);
+    console.log('[openFile]', path, 'mountId=', mount.id, '_local=', mount._local, 'hasHandle=', !!state.localMounts[mount.id], 'contentLen=', content.length);
     setFileInfo(mount.id, path);
     state.dirty = false;
     startDirtyCheck();
