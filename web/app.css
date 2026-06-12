@@ -1134,8 +1134,9 @@ a:hover {
 .recent-files {
   padding: 0 var(--s-sm);
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
   max-height: 200px;
-  overflow-y: auto;
 }
 
 .recent-files .section-title {
@@ -1146,6 +1147,13 @@ a:hover {
   letter-spacing: 0.5px;
   margin-bottom: var(--s-xxs);
   padding: var(--s-xs) var(--s-xs) 0;
+  flex-shrink: 0;
+}
+
+.recent-list {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .recent-item {

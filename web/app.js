@@ -3047,7 +3047,7 @@ function renderRecentFiles() {
     el.innerHTML = '';
     return;
   }
-  let html = '<h3 class="section-title">最近访问</h3>';
+  let html = '<h3 class="section-title">最近访问</h3><div class="recent-list">';
   for (const f of state.recentFiles) {
     const accessTime = state.accessLog[f.mountId + ':' + f.path];
     const displayTime = accessTime ? formatTime(accessTime) : formatTime(f.modTime);
@@ -3056,6 +3056,7 @@ function renderRecentFiles() {
       <span class="recent-time">${displayTime}</span>
     </div>`;
   }
+  html += '</div>';
   el.innerHTML = html;
 }
 

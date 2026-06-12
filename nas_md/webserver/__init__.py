@@ -622,7 +622,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
             # Folder template content
             if path == "/api/folder-template":
-                template_path = os.path.join(os.path.dirname(__file__), "_folder_template.md")
+                template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_folder_template.md")
                 try:
                     with open(template_path, "r", encoding="utf-8") as f:
                         content = f.read()
@@ -943,7 +943,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 os.makedirs(target, exist_ok=False)
                 # Auto-create tmp.md from template so the folder is visible in sidebar
                 tmp_path = os.path.join(target, "tmp.md")
-                template_path = os.path.join(os.path.dirname(__file__), "_folder_template.md")
+                template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_folder_template.md")
                 template_content = ""
                 try:
                     with open(template_path, "r", encoding="utf-8") as tf:
