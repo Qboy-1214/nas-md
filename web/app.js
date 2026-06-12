@@ -2947,29 +2947,47 @@ async function refreshTree() {
  * silently reload the content.
  */
 async function pollCurrentFile() {
-  if (!state.currentPath || !state.currentMountId || !window._vditor) return;
+  if (!state.currentPath || !state.currentMountId || !window._vditor) {
+    console.log('[poll] skip: no path/mount/vditor', state.currentPath, state.currentMountId, !!window._vditor);
+    return;
+  }
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (!mount) return;
+  if (!mount) {
+    console.log('[poll] skip: mount not found for', state.currentMountId);
+    return;
+  }
   // Skip if editor has unsaved changes
-  if (window._vditor.getValue() !== window._originalContent) return;
+  if (window._vditor.getValue() !== window._originalContent) {
+    console.log('[poll] skip: unsaved changes');
+    return;
+  }
 
   try {
     const key = state.currentMountId + ':' + state.currentPath;
     const prev = state.fileMtimes[key];
-    if (!prev) return;
+    if (!prev) {
+      console.log('[poll] skip: no prev mtime for', key, 'all keys:', Object.keys(state.fileMtimes));
+      return;
+    }
 
     let newMtime = null;
     let newSize = null;
     let newContent = null;
 
+    console.log('[poll] mount._local=', mount._local, 'has localMount=', !!state.localMounts[state.currentMountId]);
+
     if (mount._local && state.localMounts[state.currentMountId]) {
       // Local mount with File System Access API handle
       const localMount = state.localMounts[state.currentMountId];
       const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
-      if (!handle) return;
+      if (!handle) {
+        console.log('[poll] skip: getLocalFileHandle returned null for', state.currentPath);
+        return;
+      }
       const file = await handle.getFile();
       newMtime = file.lastModified;
       newSize = file.size;
+      console.log('[poll] local: prev mtime=', prev.mtime, 'new mtime=', newMtime, 'prev size=', prev.size, 'new size=', newSize);
       if (prev.mtime !== newMtime || prev.size !== newSize) {
         newContent = await file.text();
       }
@@ -2978,23 +2996,27 @@ async function pollCurrentFile() {
       const resp = await fetch(
         '/api/mounts/' + encodeURIComponent(state.currentMountId) + '/file?path=' + encodeURIComponent(state.currentPath),
       );
+      console.log('[poll] host: resp.status=', resp.status);
       if (!resp.ok) return;
       const modTimeHeader = resp.headers.get('X-Mod-Time');
       if (!modTimeHeader) return;
       newMtime = parseInt(modTimeHeader, 10);
       const text = await resp.text();
       newSize = text.length;
+      console.log('[poll] host: prev mtime=', prev.mtime, 'new mtime=', newMtime);
       if (prev.mtime !== newMtime || prev.size !== newSize) {
         newContent = text;
       }
     }
 
     if (newContent && (prev.mtime !== newMtime || prev.size !== newSize)) {
+      console.log('[poll] CHANGE DETECTED, updating editor');
       window._vditor.setValue(newContent);
       window._originalContent = newContent;
       state.fileMtimes[key] = { mtime: newMtime, size: newSize };
     }
-  } catch (_e) {
+  } catch (e) {
+    console.log('[poll] error:', e.message);
     // File may have been deleted, ignore
   }
 }
