@@ -629,9 +629,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
             # Folder template content
             if path == "/api/folder-template":
-                template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_folder_template.md")
+                template_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), "_folder_template.md"
+                )
                 try:
-                    with open(template_path, "r", encoding="utf-8") as f:
+                    with open(template_path, encoding="utf-8") as f:
                         content = f.read()
                     self._send_json({"content": content})
                 except OSError:
@@ -941,9 +943,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     os.remove(target)
             else:
                 suggested = self._suggest_rename(abs_parent, name)
-                return self._send_json(
-                    {"error": "duplicate", "suggested_name": suggested}, 409
-                )
+                return self._send_json({"error": "duplicate", "suggested_name": suggested}, 409)
 
         try:
             if kind == "folder":
@@ -1029,9 +1029,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     os.remove(dest_abs)
             else:
                 suggested = self._suggest_rename(dest_dir_abs, name)
-                return self._send_json(
-                    {"error": "duplicate", "suggested_name": suggested}, 409
-                )
+                return self._send_json({"error": "duplicate", "suggested_name": suggested}, 409)
 
         # Prevent moving a directory into itself or its subtree
         if dest_dir_abs.startswith(src_abs + os.sep) or dest_dir_abs == src_abs:
@@ -1078,9 +1076,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     os.remove(dest_abs)
             else:
                 suggested = self._suggest_rename(dest_dir_abs, name)
-                return self._send_json(
-                    {"error": "duplicate", "suggested_name": suggested}, 409
-                )
+                return self._send_json({"error": "duplicate", "suggested_name": suggested}, 409)
 
         try:
             if os.path.isdir(src_abs):
@@ -1134,9 +1130,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     os.remove(dest_abs)
             else:
                 suggested = self._suggest_rename(dest_dir_abs, name)
-                return self._send_json(
-                    {"error": "duplicate", "suggested_name": suggested}, 409
-                )
+                return self._send_json({"error": "duplicate", "suggested_name": suggested}, 409)
 
         try:
             if os.path.isdir(src_abs):
@@ -1210,9 +1204,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     os.remove(dest_abs)
             else:
                 suggested = self._suggest_rename(dest_dir_abs, name)
-                return self._send_json(
-                    {"error": "duplicate", "suggested_name": suggested}, 409
-                )
+                return self._send_json({"error": "duplicate", "suggested_name": suggested}, 409)
 
         try:
             if os.path.isdir(src_abs):
