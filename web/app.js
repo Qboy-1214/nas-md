@@ -2949,7 +2949,7 @@ async function refreshTree() {
 async function pollCurrentFile() {
   if (!state.currentPath || !state.currentMountId || !window._vditor) return;
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (!mount || !mount._local) return;
+  if (!mount) return;
   // Skip if editor has unsaved changes
   if (window._vditor.getValue() !== window._originalContent) return;
 
@@ -2958,22 +2958,42 @@ async function pollCurrentFile() {
     const prev = state.fileMtimes[key];
     if (!prev) return;
 
-    const handle = await getLocalFileHandle(
-      state.localMounts[state.currentMountId].handle,
-      state.currentPath,
-    );
-    if (!handle) return;
-    const file = await handle.getFile();
-    const newMtime = file.lastModified;
-    const newSize = file.size;
+    let newMtime = null;
+    let newSize = null;
+    let newContent = null;
 
-    if (prev.mtime === newMtime && prev.size === newSize) return;
+    if (mount._local && state.localMounts[state.currentMountId]) {
+      // Local mount with File System Access API handle
+      const localMount = state.localMounts[state.currentMountId];
+      const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
+      if (!handle) return;
+      const file = await handle.getFile();
+      newMtime = file.lastModified;
+      newSize = file.size;
+      if (prev.mtime !== newMtime || prev.size !== newSize) {
+        newContent = await file.text();
+      }
+    } else {
+      // Host mount (mounted via backend /mounts.json): poll API for X-Mod-Time
+      const resp = await fetch(
+        '/api/mounts/' + encodeURIComponent(state.currentMountId) + '/file?path=' + encodeURIComponent(state.currentPath),
+      );
+      if (!resp.ok) return;
+      const modTimeHeader = resp.headers.get('X-Mod-Time');
+      if (!modTimeHeader) return;
+      newMtime = parseInt(modTimeHeader, 10);
+      const text = await resp.text();
+      newSize = text.length;
+      if (prev.mtime !== newMtime || prev.size !== newSize) {
+        newContent = text;
+      }
+    }
 
-    // File was modified externally, reload content
-    const newContent = await file.text();
-    window._vditor.setValue(newContent);
-    window._originalContent = newContent;
-    state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+    if (newContent && (prev.mtime !== newMtime || prev.size !== newSize)) {
+      window._vditor.setValue(newContent);
+      window._originalContent = newContent;
+      state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+    }
   } catch (_e) {
     // File may have been deleted, ignore
   }
