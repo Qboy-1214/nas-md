@@ -136,8 +136,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
     if (keys.length > 0) renderSidebar();
+    // Debug: log mount types
+    console.log('[init] IndexedDB keys:', keys);
+    console.log('[init] mounts:', state.mounts.map(m => ({ id: m.id, name: m.name, _local: m._local, hasHandle: !!state.localMounts[m.id] })));
   } catch (_e) {
     /* IndexedDB not available, skip */
+    console.log('[init] IndexedDB error:', e.message);
+    console.log('[init] mounts:', state.mounts.map(m => ({ id: m.id, name: m.name, _local: m._local })));
   }
   await loadRecentFiles();
   // Restore last opened file, or fall back to welcome.md
@@ -819,6 +824,9 @@ function renderSidebar() {
     html += `<div class="mount-name" onclick="toggleMount('${mount.id}')">`;
     html += `<span class="mount-icon">${chevron}</span>`;
     html += `<span>${mount.name}</span>`;
+    if (mount._local) {
+      html += `<span style="color:var(--c-accent);font-size:var(--f-body-xs);margin-left:4px">📁local</span>`;
+    }
     if (mount._needsPerm) {
       html += `<span style="color:var(--c-muted);font-size:var(--f-body-xs);margin-left:4px">（点击授权）</span>`;
     }
