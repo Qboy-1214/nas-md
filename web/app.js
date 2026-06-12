@@ -2261,19 +2261,27 @@ function _scrollToKeyword(keyword) {
 }
 
 function startDirtyCheck() {
-  if (window._dirtyTimer) clearInterval(window._dirtyTimer);
-  window._dirtyTimer = setInterval(() => {
-    if (window._vditor) {
-      const isDirty = window._vditor.getValue() !== window._originalContent;
-      if (isDirty !== state.dirty) {
-        state.dirty = isDirty;
-        const btn = $('btn-save');
-        if (btn) btn.classList.toggle('dirty', isDirty);
-        // Auto-save trigger
-        if (isDirty && state.autoSave) scheduleAutoSave();
-      }
+  // No longer using 500ms polling; driven by Vditor input event via onEditorInput()
+}
+
+function onEditorInput() {
+  if (!window._vditor) return;
+  const isDirty = window._vditor.getValue() !== window._originalContent;
+  if (isDirty !== state.dirty) {
+    state.dirty = isDirty;
+    const btn = $('btn-save');
+    if (btn) btn.classList.toggle('dirty', isDirty);
+  }
+  if (isDirty && state.autoSave && state.currentPath) {
+    const mount = state.mounts.find((m) => m.id === state.currentMountId);
+    if (mount && mount._local && state.localMounts[mount.id]) {
+      // Local mount: save immediately
+      saveFile({ silent: true });
+    } else {
+      // Server mount: debounce 1500ms
+      scheduleAutoSave();
     }
-  }, 500);
+  }
 }
 
 // === Auto-save ===
@@ -2295,7 +2303,7 @@ function scheduleAutoSave() {
       saveFile({ silent: true });
     }
     window._autoSaveTimer = null;
-  }, 3000);
+  }, 1500);
 }
 
 // Restore auto-save switch state on load

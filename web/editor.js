@@ -450,6 +450,9 @@ function initEditor(content, mode, readonly) {
       '|',
       { name: 'more', toolbar: ['edit-mode', 'preview', 'info', 'help'] },
     ],
+    input: () => {
+      if (typeof onEditorInput === 'function') onEditorInput();
+    },
     link: {
       isOpen: false,
       click: (el) => {
