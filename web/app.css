@@ -540,7 +540,7 @@ a:hover {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
-.modal-title {
+.modal-header {
   font-size: var(--f-body-lg);
   font-weight: var(--fw-semibold);
   margin-bottom: var(--s-sm);
@@ -553,6 +553,12 @@ a:hover {
 }
 
 .modal-actions {
+  display: flex;
+  gap: var(--s-sm);
+  justify-content: flex-end;
+}
+
+.modal-footer {
   display: flex;
   gap: var(--s-sm);
   justify-content: flex-end;
