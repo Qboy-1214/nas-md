@@ -240,3 +240,114 @@ test.describe('配置和插件 API', () => {
     expect('plugins' in data).toBeTruthy();
   });
 });
+
+test.describe('重名冲突弹框', () => {
+  test('创建同名文件时弹出冲突弹框', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+
+    // Find the first mount's create-file button
+    const createFileBtn = page.locator('.mount-create-btn[title="新建文件"]').first();
+    if ((await createFileBtn.count()) === 0) return;
+
+    // Click create file button
+    await createFileBtn.click();
+
+    // Wait for the create modal to appear
+    const createModal = page.locator('.modal-overlay.active');
+    await expect(createModal).toBeVisible();
+
+    // Find the first .md file name in the tree to create a duplicate
+    const firstFileName = await page.locator('#file-tree .tree-file .tree-name').first().textContent();
+    if (!firstFileName) return;
+
+    // Type the existing file name (without .md extension)
+    const nameWithoutExt = firstFileName.replace(/\.md$/i, '');
+    const input = createModal.locator('#create-modal-input');
+    await input.fill(nameWithoutExt);
+
+    // Click confirm
+    await createModal.locator('#create-modal-confirm').click();
+
+    // The duplicate dialog should appear
+    const dupDialog = page.locator('.modal-overlay.active');
+    await expect(dupDialog).toBeVisible();
+    await expect(dupDialog).toContainText('文件名冲突');
+
+    // Verify all three buttons are present
+    await expect(dupDialog.locator('#dup-cancel')).toBeVisible();
+    await expect(dupDialog.locator('#dup-rename')).toBeVisible();
+    await expect(dupDialog.locator('#dup-overwrite')).toBeVisible();
+
+    // Click cancel to dismiss
+    await dupDialog.locator('#dup-cancel').click();
+    await expect(dupDialog).not.toBeVisible();
+  });
+
+  test('创建同名文件夹时弹出冲突弹框', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+
+    // Find the first directory name in the tree
+    const firstDirName = await page.locator('#file-tree .tree-dir .tree-name').first().textContent();
+    if (!firstDirName) return;
+
+    // Click create folder button
+    const createFolderBtn = page.locator('.mount-create-btn[title="新建文件夹"]').first();
+    if ((await createFolderBtn.count()) === 0) return;
+    await createFolderBtn.click();
+
+    // Wait for the create modal
+    const createModal = page.locator('.modal-overlay.active');
+    await expect(createModal).toBeVisible();
+
+    // Type the existing directory name
+    const input = createModal.locator('#create-modal-input');
+    await input.fill(firstDirName);
+
+    // Click confirm
+    await createModal.locator('#create-modal-confirm').click();
+
+    // The duplicate dialog should appear
+    const dupDialog = page.locator('.modal-overlay.active');
+    await expect(dupDialog).toBeVisible();
+    await expect(dupDialog).toContainText('文件名冲突');
+
+    // Click rename to dismiss
+    await dupDialog.locator('#dup-rename').click();
+    await expect(dupDialog).not.toBeVisible();
+  });
+
+  test('重名弹框点击覆盖后成功创建', async ({ page }) => {
+    await page.goto('/admin');
+    await page.waitForSelector('#file-tree', { timeout: 5000 });
+
+    // Find the first .md file name
+    const firstFileName = await page.locator('#file-tree .tree-file .tree-name').first().textContent();
+    if (!firstFileName) return;
+
+    // Click create file button
+    const createFileBtn = page.locator('.mount-create-btn[title="新建文件"]').first();
+    if ((await createFileBtn.count()) === 0) return;
+    await createFileBtn.click();
+
+    const createModal = page.locator('.modal-overlay.active');
+    await expect(createModal).toBeVisible();
+
+    const nameWithoutExt = firstFileName.replace(/\.md$/i, '');
+    const input = createModal.locator('#create-modal-input');
+    await input.fill(nameWithoutExt);
+    await createModal.locator('#create-modal-confirm').click();
+
+    // Duplicate dialog appears
+    const dupDialog = page.locator('.modal-overlay.active');
+    await expect(dupDialog).toBeVisible();
+
+    // Click overwrite
+    await dupDialog.locator('#dup-overwrite').click();
+    await expect(dupDialog).not.toBeVisible();
+
+    // Should show success toast
+    await expect(page.locator('#toast')).toBeVisible({ timeout: 3000 });
+  });
+});

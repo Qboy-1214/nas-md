@@ -980,7 +980,7 @@ function suggestRename(name) {
 function showDuplicateDialog(suggestedName) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
+    overlay.className = 'modal-overlay active';
     overlay.innerHTML = `
       <div class="modal-box">
         <div class="modal-header">文件名冲突</div>
@@ -2005,7 +2005,7 @@ async function createItem(mountId, dirPath, kind) {
             await dirHandle.removeEntry(folderName, { recursive: true });
           }
         }
-        const newDir = await dirHandle.getDirectoryHandle(folderName, { create: true });
+        await dirHandle.getDirectoryHandle(folderName, { create: true });
         // TODO: Auto-create tmp.md from template (temporarily disabled)
         // let templateContent = '';
         // try {
