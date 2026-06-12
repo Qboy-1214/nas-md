@@ -942,13 +942,7 @@ function findMountForPath(path) {
   return null;
 }
 
-// === Auto-rename helper ===
-function autoRenameSuffix() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-}
-
+// === Duplicate handling ===
 async function localEntryExists(dirHandle, name, isDir) {
   try {
     if (isDir) {
@@ -962,13 +956,59 @@ async function localEntryExists(dirHandle, name, isDir) {
   }
 }
 
-function applyAutoRename(name) {
-  const ts = autoRenameSuffix();
+function suggestRename(name) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const ts = `_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const dotIdx = name.lastIndexOf('.');
   if (dotIdx > 0) {
     return name.slice(0, dotIdx) + ts + name.slice(dotIdx);
   }
   return name + ts;
+}
+
+/**
+ * Show a dialog when a duplicate file/folder name is found.
+ * Returns: 'overwrite' | 'rename' | 'cancel'
+ */
+function showDuplicateDialog(suggestedName) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-header">文件名冲突</div>
+        <div class="modal-body">
+          目标位置已存在同名文件。<br>
+          重命名规则：在文件名后添加时间戳后缀，如 <code>${suggestedName}</code>
+        </div>
+        <div class="modal-footer">
+          <button class="modal-btn modal-cancel" id="dup-cancel">取消</button>
+          <button class="modal-btn modal-confirm" id="dup-rename">重命名</button>
+          <button class="modal-btn modal-confirm" id="dup-overwrite" style="background:var(--c-error)">覆盖</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#dup-cancel').onclick = () => {
+      overlay.remove();
+      resolve('cancel');
+    };
+    overlay.querySelector('#dup-rename').onclick = () => {
+      overlay.remove();
+      resolve('rename');
+    };
+    overlay.querySelector('#dup-overwrite').onclick = () => {
+      overlay.remove();
+      resolve('overwrite');
+    };
+    overlay.onclick = (e) => {
+      if (e.target === overlay) {
+        overlay.remove();
+        resolve('cancel');
+      }
+    };
+  });
 }
 
 // === Drag & Drop ===
@@ -1085,25 +1125,35 @@ function setupDragDrop() {
               return;
             }
             let destName = fileName;
-            let renamed = false;
             if (await localEntryExists(dirHandle, fileName, false)) {
-              destName = applyAutoRename(fileName);
-              renamed = true;
+              const suggested = suggestRename(fileName);
+              const choice = await showDuplicateDialog(suggested);
+              if (choice === 'cancel') return;
+              if (choice === 'rename') {
+                destName = suggested;
+              } else {
+                // overwrite: remove existing first
+                await dirHandle.removeEntry(fileName);
+              }
             }
             const fh = await dirHandle.getFileHandle(destName, { create: true });
             const writable = await fh.createWritable();
             await writable.write(content);
             await writable.close();
-            showToast(renamed ? `有重名，已自动重命名为 ${destName}` : `已导入: ${destName}`);
+            showToast(`已导入: ${destName}`);
           } else {
             // Write to server mount
             let destName = fileName;
             const checkPath = destPath === '/' ? '/' + fileName : destPath + '/' + fileName;
             const existing = await API.getFile(destMountId, checkPath);
-            let renamed = false;
             if (existing !== null) {
-              destName = applyAutoRename(fileName);
-              renamed = true;
+              const suggested = suggestRename(fileName);
+              const choice = await showDuplicateDialog(suggested);
+              if (choice === 'cancel') return;
+              if (choice === 'rename') {
+                destName = suggested;
+              }
+              // overwrite: just write to same path, will replace content
             }
             const writePath = destPath === '/' ? '/' + destName : destPath + '/' + destName;
             const result = await API.putFile(destMountId, writePath, content);
@@ -1111,7 +1161,7 @@ function setupDragDrop() {
               showToast(result?.error || '导入失败');
               return;
             }
-            showToast(renamed ? `有重名，已自动重命名为 ${destName}` : `已导入: ${destName}`);
+            showToast(`已导入: ${destName}`);
           }
         }
         // Refresh tree
@@ -1218,20 +1268,33 @@ function showMoveCopyDialog(isCrossMachine = false) {
 // Move item within same server mount
 async function moveServerItem(mountId, srcPath, destDir) {
   try {
-    const params = new URLSearchParams({ src: srcPath, destDir: destDir });
     const headers = {};
     if (state.isAdmin) headers['X-Admin'] = '1';
-    const resp = await fetch(`${_apiBase}/api/mounts/${mountId}/move?${params}`, {
+    let params = new URLSearchParams({ src: srcPath, destDir: destDir });
+    let resp = await fetch(`${_apiBase}/api/mounts/${mountId}/move?${params}`, {
       method: 'POST',
       headers,
     });
+    if (resp.status === 409) {
+      const data = await resp.json().catch(() => ({}));
+      const choice = await showDuplicateDialog(data.suggested_name || '');
+      if (choice === 'cancel') return;
+      params = new URLSearchParams({
+        src: srcPath,
+        destDir: destDir,
+        ...(choice === 'overwrite' ? { overwrite: '1' } : { newName: data.suggested_name }),
+      });
+      resp = await fetch(`${_apiBase}/api/mounts/${mountId}/move?${params}`, {
+        method: 'POST',
+        headers,
+      });
+    }
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
       showToast(data.error || '移动失败');
       return;
     }
-    const result = await resp.json().catch(() => ({}));
-    showToast(result.renamed ? `有重名，已自动重命名` : '已移动');
+    showToast('已移动');
     delete state.treeData[mountId];
     await loadTree(mountId, '/');
     renderSidebar();
@@ -1257,7 +1320,7 @@ async function moveLocalItem(mountId, srcPath, destDir) {
         return;
       }
 
-      // Check if destination already exists and auto-rename
+      // Check if destination already exists
       const isSrcDir = await (async () => {
         try {
           await srcParentHandle.getDirectoryHandle(srcName);
@@ -1267,10 +1330,16 @@ async function moveLocalItem(mountId, srcPath, destDir) {
         }
       })();
       let destName = srcName;
-      let renamed = false;
       if (await localEntryExists(destDirHandle, srcName, isSrcDir)) {
-        destName = applyAutoRename(srcName);
-        renamed = true;
+        const suggested = suggestRename(srcName);
+        const choice = await showDuplicateDialog(suggested);
+        if (choice === 'cancel') return;
+        if (choice === 'rename') {
+          destName = suggested;
+        } else {
+          // overwrite: remove existing first
+          await destDirHandle.removeEntry(srcName, { recursive: isSrcDir });
+        }
       }
 
       if (isSrcDir) {
@@ -1288,7 +1357,7 @@ async function moveLocalItem(mountId, srcPath, destDir) {
         await srcParentHandle.removeEntry(srcName);
       }
 
-      showToast(renamed ? `有重名，已自动重命名为 ${destName}` : '已移动');
+      showToast('已移动');
       await loadLocalTree(mountId);
       renderSidebar();
       return; // success
@@ -1323,26 +1392,41 @@ async function copyLocalDir(srcDirHandle, destParentHandle, dirName) {
 async function crossMountServer(srcMountId, srcPath, destMountId, destDir, action) {
   try {
     const endpoint = action === 'move' ? '/api/cross-mount-move' : '/api/cross-mount-copy';
-    const params = new URLSearchParams({
+    const headers = {};
+    if (state.isAdmin) headers['X-Admin'] = '1';
+    let params = new URLSearchParams({
       srcMount: srcMountId,
       srcPath: srcPath,
       destMount: destMountId,
       destDir: destDir,
     });
-    const headers = {};
-    if (state.isAdmin) headers['X-Admin'] = '1';
-    const resp = await fetch(`${_apiBase}${endpoint}?${params}`, {
+    let resp = await fetch(`${_apiBase}${endpoint}?${params}`, {
       method: 'POST',
       headers,
     });
+    if (resp.status === 409) {
+      const data = await resp.json().catch(() => ({}));
+      const choice = await showDuplicateDialog(data.suggested_name || '');
+      if (choice === 'cancel') return;
+      params = new URLSearchParams({
+        srcMount: srcMountId,
+        srcPath: srcPath,
+        destMount: destMountId,
+        destDir: destDir,
+        ...(choice === 'overwrite' ? { overwrite: '1' } : { newName: data.suggested_name }),
+      });
+      resp = await fetch(`${_apiBase}${endpoint}?${params}`, {
+        method: 'POST',
+        headers,
+      });
+    }
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
       showToast(data.error || '操作失败');
       return;
     }
-    const result = await resp.json().catch(() => ({}));
     const actionText = action === 'move' ? '移动' : '复制';
-    showToast(result.renamed ? `有重名，已自动重命名` : `已${actionText}`);
+    showToast(`已${actionText}`);
     // Refresh both mounts
     delete state.treeData[srcMountId];
     delete state.treeData[destMountId];
@@ -1389,24 +1473,32 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
       if (isDir) {
         const srcDirHandle = await srcParentHandle.getDirectoryHandle(srcName);
         let destName = srcName;
-        let renamed = false;
         if (await localEntryExists(destDirHandle, srcName, true)) {
-          destName = applyAutoRename(srcName);
-          renamed = true;
+          const suggested = suggestRename(srcName);
+          const choice = await showDuplicateDialog(suggested);
+          if (choice === 'cancel') return;
+          if (choice === 'rename') {
+            destName = suggested;
+          } else {
+            // overwrite: remove existing directory first
+            await destDirHandle.removeEntry(srcName, { recursive: true });
+          }
         }
         await copyLocalDir(srcDirHandle, destDirHandle, destName);
         if (action === 'move') {
           await srcParentHandle.removeEntry(srcName, { recursive: true });
         }
-        showToast(
-          renamed ? `有重名，已自动重命名为 ${destName}` : action === 'move' ? '已移动' : '已复制',
-        );
+        showToast(action === 'move' ? '已移动' : '已复制');
       } else {
         let destName = srcName;
-        let renamed = false;
         if (await localEntryExists(destDirHandle, srcName, false)) {
-          destName = applyAutoRename(srcName);
-          renamed = true;
+          const suggested = suggestRename(srcName);
+          const choice = await showDuplicateDialog(suggested);
+          if (choice === 'cancel') return;
+          if (choice === 'rename') {
+            destName = suggested;
+          }
+          // overwrite: getFileHandle with create:true will replace content
         }
         const srcFileHandle = await srcParentHandle.getFileHandle(srcName);
         const file = await srcFileHandle.getFile();
@@ -1417,9 +1509,7 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
         if (action === 'move') {
           await srcParentHandle.removeEntry(srcName);
         }
-        showToast(
-          renamed ? `有重名，已自动重命名为 ${destName}` : action === 'move' ? '已移动' : '已复制',
-        );
+        showToast(action === 'move' ? '已移动' : '已复制');
       }
       await loadLocalTree(srcMountId);
       await loadLocalTree(destMountId);
@@ -1464,10 +1554,14 @@ async function localToServer(srcMountId, srcPath, destMountId, destDir, action) 
         destMountId,
         destDir === '/' ? '/' + fileName : destDir + '/' + fileName,
       );
-      let renamed = false;
       if (existingContent !== null) {
-        destFileName = applyAutoRename(fileName);
-        renamed = true;
+        const suggested = suggestRename(fileName);
+        const choice = await showDuplicateDialog(suggested);
+        if (choice === 'cancel') return;
+        if (choice === 'rename') {
+          destFileName = suggested;
+        }
+        // overwrite: just write to same path, will replace content
       }
       const destFilePath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
 
@@ -1488,13 +1582,7 @@ async function localToServer(srcMountId, srcPath, destMountId, destDir, action) 
         }
       }
 
-      showToast(
-        renamed
-          ? `有重名，已自动重命名为 ${destFileName}`
-          : action === 'move'
-            ? '已移动到服务器'
-            : '已复制到服务器',
-      );
+      showToast(action === 'move' ? '已移动到服务器' : '已复制到服务器');
       await loadLocalTree(srcMountId);
       delete state.treeData[destMountId];
       await loadTree(destMountId, '/');
@@ -1536,10 +1624,14 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
       // Check if destination file already exists locally
       const destDirHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
       let destFileName = fileName;
-      let renamed = false;
       if (destDirHandle && (await localEntryExists(destDirHandle, fileName, false))) {
-        destFileName = applyAutoRename(fileName);
-        renamed = true;
+        const suggested = suggestRename(fileName);
+        const choice = await showDuplicateDialog(suggested);
+        if (choice === 'cancel') return;
+        if (choice === 'rename') {
+          destFileName = suggested;
+        }
+        // overwrite: writeLocalFile will replace content
       }
 
       // Write to local
@@ -1555,13 +1647,7 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
         await API.deleteFile(srcMountId, srcPath);
       }
 
-      showToast(
-        renamed
-          ? `有重名，已自动重命名为 ${destFileName}`
-          : action === 'move'
-            ? '已移动到本机'
-            : '已复制到本机',
-      );
+      showToast(action === 'move' ? '已移动到本机' : '已复制到本机');
       delete state.treeData[srcMountId];
       await loadTree(srcMountId, '/');
       await loadLocalTree(destMountId);
@@ -1902,10 +1988,16 @@ async function createItem(mountId, dirPath, kind) {
       }
       if (kind === 'folder') {
         let folderName = trimmedName;
-        let renamed = false;
         if (await localEntryExists(dirHandle, folderName, true)) {
-          folderName = applyAutoRename(folderName);
-          renamed = true;
+          const suggested = suggestRename(folderName);
+          const choice = await showDuplicateDialog(suggested);
+          if (choice === 'cancel') return;
+          if (choice === 'rename') {
+            folderName = suggested;
+          } else {
+            // overwrite: remove existing directory first
+            await dirHandle.removeEntry(folderName, { recursive: true });
+          }
         }
         const newDir = await dirHandle.getDirectoryHandle(folderName, { create: true });
         // Auto-create tmp.md so the folder is visible in sidebar
@@ -1915,19 +2007,23 @@ async function createItem(mountId, dirPath, kind) {
           '为了让目录可见，所以自动创建了这个文件，不需要可以去对应文件夹删掉\n',
         );
         await tmpWritable.close();
-        showToast(renamed ? `有重名，已自动重命名为 ${folderName}` : `已创建文件夹: ${folderName}`);
+        showToast(`已创建文件夹: ${folderName}`);
       } else {
         let fileName = trimmedName.endsWith('.md') ? trimmedName : trimmedName + '.md';
-        let renamed = false;
         if (await localEntryExists(dirHandle, fileName, false)) {
-          fileName = applyAutoRename(fileName);
-          renamed = true;
+          const suggested = suggestRename(fileName);
+          const choice = await showDuplicateDialog(suggested);
+          if (choice === 'cancel') return;
+          if (choice === 'rename') {
+            fileName = suggested;
+          }
+          // overwrite: getFileHandle with create:true will replace content
         }
         const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write('');
         await writable.close();
-        showToast(renamed ? `有重名，已自动重命名为 ${fileName}` : `已创建: ${fileName}`);
+        showToast(`已创建: ${fileName}`);
         const filePath = dirPath === '/' ? '/' + fileName : dirPath + '/' + fileName;
         await loadLocalTree(mountId);
         renderSidebar();
@@ -1949,24 +2045,39 @@ async function createItem(mountId, dirPath, kind) {
 
   // Server mount: use API
   try {
-    const params = new URLSearchParams({
+    let params = new URLSearchParams({
       path: dirPath,
       name: trimmedName,
       kind: kind,
     });
     const headers = {};
     if (state.isAdmin) headers['X-Admin'] = '1';
-    const resp = await fetch(`${_apiBase}/api/mounts/${mountId}/create?${params}`, {
+    let resp = await fetch(`${_apiBase}/api/mounts/${mountId}/create?${params}`, {
       method: 'POST',
       headers,
     });
+    if (resp.status === 409) {
+      const data = await resp.json().catch(() => ({}));
+      const choice = await showDuplicateDialog(data.suggested_name || '');
+      if (choice === 'cancel') return;
+      params = new URLSearchParams({
+        path: dirPath,
+        name: trimmedName,
+        kind: kind,
+        ...(choice === 'overwrite' ? { overwrite: '1' } : { newName: data.suggested_name }),
+      });
+      resp = await fetch(`${_apiBase}/api/mounts/${mountId}/create?${params}`, {
+        method: 'POST',
+        headers,
+      });
+    }
     if (!resp.ok) {
       const data = await resp.json().catch(() => ({}));
       showToast(data.error || '创建失败');
       return;
     }
     const result = await resp.json();
-    showToast(result.renamed ? `有重名，已自动重命名为 ${result.name}` : `已创建: ${result.name}`);
+    showToast(`已创建: ${result.name}`);
     // Force refresh the entire mount tree (recursive tree is nested from root)
     delete state.treeData[mountId];
     await loadTree(mountId, '/');

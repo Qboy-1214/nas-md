@@ -647,17 +647,36 @@ class TestCreateAPI:
         assert os.path.isdir(os.path.join(writable_dir, "notes"))
         assert os.path.isfile(os.path.join(writable_dir, "notes", "tmp.md"))
 
-    def test_create_duplicate_auto_renames(self, writable_server_url):
-        """POST /create with existing name should auto-rename and return 200 with renamed flag."""
+    def test_create_duplicate_returns_409(self, writable_server_url):
+        """POST /create with existing name should return 409 with suggested_name."""
         status, body = _post(
             f"{writable_server_url}/api/mounts/writable/create?path=/&name=hello&kind=file",
         )
-        # hello.md already exists → auto-rename
+        # hello.md already exists → 409 duplicate
+        assert status == 409
+        data = json.loads(body)
+        assert data.get("error") == "duplicate"
+        assert "suggested_name" in data
+        assert data["suggested_name"].startswith("hello_")
+
+    def test_create_duplicate_with_overwrite(self, writable_server_url):
+        """POST /create with existing name and overwrite=1 should succeed."""
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/create?path=/&name=hello&kind=file&overwrite=1",
+        )
         assert status == 200
         data = json.loads(body)
-        assert data.get("renamed") is True
-        assert data["name"] != "hello.md"
-        assert data["name"].startswith("hello_")
+        assert data.get("ok") is True
+
+    def test_create_duplicate_with_new_name(self, writable_server_url):
+        """POST /create with existing name and newName should succeed."""
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/create?path=/&name=hello&kind=file&newName=hello_custom.md",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        assert data["name"] == "hello_custom.md"
 
     def test_create_missing_name(self, writable_server_url):
         """POST /create without name should return 400."""
@@ -703,8 +722,8 @@ class TestMoveAPI:
         )
         assert status == 400
 
-    def test_move_duplicate_at_dest_auto_renames(self, writable_server_url, writable_dir):
-        """POST /move with existing name at destination should auto-rename."""
+    def test_move_duplicate_at_dest_returns_409(self, writable_server_url, writable_dir):
+        """POST /move with existing name at destination should return 409."""
         shutil.copy2(
             os.path.join(writable_dir, "hello.md"),
             os.path.join(writable_dir, "subdir", "hello.md"),
@@ -712,9 +731,10 @@ class TestMoveAPI:
         status, body = _post(
             f"{writable_server_url}/api/mounts/writable/move?src=/hello.md&destDir=/subdir",
         )
-        assert status == 200
+        assert status == 409
         data = json.loads(body)
-        assert data.get("renamed") is True
+        assert data.get("error") == "duplicate"
+        assert "suggested_name" in data
 
     def test_move_missing_params(self, writable_server_url):
         """POST /move without src/destDir should return 400."""
@@ -745,8 +765,8 @@ class TestCopyAPI:
         # Copy exists
         assert os.path.isfile(os.path.join(writable_dir, "subdir", "hello.md"))
 
-    def test_copy_duplicate_auto_renames(self, writable_server_url, writable_dir):
-        """POST /copy with existing name at destination should auto-rename."""
+    def test_copy_duplicate_returns_409(self, writable_server_url, writable_dir):
+        """POST /copy with existing name at destination should return 409."""
         shutil.copy2(
             os.path.join(writable_dir, "hello.md"),
             os.path.join(writable_dir, "subdir", "hello.md"),
@@ -754,9 +774,10 @@ class TestCopyAPI:
         status, body = _post(
             f"{writable_server_url}/api/mounts/writable/copy?src=/hello.md&destDir=/subdir",
         )
-        assert status == 200
+        assert status == 409
         data = json.loads(body)
-        assert data.get("renamed") is True
+        assert data.get("error") == "duplicate"
+        assert "suggested_name" in data
 
     def test_copy_missing_params(self, writable_server_url):
         """POST /copy without src/destDir should return 400."""
