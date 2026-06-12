@@ -147,9 +147,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const mount = state.mounts.find((m) => m.id === lastMountId);
     if (mount) {
       try {
-        const result = await API.getFile(mount.id, lastPath);
-        if (result !== null) {
-          const content = result.content;
+        let content;
+        if (mount._local && state.localMounts[mount.id]) {
+          content = await readLocalFile(mount.id, lastPath);
+        } else {
+          const result = await API.getFile(mount.id, lastPath);
+          content = result ? result.content : null;
+        }
+        if (content !== null) {
           state.currentPath = lastPath;
           state.currentMountId = mount.id;
           state.searchResults = [];
@@ -177,6 +182,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             /* ignore */
           }
           initEditor(content, state.editorMode, !!mount.readonly);
+          // Record mtime for local mounts
+          if (mount._local) {
+            try {
+              const handle = await getLocalFileHandle(state.localMounts[mount.id].handle, lastPath);
+              if (handle) {
+                const file = await handle.getFile();
+                state.fileMtimes[mount.id + ':' + lastPath] = { mtime: file.lastModified, size: file.size };
+              }
+            } catch (_e) { /* file may have been deleted */ }
+          }
           setFileInfo(mount.id, lastPath);
           state.dirty = false;
           startDirtyCheck();
@@ -2965,8 +2980,11 @@ async function pollCurrentFile() {
     return;
   }
   // Skip if editor has unsaved changes
-  if (window._vditor.getValue() !== window._originalContent) {
-    console.log('[poll] skip: unsaved changes');
+  const _curVal = window._vditor.getValue();
+  if (_curVal !== window._originalContent) {
+    console.log('[poll] skip: unsaved changes for', state.currentMountId, state.currentPath);
+    console.log('[poll]   getValue:', JSON.stringify(_curVal));
+    console.log('[poll]   orig:', JSON.stringify(window._originalContent));
     return;
   }
 
