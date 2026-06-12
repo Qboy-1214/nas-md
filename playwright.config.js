@@ -30,6 +30,8 @@ export default defineConfig({
       WEB_HOST: '127.0.0.1',
       WEB_ROOT: './web',
       STORAGE_DIR: './storage-test-e2e',
+      MOUNT_DIRS: './tests/e2e/test-mount',
+      PYTHONIOENCODING: 'utf-8',
     },
   },
 });

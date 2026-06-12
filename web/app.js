@@ -169,6 +169,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             _deleteBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
+          // Restore cursor/scroll position from localStorage
+          try {
+            const savedPos = JSON.parse(localStorage.getItem('nasmd_cursor_pos') || 'null');
+            if (savedPos) window._pendingRestore = savedPos;
+          } catch (_) {
+            /* ignore */
+          }
           initEditor(content, state.editorMode, !!mount.readonly);
           setFileInfo(mount.id, lastPath);
           state.dirty = false;
@@ -224,6 +231,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (welcome) openFile(welcome.path, builtin.id);
     }
   }
+
+  // Save cursor/scroll position before page unload
+  window.addEventListener('beforeunload', () => saveCursorScrollToStorage());
 
   // Start sidebar auto-refresh (pause when tab is hidden)
   startSidebarRefresh();
@@ -2109,6 +2119,67 @@ async function createItem(mountId, dirPath, kind) {
   }
 }
 
+/**
+ * Save current editor cursor position and scroll to localStorage.
+ * Called before switching files or destroying the editor.
+ */
+function saveCursorScrollToStorage() {
+  if (!window._vditor) return;
+  try {
+    const vd = window._vditor.vditor;
+    const mode = window._vditor.getCurrentMode();
+    const scrollEl =
+      mode === 'sv' ? vd.sv.element : mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
+    const maxScroll = scrollEl ? scrollEl.scrollHeight - scrollEl.clientHeight : 0;
+    const scrollPercent = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 0;
+
+    let headingText = null;
+    let cursorViewportOffset = 0;
+    let svCursorPos = 0;
+
+    if (mode === 'sv') {
+      const ta = vd.sv.element;
+      svCursorPos = ta.selectionStart;
+      const text = ta.value;
+      const before = text.substring(0, ta.selectionStart);
+      const lines = before.split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const m = lines[i].match(/^#{1,6}\s+(.+)/);
+        if (m) {
+          headingText = m[1].trim();
+          break;
+        }
+      }
+    } else {
+      const sel = window.getSelection();
+      if (sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const cursorRect = range.getBoundingClientRect();
+        const scrollRect = scrollEl.getBoundingClientRect();
+        cursorViewportOffset = Math.max(0, cursorRect.top - scrollRect.top);
+        const editorEl = scrollEl;
+        const cursorNode = range.startContainer;
+        const heading = window._findHeadingAboveCursor
+          ? window._findHeadingAboveCursor(editorEl, cursorNode)
+          : null;
+        if (heading) headingText = (heading.innerText || heading.textContent).trim();
+      }
+    }
+
+    localStorage.setItem(
+      'nasmd_cursor_pos',
+      JSON.stringify({
+        headingText,
+        scrollPercent,
+        cursorViewportOffset,
+        svCursorPos,
+      }),
+    );
+  } catch (_) {
+    /* ignore */
+  }
+}
+
 function _treeHasPath(entry, path) {
   if (entry.path === path) return true;
   if (entry.children) {
@@ -2120,6 +2191,9 @@ function _treeHasPath(entry, path) {
 }
 
 async function openFile(path, preferredMountId, searchKeyword) {
+  // Save current cursor/scroll position before switching files
+  saveCursorScrollToStorage();
+
   let mount = null;
   // 1. Try preferred mount id (from sidebar click or restore)
   if (preferredMountId) {

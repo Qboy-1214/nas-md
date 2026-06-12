@@ -343,6 +343,8 @@ function _findHeadingAboveCursor(editorEl, cursorNode) {
   return best;
 }
 
+window._findHeadingAboveCursor = _findHeadingAboveCursor;
+
 window._reinitEditor = (mode) => {
   if (!_vditor) return;
   const content = _vditor.getValue();
@@ -672,11 +674,12 @@ function initEditor(content, mode, readonly) {
         // Multiple attempts with increasing delays for Vditor's async rendering
         setTimeout(doRestore, 100);
         setTimeout(doRestore, 400);
+        setTimeout(doRestore, 800);
 
         // Cleanup
         setTimeout(() => {
           _pendingRestore = null;
-        }, 500);
+        }, 900);
       } else {
         setTimeout(() => {
           const el = getActiveEditorEl();

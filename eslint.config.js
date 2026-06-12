@@ -47,6 +47,7 @@ export default [
         confirm: "readonly",
         // Cross-file functions (defined in app.js, referenced from editor.js)
         onEditorInput: "readonly",
+        _findHeadingAboveCursor: "readonly",
         // Third-party libraries
         Alpine: "readonly",
         Vditor: "readonly",
