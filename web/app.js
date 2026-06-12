@@ -2295,12 +2295,14 @@ async function openFile(path, preferredMountId, searchKeyword) {
       showToast('已恢复本地缓存版本');
     }
     initEditor(finalContent, state.editorMode, !!mount.readonly);
-    console.log('[openFile]', path, 'mountId=', mount.id, '_local=', mount._local, 'hasHandle=', !!state.localMounts[mount.id], 'contentLen=', content.length);
-    // Debug: check getValue vs _originalContent after 500ms
+    console.log('[openFile]', path, 'mountId=', mount.id, '_local=', mount._local, 'hasHandle=', !!state.localMounts[mount.id], 'contentLen=', content.length, 'contentRepr:', JSON.stringify(content));
+    // Debug: check getValue vs _originalContent after 1000ms
+    const _path = path;
+    const _mountId = mount.id;
     setTimeout(() => {
       const cur = window._vditor ? window._vditor.getValue() : 'NO_VDITOR';
-      console.log('[openFile-check] getValue===orig:', cur === window._originalContent, 'getValue len:', cur.length, 'orig len:', window._originalContent.length, 'getValue repr:', JSON.stringify(cur), 'orig repr:', JSON.stringify(window._originalContent));
-    }, 500);
+      console.log('[openFile-check]', _path, 'mountId=', _mountId, 'getValue===orig:', cur === window._originalContent, 'getValue repr:', JSON.stringify(cur), 'orig repr:', JSON.stringify(window._originalContent));
+    }, 1000);
     setFileInfo(mount.id, path);
     state.dirty = false;
     startDirtyCheck();
