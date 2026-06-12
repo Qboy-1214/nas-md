@@ -2000,12 +2000,18 @@ async function createItem(mountId, dirPath, kind) {
           }
         }
         const newDir = await dirHandle.getDirectoryHandle(folderName, { create: true });
-        // Auto-create tmp.md so the folder is visible in sidebar
+        // Auto-create tmp.md from template so the folder is visible in sidebar
+        let templateContent = '';
+        try {
+          const resp = await fetch(`${_apiBase}/api/folder-template`);
+          if (resp.ok) {
+            const data = await resp.json();
+            templateContent = data.content || '';
+          }
+        } catch {}
         const tmpHandle = await newDir.getFileHandle('tmp.md', { create: true });
         const tmpWritable = await tmpHandle.createWritable();
-        await tmpWritable.write(
-          '为了让目录可见，所以自动创建了这个文件，不需要可以去对应文件夹删掉\n',
-        );
+        await tmpWritable.write(templateContent);
         await tmpWritable.close();
         showToast(`已创建文件夹: ${folderName}`);
       } else {

@@ -620,6 +620,17 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._send_json({"status": "ok"})
                 return
 
+            # Folder template content
+            if path == "/api/folder-template":
+                template_path = os.path.join(os.path.dirname(__file__), "_folder_template.md")
+                try:
+                    with open(template_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    self._send_json({"content": content})
+                except OSError:
+                    self._send_json({"content": ""})
+                return
+
             # Config endpoint (returns runtime configuration)
             if path == "/api/config":
                 self._send_json({"docker_mode": _docker_mode})
@@ -930,10 +941,17 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             if kind == "folder":
                 os.makedirs(target, exist_ok=False)
-                # Auto-create tmp.md so the folder is visible in sidebar
+                # Auto-create tmp.md from template so the folder is visible in sidebar
                 tmp_path = os.path.join(target, "tmp.md")
+                template_path = os.path.join(os.path.dirname(__file__), "_folder_template.md")
+                template_content = ""
+                try:
+                    with open(template_path, "r", encoding="utf-8") as tf:
+                        template_content = tf.read()
+                except OSError:
+                    pass
                 with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write("为了让目录可见，所以自动创建了这个文件，不需要可以去对应文件夹删掉\n")
+                    f.write(template_content)
             else:
                 # Create .md file by default
                 if not name.endswith(".md"):
