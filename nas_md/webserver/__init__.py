@@ -153,6 +153,7 @@ class DirEntry:
         self.mod_time = mod_time
         self.children: list[DirEntry] = []
         self.has_md: bool = False  # True if this subtree contains any .md file
+        self.is_empty: bool = False  # True if this directory has no children
 
     def to_dict(self) -> dict:
         d = {
@@ -162,6 +163,7 @@ class DirEntry:
             "size": self.size,
             "modTime": self.mod_time,
             "hasMd": self.has_md,
+            "isEmpty": self.is_empty,
         }
         if self.children:
             d["children"] = [c.to_dict() for c in self.children]
@@ -437,12 +439,17 @@ class MountManager:
         if not is_dir and abs_path.lower().endswith(".md"):
             entry.has_md = True
         if is_dir and depth < max_depth:
-            for child in self.list_dir(mount, rel_path):
+            raw_children = self.list_dir(mount, rel_path)
+            entry.is_empty = len(raw_children) == 0
+            for child in raw_children:
                 child_tree = self.build_tree(mount, child.path, depth + 1, max_depth)
                 if child_tree:
                     entry.children.append(child_tree)
                     if child_tree.has_md:
                         entry.has_md = True
+        elif is_dir:
+            # At max depth, check emptiness from listing
+            entry.is_empty = len(self.list_dir(mount, rel_path)) == 0
         return entry
 
 
@@ -941,17 +948,17 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             if kind == "folder":
                 os.makedirs(target, exist_ok=False)
-                # Auto-create tmp.md from template so the folder is visible in sidebar
-                tmp_path = os.path.join(target, "tmp.md")
-                template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_folder_template.md")
-                template_content = ""
-                try:
-                    with open(template_path, "r", encoding="utf-8") as tf:
-                        template_content = tf.read()
-                except OSError:
-                    pass
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    f.write(template_content)
+                # TODO: Auto-create tmp.md from template (temporarily disabled)
+                # tmp_path = os.path.join(target, "tmp.md")
+                # template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "_folder_template.md")
+                # template_content = ""
+                # try:
+                #     with open(template_path, "r", encoding="utf-8") as tf:
+                #         template_content = tf.read()
+                # except OSError:
+                #     pass
+                # with open(tmp_path, "w", encoding="utf-8") as f:
+                #     f.write(template_content)
             else:
                 # Create .md file by default
                 if not name.endswith(".md"):

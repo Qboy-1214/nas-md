@@ -329,26 +329,31 @@ async function loadLocalTree(mountId) {
 
 async function readLocalDir(dirHandle, parentPath) {
   const children = [];
+  let hasRawEntries = false;
   for await (const entry of dirHandle.values()) {
+    hasRawEntries = true;
     const entryPath = parentPath === '/' ? '/' + entry.name : parentPath + '/' + entry.name;
     if (entry.kind === 'directory') {
       const subChildren = [];
       let hasMd = false;
+      let isEmpty = true;
       try {
         const subHandle = await dirHandle.getDirectoryHandle(entry.name);
         const subResult = await readLocalDir(subHandle, entryPath);
         subChildren.push(...(subResult.children || []));
         hasMd = subResult.hasMd || false;
+        isEmpty = subResult.isEmpty || false;
       } catch (_e) {
         /* skip unreadable dirs */
       }
-      // Only include dirs that contain .md files
-      if (hasMd) {
+      // Include dirs that contain .md files or are empty
+      if (hasMd || isEmpty) {
         children.push({
           name: entry.name,
           path: entryPath,
           isDir: true,
-          hasMd: true,
+          hasMd,
+          isEmpty,
           children: subChildren,
         });
       }
@@ -370,7 +375,8 @@ async function readLocalDir(dirHandle, parentPath) {
     return a.name.localeCompare(b.name);
   });
   const hasMd = children.some((c) => c.hasMd);
-  return { name: dirHandle.name, path: parentPath, isDir: true, children, hasMd };
+  const isEmpty = !hasRawEntries;
+  return { name: dirHandle.name, path: parentPath, isDir: true, children, hasMd, isEmpty };
 }
 
 async function readLocalFile(mountId, path) {
@@ -851,11 +857,11 @@ function renderEntries(entries, mountId, _parentPath) {
   const items = entries
     .filter((e) => {
       if (e.name.startsWith('.')) return false;
-      // Always show if hasMd flag is set (contains .md files in subtree)
-      if (e.hasMd) return true;
-      // Always show .md files themselves
+      // Always show .md files
       if (!e.isDir && e.name.toLowerCase().endsWith('.md')) return true;
-      // Hide directories without .md files in their subtree
+      // Show directories that have .md files or are empty
+      if (e.isDir && (e.hasMd || e.isEmpty)) return true;
+      // Hide non-md files and directories without .md files that aren't empty
       return false;
     })
     .sort((a, b) => {
@@ -2000,19 +2006,19 @@ async function createItem(mountId, dirPath, kind) {
           }
         }
         const newDir = await dirHandle.getDirectoryHandle(folderName, { create: true });
-        // Auto-create tmp.md from template so the folder is visible in sidebar
-        let templateContent = '';
-        try {
-          const resp = await fetch(`${_apiBase}/api/folder-template`);
-          if (resp.ok) {
-            const data = await resp.json();
-            templateContent = data.content || '';
-          }
-        } catch {}
-        const tmpHandle = await newDir.getFileHandle('tmp.md', { create: true });
-        const tmpWritable = await tmpHandle.createWritable();
-        await tmpWritable.write(templateContent);
-        await tmpWritable.close();
+        // TODO: Auto-create tmp.md from template (temporarily disabled)
+        // let templateContent = '';
+        // try {
+        //   const resp = await fetch(`${_apiBase}/api/folder-template`);
+        //   if (resp.ok) {
+        //     const data = await resp.json();
+        //     templateContent = data.content || '';
+        //   }
+        // } catch {}
+        // const tmpHandle = await newDir.getFileHandle('tmp.md', { create: true });
+        // const tmpWritable = await tmpHandle.createWritable();
+        // await tmpWritable.write(templateContent);
+        // await tmpWritable.close();
         showToast(`已创建文件夹: ${folderName}`);
       } else {
         let fileName = trimmedName.endsWith('.md') ? trimmedName : trimmedName + '.md';

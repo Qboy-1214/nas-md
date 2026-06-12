@@ -637,7 +637,7 @@ class TestCreateAPI:
         assert os.path.isfile(os.path.join(writable_dir, "doc.md"))
 
     def test_create_folder(self, writable_server_url, writable_dir):
-        """POST /api/mounts/{id}/create creates a folder with tmp.md."""
+        """POST /api/mounts/{id}/create creates a folder."""
         status, body = _post(
             f"{writable_server_url}/api/mounts/writable/create?path=/&name=notes&kind=folder",
         )
@@ -645,7 +645,6 @@ class TestCreateAPI:
         data = json.loads(body)
         assert data.get("ok") is True
         assert os.path.isdir(os.path.join(writable_dir, "notes"))
-        assert os.path.isfile(os.path.join(writable_dir, "notes", "tmp.md"))
 
     def test_create_duplicate_returns_409(self, writable_server_url):
         """POST /create with existing name should return 409 with suggested_name."""
