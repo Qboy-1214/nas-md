@@ -604,7 +604,7 @@ function initEditor(content, mode, readonly) {
       }
 
       const needsRestore = _pendingRestore !== null;
-      console.log('[editor] after callback, needsRestore:', needsRestore, '_pendingRestore:', JSON.stringify(_pendingRestore));
+
       if (needsRestore) {
         const doRestore = () => {
           if (!_vditor) return;
@@ -673,10 +673,9 @@ function initEditor(content, mode, readonly) {
         };
 
         // Multiple attempts with increasing delays for Vditor's async rendering
-        console.log('[editor] scheduling doRestore at 100ms, 400ms, 800ms');
-        setTimeout(() => { console.log('[editor] doRestore 100ms'); doRestore(); }, 100);
-        setTimeout(() => { console.log('[editor] doRestore 400ms'); doRestore(); }, 400);
-        setTimeout(() => { console.log('[editor] doRestore 800ms'); doRestore(); }, 800);
+        setTimeout(doRestore, 100);
+        setTimeout(doRestore, 400);
+        setTimeout(doRestore, 800);
 
         // Cleanup
         setTimeout(() => {

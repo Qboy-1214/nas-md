@@ -179,9 +179,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             const savedPos = JSON.parse(localStorage.getItem('nasmd_cursor_pos') || 'null');
             if (savedPos) {
               window._pendingRestore = savedPos;
-              console.log('[restore] _pendingRestore set:', JSON.stringify(savedPos));
-            } else {
-              console.log('[restore] no saved cursor pos in localStorage');
             }
           } catch (_) {
             /* ignore */
@@ -253,10 +250,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Save cursor/scroll position before page unload
-  window.addEventListener('beforeunload', () => {
-    console.log('[beforeunload] fired, _vditor:', !!window._vditor);
-    saveCursorScrollToStorage();
-  });
+  window.addEventListener('beforeunload', () => saveCursorScrollToStorage());
+  // Also periodically save cursor position so refresh/navigation doesn't lose it
+  setInterval(() => {
+    if (window._vditor && state.currentPath) saveCursorScrollToStorage();
+  }, 2000);
 
   // Start sidebar auto-refresh (pause when tab is hidden)
   startSidebarRefresh();
@@ -2155,7 +2153,7 @@ function saveCursorScrollToStorage() {
       mode === 'sv' ? vd.sv.element : mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
     const maxScroll = scrollEl ? scrollEl.scrollHeight - scrollEl.clientHeight : 0;
     const scrollPercent = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 0;
-    console.log('[saveCursor] mode:', mode, 'scrollEl:', !!scrollEl, 'scrollH:', scrollEl?.scrollHeight, 'clientH:', scrollEl?.clientHeight, 'scrollTop:', scrollEl?.scrollTop, 'maxScroll:', maxScroll, 'scrollPercent:', scrollPercent);
+    // Save cursor position details for debugging
 
     let headingText = null;
     let cursorViewportOffset = 0;
