@@ -989,9 +989,9 @@ function showDuplicateDialog(suggestedName) {
           重命名规则：在文件名后添加时间戳后缀，如 <code>${suggestedName}</code>
         </div>
         <div class="modal-actions">
-          <button class="modal-btn modal-cancel" id="dup-cancel">取消</button>
-          <button class="modal-btn modal-confirm" id="dup-rename">重命名</button>
-          <button class="modal-btn modal-confirm" id="dup-overwrite" style="background:var(--c-error)">覆盖</button>
+          <button class="modal-btn" id="dup-cancel">取消</button>
+          <button class="modal-btn primary" id="dup-rename">重命名</button>
+          <button class="modal-btn danger" id="dup-overwrite">覆盖</button>
         </div>
       </div>
     `;
@@ -2148,6 +2148,12 @@ async function openFile(path, preferredMountId, searchKeyword) {
     }
     if (content === null) {
       showToast('文件加载失败，请查看浏览器控制台获取详情');
+      // Remove from recent files if file doesn't exist
+      const idx = state.recentFiles.findIndex((f) => f.mountId === mount.id && f.path === path);
+      if (idx >= 0) {
+        state.recentFiles.splice(idx, 1);
+        renderRecentFiles();
+      }
       return;
     }
     state.currentPath = path;
@@ -2206,6 +2212,12 @@ async function openFile(path, preferredMountId, searchKeyword) {
   } catch (e) {
     showToast('加载文件失败');
     console.error(e);
+    // Remove from recent files on error
+    const idx = state.recentFiles.findIndex((f) => f.mountId === mount.id && f.path === path);
+    if (idx >= 0) {
+      state.recentFiles.splice(idx, 1);
+      renderRecentFiles();
+    }
   }
 }
 

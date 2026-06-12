@@ -555,6 +555,7 @@ a:hover {
 
 .modal-actions {
   display: flex;
+  flex-wrap: nowrap;
   gap: var(--s-sm);
   justify-content: flex-end;
 }
@@ -590,6 +591,16 @@ a:hover {
 
 .modal-btn.primary:hover {
   background: var(--c-primary-pressed);
+}
+
+.modal-btn.danger {
+  background: var(--c-danger);
+  color: #fff;
+  border-color: var(--c-danger);
+}
+
+.modal-btn.danger:hover {
+  background: #c92525;
 }
 
 .modal-btn.cancel {
