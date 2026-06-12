@@ -246,32 +246,28 @@ test.describe('重名冲突弹框', () => {
     await page.goto('/admin');
     await page.waitForSelector('#file-tree', { timeout: 5000 });
 
-    // Find the first mount's create-file button
+    // First create a file
     const createFileBtn = page.locator('.mount-create-btn[title="新建文件"]').first();
     if ((await createFileBtn.count()) === 0) return;
-
-    // Click create file button
     await createFileBtn.click();
 
-    // Wait for the create modal to appear
     const createModal = page.locator('.modal-overlay.active');
     await expect(createModal).toBeVisible();
-
-    // Find the first .md file name in the tree to create a duplicate
-    const firstFileName = await page.locator('#file-tree .tree-file .tree-name').first().textContent();
-    if (!firstFileName) return;
-
-    // Type the existing file name (without .md extension)
-    const nameWithoutExt = firstFileName.replace(/\.md$/i, '');
-    const input = createModal.locator('#create-modal-input');
-    await input.fill(nameWithoutExt);
-
-    // Click confirm
+    await createModal.locator('#create-modal-input').fill('dup-test');
     await createModal.locator('#create-modal-confirm').click();
+    // Wait for creation to complete
+    await page.waitForTimeout(1000);
+
+    // Now try creating the same file again
+    await createFileBtn.click();
+    const createModal2 = page.locator('.modal-overlay.active');
+    await expect(createModal2).toBeVisible();
+    await createModal2.locator('#create-modal-input').fill('dup-test');
+    await createModal2.locator('#create-modal-confirm').click();
 
     // The duplicate dialog should appear
     const dupDialog = page.locator('.modal-overlay.active');
-    await expect(dupDialog).toBeVisible();
+    await expect(dupDialog).toBeVisible({ timeout: 5000 });
     await expect(dupDialog).toContainText('文件名冲突');
 
     // Verify all three buttons are present
@@ -288,29 +284,28 @@ test.describe('重名冲突弹框', () => {
     await page.goto('/admin');
     await page.waitForSelector('#file-tree', { timeout: 5000 });
 
-    // Find the first directory name in the tree
-    const firstDirName = await page.locator('#file-tree .tree-dir .tree-name').first().textContent();
-    if (!firstDirName) return;
-
-    // Click create folder button
+    // First create a folder
     const createFolderBtn = page.locator('.mount-create-btn[title="新建文件夹"]').first();
     if ((await createFolderBtn.count()) === 0) return;
     await createFolderBtn.click();
 
-    // Wait for the create modal
     const createModal = page.locator('.modal-overlay.active');
     await expect(createModal).toBeVisible();
-
-    // Type the existing directory name
-    const input = createModal.locator('#create-modal-input');
-    await input.fill(firstDirName);
-
-    // Click confirm
+    await createModal.locator('#create-modal-input').fill('dup-dir-test');
     await createModal.locator('#create-modal-confirm').click();
+    // Wait for creation to complete
+    await page.waitForTimeout(1000);
+
+    // Now try creating the same folder again
+    await createFolderBtn.click();
+    const createModal2 = page.locator('.modal-overlay.active');
+    await expect(createModal2).toBeVisible();
+    await createModal2.locator('#create-modal-input').fill('dup-dir-test');
+    await createModal2.locator('#create-modal-confirm').click();
 
     // The duplicate dialog should appear
     const dupDialog = page.locator('.modal-overlay.active');
-    await expect(dupDialog).toBeVisible();
+    await expect(dupDialog).toBeVisible({ timeout: 5000 });
     await expect(dupDialog).toContainText('文件名冲突');
 
     // Click rename to dismiss
@@ -322,26 +317,27 @@ test.describe('重名冲突弹框', () => {
     await page.goto('/admin');
     await page.waitForSelector('#file-tree', { timeout: 5000 });
 
-    // Find the first .md file name
-    const firstFileName = await page.locator('#file-tree .tree-file .tree-name').first().textContent();
-    if (!firstFileName) return;
-
-    // Click create file button
+    // First create a file
     const createFileBtn = page.locator('.mount-create-btn[title="新建文件"]').first();
     if ((await createFileBtn.count()) === 0) return;
     await createFileBtn.click();
 
     const createModal = page.locator('.modal-overlay.active');
     await expect(createModal).toBeVisible();
-
-    const nameWithoutExt = firstFileName.replace(/\.md$/i, '');
-    const input = createModal.locator('#create-modal-input');
-    await input.fill(nameWithoutExt);
+    await createModal.locator('#create-modal-input').fill('overwrite-test');
     await createModal.locator('#create-modal-confirm').click();
+    await page.waitForTimeout(1000);
+
+    // Now try creating the same file again
+    await createFileBtn.click();
+    const createModal2 = page.locator('.modal-overlay.active');
+    await expect(createModal2).toBeVisible();
+    await createModal2.locator('#create-modal-input').fill('overwrite-test');
+    await createModal2.locator('#create-modal-confirm').click();
 
     // Duplicate dialog appears
     const dupDialog = page.locator('.modal-overlay.active');
-    await expect(dupDialog).toBeVisible();
+    await expect(dupDialog).toBeVisible({ timeout: 5000 });
 
     // Click overwrite
     await dupDialog.locator('#dup-overwrite').click();
