@@ -536,7 +536,8 @@ a:hover {
   background: var(--c-canvas);
   border-radius: var(--r-lg);
   padding: var(--s-lg);
-  min-width: 300px;
+  min-width: 420px;
+  max-width: 90vw;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
@@ -560,6 +561,7 @@ a:hover {
 
 .modal-footer {
   display: flex;
+  flex-wrap: nowrap;
   gap: var(--s-sm);
   justify-content: flex-end;
 }

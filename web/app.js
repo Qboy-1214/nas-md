@@ -988,7 +988,7 @@ function showDuplicateDialog(suggestedName) {
           目标位置已存在同名文件。<br>
           重命名规则：在文件名后添加时间戳后缀，如 <code>${suggestedName}</code>
         </div>
-        <div class="modal-footer">
+        <div class="modal-actions">
           <button class="modal-btn modal-cancel" id="dup-cancel">取消</button>
           <button class="modal-btn modal-confirm" id="dup-rename">重命名</button>
           <button class="modal-btn modal-confirm" id="dup-overwrite" style="background:var(--c-error)">覆盖</button>
