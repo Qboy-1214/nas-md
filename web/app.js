@@ -2423,7 +2423,6 @@ async function saveFile({ silent = false } = {}) {
       markClean();
       clearLocalStorage(state.currentPath);
       if (!silent) showToast('已保存');
-      else showToast('自动保存完成');
     } else {
       const resp = await API.putFile(state.currentMountId, state.currentPath, content);
       if (resp && resp.error) {
