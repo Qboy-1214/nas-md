@@ -1291,11 +1291,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         logger.info(f"File API: serving {abs_path} ({os.path.getsize(abs_path)} bytes)")
         ct = _content_type(abs_path)
         try:
+            mtime = int(os.path.getmtime(abs_path) * 1000)
             with open(abs_path, "rb") as f:
                 data = f.read()
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Mod-Time", str(mtime))
             self._flush_session_cookie()
             self.end_headers()
             self.wfile.write(data)
@@ -1326,6 +1328,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("Path escapes mount root", 403)
 
         # Conflict detection: if expected_mtime given and file has been modified
+        conflict = False
         expected_mtime = qs.get("expected_mtime", [None])[0]
         if expected_mtime and os.path.isfile(abs_path):
             actual_mtime = int(os.path.getmtime(abs_path) * 1000)
@@ -1348,6 +1351,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     )
                 except OSError:
                     pass
+                conflict = True
 
         body = self._read_body()
         # Create parent dirs
@@ -1355,7 +1359,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         with open(abs_path, "wb") as f:
             f.write(body)
         st = os.stat(abs_path)
-        self._send_json({"status": "ok", "modTime": int(st.st_mtime * 1000), "size": st.st_size})
+        self._send_json(
+            {
+                "status": "ok",
+                "modTime": int(st.st_mtime * 1000),
+                "size": st.st_size,
+                "conflict": conflict,
+            }
+        )
         return abs_path
 
     def _handle_rename(self, mount_id: str, qs: dict):

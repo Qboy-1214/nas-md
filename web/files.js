@@ -95,11 +95,17 @@ const API = {
       console.error(`getFile: HTTP ${r.status}`, errText);
       return null;
     }
-    return r.text();
+    const content = await r.text();
+    const mtime = parseInt(r.headers.get('X-Mod-Time') || '0', 10);
+    return { content, mtime };
   },
 
-  async putFile(mountId, path, content) {
-    const r = await this.request(`/api/mounts/${mountId}/file?path=${encodeURIComponent(path)}`, {
+  async putFile(mountId, path, content, expectedMtime) {
+    let url = `/api/mounts/${mountId}/file?path=${encodeURIComponent(path)}`;
+    if (expectedMtime) {
+      url += `&expected_mtime=${expectedMtime}`;
+    }
+    const r = await this.request(url, {
       method: 'PUT',
       body: content,
     });

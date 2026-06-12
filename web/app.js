@@ -23,6 +23,9 @@ const state = {
   // Local mounts via File System Access API (browser-side only, no server)
   localMounts: {}, // mountId -> { handle: FileSystemDirectoryHandle, name: string }
   _fileOpInProgress: false, // lock to prevent concurrent file operations
+  // File modification tracking for conflict detection and external change sync
+  // "mountId:path" → { mtime: number, size: number }
+  fileMtimes: {},
 };
 
 // Expose state globally so files.js can access isAdmin
@@ -144,8 +147,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const mount = state.mounts.find((m) => m.id === lastMountId);
     if (mount) {
       try {
-        const content = await API.getFile(mount.id, lastPath);
-        if (content !== null) {
+        const result = await API.getFile(mount.id, lastPath);
+        if (result !== null) {
+          const content = result.content;
           state.currentPath = lastPath;
           state.currentMountId = mount.id;
           state.searchResults = [];
@@ -1556,11 +1560,11 @@ async function localToServer(srcMountId, srcPath, destMountId, destDir, action) 
       const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
       // Check if destination file already exists on server
       let destFileName = fileName;
-      const existingContent = await API.getFile(
+      const existingResult = await API.getFile(
         destMountId,
         destDir === '/' ? '/' + fileName : destDir + '/' + fileName,
       );
-      if (existingContent !== null) {
+      if (existingResult !== null) {
         const suggested = suggestRename(fileName);
         const choice = await showDuplicateDialog(suggested);
         if (choice === 'cancel') return;
@@ -1619,12 +1623,12 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       // Read file content from server
-      const content = await API.getFile(srcMountId, srcPath);
-      if (content === null) {
+      const result = await API.getFile(srcMountId, srcPath);
+      if (result === null) {
         showToast('读取服务器文件失败');
         return;
       }
-
+      const content = result.content;
       const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
 
       // Check if destination file already exists locally
@@ -2144,7 +2148,24 @@ async function openFile(path, preferredMountId, searchKeyword) {
       // Read from local File System Access API
       content = await readLocalFile(mount.id, path);
     } else {
-      content = await API.getFile(mount.id, path);
+      // Read from server API (returns { content, mtime })
+      const result = await API.getFile(mount.id, path);
+      if (result !== null) {
+        content = result.content;
+        state.fileMtimes[mount.id + ':' + path] = { mtime: result.mtime, size: content.length };
+      }
+    }
+    // Record mtime for local files
+    if (content !== null && mount._local) {
+      try {
+        const handle = await getLocalFileHandle(state.localMounts[mount.id].handle, path);
+        if (handle) {
+          const file = await handle.getFile();
+          state.fileMtimes[mount.id + ':' + path] = { mtime: file.lastModified, size: file.size };
+        }
+      } catch (_e) {
+        /* file may have been deleted */
+      }
     }
     if (content === null) {
       showToast('文件加载失败，请查看浏览器控制台获取详情');
@@ -2283,6 +2304,7 @@ function onEditorInput() {
     }
   }
 }
+window.onEditorInput = onEditorInput;
 
 // === Auto-save ===
 state.autoSave = localStorage.getItem('nasmd_autosave') !== '0';
@@ -2423,8 +2445,32 @@ async function saveFile({ silent = false } = {}) {
       markClean();
       clearLocalStorage(state.currentPath);
       if (!silent) showToast('已保存');
+      // Update mtime after local save
+      try {
+        const handle = await getLocalFileHandle(
+          state.localMounts[mount.id].handle,
+          state.currentPath,
+        );
+        if (handle) {
+          const file = await handle.getFile();
+          state.fileMtimes[mount.id + ':' + state.currentPath] = {
+            mtime: file.lastModified,
+            size: file.size,
+          };
+        }
+      } catch (_e) {
+        /* ignore */
+      }
     } else {
-      const resp = await API.putFile(state.currentMountId, state.currentPath, content);
+      // Server mount: save with optimistic lock (expected_mtime)
+      const key = state.currentMountId + ':' + state.currentPath;
+      const expectedMtime = state.fileMtimes[key]?.mtime || null;
+      const resp = await API.putFile(
+        state.currentMountId,
+        state.currentPath,
+        content,
+        expectedMtime,
+      );
       if (resp && resp.error) {
         throw new Error(resp.error);
       }
@@ -2433,6 +2479,14 @@ async function saveFile({ silent = false } = {}) {
       clearLocalStorage(state.currentPath);
       if (!silent) showToast('已保存');
       else showToast('自动保存完成');
+      // Update mtime from server response
+      if (resp && resp.modTime) {
+        state.fileMtimes[key] = { mtime: resp.modTime, size: content.length };
+      }
+      // Notify if conflict was detected
+      if (resp && resp.conflict) {
+        showToast('文件在外部已被修改，已创建冲突副本（.conflict.md）');
+      }
       // Trigger sync after save
       performSync();
     }
@@ -2806,8 +2860,48 @@ async function refreshTree() {
       }
     }
     if (changed) renderSidebar();
+    // Poll current file for external changes (local mounts only)
+    await pollCurrentFile();
   } finally {
     _refreshTreeBusy = false;
+  }
+}
+
+/**
+ * Poll the current open file for external modifications (local mounts only).
+ * If the file was modified externally and the editor has no unsaved changes,
+ * silently reload the content.
+ */
+async function pollCurrentFile() {
+  if (!state.currentPath || !state.currentMountId || !window._vditor) return;
+  const mount = state.mounts.find((m) => m.id === state.currentMountId);
+  if (!mount || !mount._local) return;
+  // Skip if editor has unsaved changes
+  if (window._vditor.getValue() !== window._originalContent) return;
+
+  try {
+    const key = state.currentMountId + ':' + state.currentPath;
+    const prev = state.fileMtimes[key];
+    if (!prev) return;
+
+    const handle = await getLocalFileHandle(
+      state.localMounts[state.currentMountId].handle,
+      state.currentPath,
+    );
+    if (!handle) return;
+    const file = await handle.getFile();
+    const newMtime = file.lastModified;
+    const newSize = file.size;
+
+    if (prev.mtime === newMtime && prev.size === newSize) return;
+
+    // File was modified externally, reload content
+    const newContent = await file.text();
+    window._vditor.setValue(newContent);
+    window._originalContent = newContent;
+    state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+  } catch (_e) {
+    // File may have been deleted, ignore
   }
 }
 
