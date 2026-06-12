@@ -177,7 +177,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           // Restore cursor/scroll position from localStorage
           try {
             const savedPos = JSON.parse(localStorage.getItem('nasmd_cursor_pos') || 'null');
-            if (savedPos) window._pendingRestore = savedPos;
+            if (savedPos) {
+              window._pendingRestore = savedPos;
+              console.log('[restore] _pendingRestore set:', JSON.stringify(savedPos));
+            } else {
+              console.log('[restore] no saved cursor pos in localStorage');
+            }
           } catch (_) {
             /* ignore */
           }
