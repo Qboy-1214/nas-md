@@ -253,7 +253,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Save cursor/scroll position before page unload
-  window.addEventListener('beforeunload', () => saveCursorScrollToStorage());
+  window.addEventListener('beforeunload', () => {
+    console.log('[beforeunload] fired, _vditor:', !!window._vditor);
+    saveCursorScrollToStorage();
+  });
 
   // Start sidebar auto-refresh (pause when tab is hidden)
   startSidebarRefresh();
