@@ -3098,7 +3098,7 @@ async function pollCurrentFile() {
       const text = await resp.text();
       newSize = text.length;
       console.log('[poll] host: prev mtime=', prev.mtime, 'new mtime=', newMtime);
-      if (prev.mtime !== newMtime || prev.size !== newSize || text !== window._vditor.getValue()) {
+      if (prev.mtime !== newMtime || prev.size !== newSize) {
         newContent = text;
       }
     }
