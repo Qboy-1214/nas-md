@@ -190,9 +190,14 @@ document.addEventListener('DOMContentLoaded', async () => {
               const handle = await getLocalFileHandle(state.localMounts[mount.id].handle, lastPath);
               if (handle) {
                 const file = await handle.getFile();
-                state.fileMtimes[mount.id + ':' + lastPath] = { mtime: file.lastModified, size: file.size };
+                state.fileMtimes[mount.id + ':' + lastPath] = {
+                  mtime: file.lastModified,
+                  size: file.size,
+                };
               }
-            } catch (_e) { /* file may have been deleted */ }
+            } catch (_e) {
+              /* file may have been deleted */
+            }
           }
           setFileInfo(mount.id, lastPath);
           state.dirty = false;
@@ -2147,7 +2152,10 @@ async function createItem(mountId, dirPath, kind) {
  * Called before switching files or destroying the editor.
  */
 function saveCursorScrollToStorage() {
-  if (!window._vditor) { console.log('[saveCursor] skip: no _vditor'); return; }
+  if (!window._vditor) {
+    console.log('[saveCursor] skip: no _vditor');
+    return;
+  }
   try {
     const vd = window._vditor.vditor;
     const mode = window._vditor.getCurrentMode();
@@ -2319,13 +2327,37 @@ async function openFile(path, preferredMountId, searchKeyword) {
       showToast('已恢复本地缓存版本');
     }
     initEditor(finalContent, state.editorMode, !!mount.readonly);
-    console.log('[openFile]', path, 'mountId=', mount.id, '_local=', mount._local, 'hasHandle=', !!state.localMounts[mount.id], 'contentLen=', content.length, 'contentRepr:', JSON.stringify(content));
+    console.log(
+      '[openFile]',
+      path,
+      'mountId=',
+      mount.id,
+      '_local=',
+      mount._local,
+      'hasHandle=',
+      !!state.localMounts[mount.id],
+      'contentLen=',
+      content.length,
+      'contentRepr:',
+      JSON.stringify(content),
+    );
     // Debug: check getValue vs _originalContent after 1000ms
     const _path = path;
     const _mountId = mount.id;
     setTimeout(() => {
       const cur = window._vditor ? window._vditor.getValue() : 'NO_VDITOR';
-      console.log('[openFile-check]', _path, 'mountId=', _mountId, 'getValue===orig:', cur === window._originalContent, 'getValue repr:', JSON.stringify(cur), 'orig repr:', JSON.stringify(window._originalContent));
+      console.log(
+        '[openFile-check]',
+        _path,
+        'mountId=',
+        _mountId,
+        'getValue===orig:',
+        cur === window._originalContent,
+        'getValue repr:',
+        JSON.stringify(cur),
+        'orig repr:',
+        JSON.stringify(window._originalContent),
+      );
     }, 1000);
     setFileInfo(mount.id, path);
     state.dirty = false;
@@ -2980,7 +3012,12 @@ async function refreshTree() {
  */
 async function pollCurrentFile() {
   if (!state.currentPath || !state.currentMountId || !window._vditor) {
-    console.log('[poll] skip: no path/mount/vditor', state.currentPath, state.currentMountId, !!window._vditor);
+    console.log(
+      '[poll] skip: no path/mount/vditor',
+      state.currentPath,
+      state.currentMountId,
+      !!window._vditor,
+    );
     return;
   }
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
@@ -3001,7 +3038,12 @@ async function pollCurrentFile() {
     const key = state.currentMountId + ':' + state.currentPath;
     const prev = state.fileMtimes[key];
     if (!prev) {
-      console.log('[poll] skip: no prev mtime for', key, 'all keys:', Object.keys(state.fileMtimes));
+      console.log(
+        '[poll] skip: no prev mtime for',
+        key,
+        'all keys:',
+        Object.keys(state.fileMtimes),
+      );
       return;
     }
 
@@ -3009,7 +3051,12 @@ async function pollCurrentFile() {
     let newSize = null;
     let newContent = null;
 
-    console.log('[poll] mount._local=', mount._local, 'has localMount=', !!state.localMounts[state.currentMountId]);
+    console.log(
+      '[poll] mount._local=',
+      mount._local,
+      'has localMount=',
+      !!state.localMounts[state.currentMountId],
+    );
 
     if (mount._local && state.localMounts[state.currentMountId]) {
       // Local mount with File System Access API handle
@@ -3032,7 +3079,10 @@ async function pollCurrentFile() {
     } else {
       // Host mount (mounted via backend /mounts.json): poll API for X-Mod-Time
       const resp = await fetch(
-        '/api/mounts/' + encodeURIComponent(state.currentMountId) + '/file?path=' + encodeURIComponent(state.currentPath),
+        '/api/mounts/' +
+          encodeURIComponent(state.currentMountId) +
+          '/file?path=' +
+          encodeURIComponent(state.currentPath),
       );
       console.log('[poll] host: resp.status=', resp.status);
       if (!resp.ok) return;
