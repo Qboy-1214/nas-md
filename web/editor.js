@@ -673,14 +673,16 @@ function initEditor(content, mode, readonly) {
         };
 
         // Multiple attempts with increasing delays for Vditor's async rendering
-        setTimeout(doRestore, 100);
-        setTimeout(doRestore, 400);
-        setTimeout(doRestore, 800);
+        // Longer documents need more time for Vditor to finish rendering
+        setTimeout(doRestore, 200);
+        setTimeout(doRestore, 600);
+        setTimeout(doRestore, 1200);
+        setTimeout(doRestore, 2000);
 
         // Cleanup
         setTimeout(() => {
           _pendingRestore = null;
-        }, 900);
+        }, 2500);
       } else {
         setTimeout(() => {
           const el = getActiveEditorEl();

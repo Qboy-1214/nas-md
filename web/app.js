@@ -260,6 +260,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   startSidebarRefresh();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
+      // Save cursor position when tab is hidden (before refresh/navigation)
+      if (window._vditor && state.currentPath) saveCursorScrollToStorage();
       stopSidebarRefresh();
     } else {
       refreshTree();
@@ -3020,9 +3022,12 @@ async function pollCurrentFile() {
       const file = await handle.getFile();
       newMtime = file.lastModified;
       newSize = file.size;
-      console.log('[poll] local: prev mtime=', prev.mtime, 'new mtime=', newMtime, 'prev size=', prev.size, 'new size=', newSize);
-      if (prev.mtime !== newMtime || prev.size !== newSize) {
-        newContent = await file.text();
+      // Always read content and compare directly (lastModified may not update reliably)
+      newContent = await file.text();
+      if (newContent === window._vditor.getValue()) {
+        // Content unchanged — update stored mtime and skip
+        state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+        return;
       }
     } else {
       // Host mount (mounted via backend /mounts.json): poll API for X-Mod-Time
@@ -3042,7 +3047,7 @@ async function pollCurrentFile() {
       }
     }
 
-    if (newContent && (prev.mtime !== newMtime || prev.size !== newSize)) {
+    if (newContent) {
       console.log('[poll] CHANGE DETECTED, updating editor');
       window._vditor.setValue(newContent);
       window._originalContent = newContent;
