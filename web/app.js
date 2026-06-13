@@ -2159,8 +2159,14 @@ function saveCursorScrollToStorage() {
   try {
     const vd = window._vditor.vditor;
     const mode = window._vditor.getCurrentMode();
-    const scrollEl =
-      mode === 'sv' ? vd.sv.element : mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
+    // IR/WYSIWYG: .vditor-reset (overflow:auto) is the actual scroll container
+    let scrollEl;
+    if (mode === 'sv') {
+      scrollEl = vd.sv.element;
+    } else {
+      const base = mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
+      scrollEl = base ? base.querySelector('.vditor-reset') || base : null;
+    }
     const maxScroll = scrollEl ? scrollEl.scrollHeight - scrollEl.clientHeight : 0;
     const scrollPercent = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 0;
     // Save cursor position details for debugging

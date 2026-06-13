@@ -314,12 +314,15 @@ function _watchOutlineToggle() {
 }
 
 // Get the scrollable element for the current editor mode
+// IR/WYSIWYG: .vditor-reset (overflow:auto) is the actual scroll container, not .vditor-ir
 function _getScrollEl(vd, mode) {
   if (!vd) return null;
   if (mode === 'sv') return vd.sv.element;
-  if (mode === 'ir') return vd.ir.element;
-  if (mode === 'wysiwyg') return vd.wysiwyg.element;
-  return null;
+  const base = mode === 'wysiwyg' ? vd.wysiwyg.element : vd.ir.element;
+  if (!base) return null;
+  // .vditor-reset has overflow:auto and is the real scrollable container
+  const reset = base.querySelector('.vditor-reset');
+  return reset || base;
 }
 
 // Find the nearest heading element at or above the cursor in the editor
