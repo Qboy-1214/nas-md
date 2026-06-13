@@ -3003,7 +3003,7 @@ async function refreshTree() {
         }
       }
     }
-    if (changed) renderSidebar();
+    renderSidebar();
     // Poll current file for external changes (local mounts only)
     await pollCurrentFile();
   } finally {
@@ -3098,7 +3098,7 @@ async function pollCurrentFile() {
       const text = await resp.text();
       newSize = text.length;
       console.log('[poll] host: prev mtime=', prev.mtime, 'new mtime=', newMtime);
-      if (prev.mtime !== newMtime || prev.size !== newSize) {
+      if (prev.mtime !== newMtime || prev.size !== newSize || text !== window._vditor.getValue()) {
         newContent = text;
       }
     }
