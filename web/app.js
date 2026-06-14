@@ -2993,8 +2993,8 @@ async function refreshTree() {
       }
     }
     renderSidebar();
-    // Poll current file for external changes (local mounts only)
-    await pollCurrentFile();
+    // Auto-refresh current file content from disk
+    await refreshFromDisk(true);
   } finally {
     _refreshTreeBusy = false;
   }
@@ -3122,15 +3122,15 @@ function stopSidebarRefresh() {
 
 // === Refresh from disk ===
 // eslint-disable-next-line no-unused-vars
-async function refreshFromDisk() {
+async function refreshFromDisk(silent) {
   if (!state.currentPath || !state.currentMountId || !window._vditor) {
-    showToast('没有打开的文件');
+    if (!silent) showToast('没有打开的文件');
     return;
   }
 
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
   if (!mount) {
-    showToast('挂载点不存在');
+    if (!silent) showToast('挂载点不存在');
     return;
   }
 
@@ -3142,7 +3142,7 @@ async function refreshFromDisk() {
       const localMount = state.localMounts[mount.id];
       const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
       if (!handle) {
-        showToast('文件可能已被删除');
+        if (!silent) showToast('文件可能已被删除');
         return;
       }
       const file = await handle.getFile();
@@ -3161,7 +3161,7 @@ async function refreshFromDisk() {
           encodeURIComponent(state.currentPath),
       );
       if (!resp.ok) {
-        showToast('文件读取失败');
+        if (!silent) showToast('文件读取失败');
         return;
       }
       content = await resp.text();
@@ -3175,11 +3175,11 @@ async function refreshFromDisk() {
     if (content !== null) {
       window._vditor.setValue(content);
       window._originalContent = content;
-      showToast('已从磁盘重新加载');
+      if (!silent) showToast('已从磁盘重新加载');
     }
   } catch (e) {
     console.error('[refreshFromDisk] error:', e);
-    showToast('重新加载失败: ' + (e.message || '未知错误'));
+    if (!silent) showToast('重新加载失败: ' + (e.message || '未知错误'));
   }
 
   // Also refresh the directory tree
