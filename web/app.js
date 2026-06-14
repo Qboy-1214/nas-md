@@ -264,19 +264,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (window._vditor && state.currentPath) saveCursorScrollToStorage();
   }, 2000);
 
-  // Start sidebar auto-refresh and file content poll (pause when tab is hidden)
+  // Start sidebar auto-refresh (pause when tab is hidden)
   startSidebarRefresh();
-  startFilePoll();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      // Save cursor position when tab is hidden (before refresh/navigation)
       if (window._vditor && state.currentPath) saveCursorScrollToStorage();
       stopSidebarRefresh();
-      stopFilePoll();
     } else {
       refreshTree();
       startSidebarRefresh();
-      startFilePoll();
     }
   });
 });
@@ -3110,6 +3106,8 @@ async function refreshTree() {
   } finally {
     _refreshTreeBusy = false;
   }
+  // Auto-refresh file content (fire-and-forget, no circular dependency)
+  refreshFromDisk(true);
 }
 
 /**
@@ -3229,25 +3227,6 @@ function stopSidebarRefresh() {
   if (_sidebarRefreshTimer) {
     clearInterval(_sidebarRefreshTimer);
     _sidebarRefreshTimer = null;
-  }
-}
-
-// === File content auto-poll ===
-let _filePollTimer = null;
-const FILE_POLL_INTERVAL = 5000; // 5 seconds
-
-function startFilePoll() {
-  if (_filePollTimer) return;
-  _filePollTimer = setInterval(() => {
-    console.log('[filePoll] tick');
-    refreshFromDisk(true);
-  }, FILE_POLL_INTERVAL);
-}
-
-function stopFilePoll() {
-  if (_filePollTimer) {
-    clearInterval(_filePollTimer);
-    _filePollTimer = null;
   }
 }
 
