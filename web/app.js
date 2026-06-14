@@ -174,8 +174,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             _deleteBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           // Show refresh button when a file is open
           const _refreshBtn = $('btn-refresh');
-          if (_refreshBtn)
-            _refreshBtn.style.display = lastPath !== '/' ? '' : 'none';
+          if (_refreshBtn) _refreshBtn.style.display = lastPath !== '/' ? '' : 'none';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           // Restore cursor/scroll position from localStorage
@@ -2981,7 +2980,6 @@ async function refreshTree() {
   try {
     // Refresh all expanded mount trees by reloading and comparing
     const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
-    let changed = false;
     for (const mountId of expandedMountIds) {
       // Collect expanded dir paths for this mount
       const expandedDirs = state.expandedMounts
@@ -2989,25 +2987,9 @@ async function refreshTree() {
         .map((k) => k.substring(mountId.length + 1));
       expandedDirs.push('/'); // always refresh root
       for (const dirPath of expandedDirs) {
-        const oldChildren = state.treeData[mountId]?.[dirPath];
         // Force reload without clearing cache first
         // This prevents the tree from collapsing if the reload fails
         await loadTree(mountId, dirPath, true);
-        const newChildren = state.treeData[mountId]?.[dirPath];
-        // Quick check if tree changed
-        if (oldChildren && newChildren) {
-          const oldNames = (oldChildren.children || [])
-            .map((e) => e.name)
-            .sort()
-            .join(',');
-          const newNames = (newChildren.children || [])
-            .map((e) => e.name)
-            .sort()
-            .join(',');
-          if (oldNames !== newNames) changed = true;
-        } else if (!oldChildren !== !newChildren) {
-          changed = true;
-        }
       }
     }
     renderSidebar();
@@ -3139,6 +3121,7 @@ function stopSidebarRefresh() {
 }
 
 // === Refresh from disk ===
+// eslint-disable-next-line no-unused-vars
 async function refreshFromDisk() {
   if (!state.currentPath || !state.currentMountId || !window._vditor) {
     showToast('没有打开的文件');
