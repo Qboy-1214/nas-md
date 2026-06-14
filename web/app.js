@@ -3220,12 +3220,16 @@ const SIDEBAR_REFRESH_INTERVAL = 5000; // 5 seconds
 
 function startSidebarRefresh() {
   if (_sidebarRefreshTimer) return;
-  _sidebarRefreshTimer = setInterval(refreshTree, SIDEBAR_REFRESH_INTERVAL);
+  async function tick() {
+    await refreshTree();
+    _sidebarRefreshTimer = setTimeout(tick, SIDEBAR_REFRESH_INTERVAL);
+  }
+  _sidebarRefreshTimer = setTimeout(tick, SIDEBAR_REFRESH_INTERVAL);
 }
 
 function stopSidebarRefresh() {
   if (_sidebarRefreshTimer) {
-    clearInterval(_sidebarRefreshTimer);
+    clearTimeout(_sidebarRefreshTimer);
     _sidebarRefreshTimer = null;
   }
 }
