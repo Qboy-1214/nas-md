@@ -172,6 +172,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             _renameBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           if (_deleteBtn)
             _deleteBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
+          // Show refresh button when a file is open
+          const _refreshBtn = $('btn-refresh');
+          if (_refreshBtn)
+            _refreshBtn.style.display = lastPath !== '/' ? '' : 'none';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           // Restore cursor/scroll position from localStorage
@@ -2323,6 +2327,9 @@ async function openFile(path, preferredMountId, searchKeyword) {
     }
     $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
+    // Show refresh button when a file is open
+    const _refreshBtn2 = $('btn-refresh');
+    if (_refreshBtn2) _refreshBtn2.style.display = path !== '/' ? '' : 'none';
     showPage('editor');
 
     if (window._vditor) window._vditor.destroy();
@@ -3129,6 +3136,71 @@ function stopSidebarRefresh() {
     clearInterval(_sidebarRefreshTimer);
     _sidebarRefreshTimer = null;
   }
+}
+
+// === Refresh from disk ===
+async function refreshFromDisk() {
+  if (!state.currentPath || !state.currentMountId || !window._vditor) {
+    showToast('没有打开的文件');
+    return;
+  }
+
+  const mount = state.mounts.find((m) => m.id === state.currentMountId);
+  if (!mount) {
+    showToast('挂载点不存在');
+    return;
+  }
+
+  try {
+    let content = null;
+
+    if (mount._local && state.localMounts[mount.id]) {
+      // Local mount: read via File System Access API
+      const localMount = state.localMounts[mount.id];
+      const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
+      if (!handle) {
+        showToast('文件可能已被删除');
+        return;
+      }
+      const file = await handle.getFile();
+      content = await file.text();
+      // Update stored mtime
+      state.fileMtimes[mount.id + ':' + state.currentPath] = {
+        mtime: file.lastModified,
+        size: file.size,
+      };
+    } else {
+      // Server mount: read via API
+      const resp = await fetch(
+        '/api/mounts/' +
+          encodeURIComponent(state.currentMountId) +
+          '/file?path=' +
+          encodeURIComponent(state.currentPath),
+      );
+      if (!resp.ok) {
+        showToast('文件读取失败');
+        return;
+      }
+      content = await resp.text();
+      const modTime = parseInt(resp.headers.get('X-Mod-Time') || '0', 10);
+      state.fileMtimes[mount.id + ':' + state.currentPath] = {
+        mtime: modTime,
+        size: content.length,
+      };
+    }
+
+    if (content !== null) {
+      window._vditor.setValue(content);
+      window._originalContent = content;
+      showToast('已从磁盘重新加载');
+    }
+  } catch (e) {
+    console.error('[refreshFromDisk] error:', e);
+    showToast('重新加载失败: ' + (e.message || '未知错误'));
+  }
+
+  // Also refresh the directory tree
+  await refreshTree();
 }
 
 // === 离线支持 ===
