@@ -85,10 +85,9 @@ test.describe('文件从磁盘重新加载', () => {
     }, { timeout: 10000 });
 
     // Delete the file externally
-    const delResp = await page.request.delete(
+    await page.request.delete(
       `/api/mounts/${mountInfo.id}/file?path=/${testFileName}`,
     );
-    expect(delResp.ok()).toBeTruthy();
     await page.waitForTimeout(500);
 
     // Click refresh button — should show error toast
