@@ -3248,19 +3248,15 @@ async function refreshFromDisk(silent) {
     let content = null;
 
     if (mount._local && state.localMounts[mount.id]) {
-      // Local mount: read via File System Access API
-      const localMount = state.localMounts[mount.id];
-      const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
-      if (!handle) {
+      // Local mount: read via readLocalFile (handles both FSAA and fallback)
+      content = await readLocalFile(mount.id, state.currentPath);
+      if (content === null) {
         if (!silent) showToast('文件可能已被删除');
         return;
       }
-      const file = await handle.getFile();
-      content = await file.text();
-      // Update stored mtime
       state.fileMtimes[mount.id + ':' + state.currentPath] = {
-        mtime: file.lastModified,
-        size: file.size,
+        mtime: Date.now(),
+        size: content.length,
       };
     } else {
       // Server mount: read via API
