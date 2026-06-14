@@ -520,18 +520,36 @@ async function buildTreeFromFileMap(fileMap, parentPath) {
 
 async function readLocalFile(mountId, path) {
   const localMount = state.localMounts[mountId];
-  if (!localMount) return null;
+  if (!localMount) {
+    console.log('[readLocalFile] no localMount for', mountId);
+    return null;
+  }
   try {
-    // Fallback mode: read from File object stored in fileMap
     if (localMount.fileMap) {
       const file = localMount.fileMap[path];
-      if (!file) return null;
+      if (!file) {
+        console.log(
+          '[readLocalFile] fileMap miss for',
+          path,
+          'keys:',
+          Object.keys(localMount.fileMap).slice(0, 5),
+        );
+        return null;
+      }
+      console.log(
+        `[readLocalFile] reading from fileMap, size=${file.size} lastModified=${file.lastModified}`,
+      );
       return await file.text();
     }
-    // Primary mode: read via FileSystemDirectoryHandle
     const handle = await getLocalFileHandle(localMount.handle, path);
-    if (!handle) return null;
+    if (!handle) {
+      console.log('[readLocalFile] getLocalFileHandle returned null for', path);
+      return null;
+    }
     const file = await handle.getFile();
+    console.log(
+      `[readLocalFile] reading via FSAA, size=${file.size} lastModified=${file.lastModified}`,
+    );
     return await file.text();
   } catch (e) {
     console.error('readLocalFile error:', e);
@@ -3220,7 +3238,10 @@ const FILE_POLL_INTERVAL = 5000; // 5 seconds
 
 function startFilePoll() {
   if (_filePollTimer) return;
-  _filePollTimer = setInterval(() => refreshFromDisk(true), FILE_POLL_INTERVAL);
+  _filePollTimer = setInterval(() => {
+    console.log('[filePoll] tick');
+    refreshFromDisk(true);
+  }, FILE_POLL_INTERVAL);
 }
 
 function stopFilePoll() {
@@ -3248,12 +3269,21 @@ async function refreshFromDisk(silent) {
     let content = null;
 
     if (mount._local && state.localMounts[mount.id]) {
-      // Local mount: read via readLocalFile (handles both FSAA and fallback)
+      const localMount = state.localMounts[mount.id];
+      const hasHandle = !!localMount.handle;
+      const hasFileMap = !!localMount.fileMap;
+      console.log('[refreshFromDisk] local mount, handle=' + hasHandle + ', fileMap=' + hasFileMap);
       content = await readLocalFile(mount.id, state.currentPath);
       if (content === null) {
+        console.log('[refreshFromDisk] readLocalFile returned null');
         if (!silent) showToast('文件可能已被删除');
         return;
       }
+      const currentVal = window._vditor.getValue();
+      const same = content === currentVal;
+      console.log(
+        `[refreshFromDisk] disk=${content.length} editor=${currentVal.length} same=${same}`,
+      );
       state.fileMtimes[mount.id + ':' + state.currentPath] = {
         mtime: Date.now(),
         size: content.length,
