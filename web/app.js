@@ -424,6 +424,97 @@ async function readLocalDir(dirHandle, parentPath) {
   return { name: dirHandle.name, path: parentPath, isDir: true, children, hasMd, isEmpty };
 }
 
+async function buildTreeFromFileMap(fileMap, parentPath) {
+  const entries = [];
+  const dirMap = {};
+
+  for (const [filePath, file] of Object.entries(fileMap)) {
+    let valid = false;
+    try {
+      await file.slice(0, 1).arrayBuffer();
+      valid = true;
+    } catch (_) {
+      /* file deleted externally */
+    }
+    if (!valid) continue;
+
+    const relFromRoot = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+    const parts = relFromRoot.split('/');
+    let currentPath = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      const prev = currentPath;
+      currentPath = currentPath ? currentPath + '/' + parts[i] : parts[i];
+      if (!dirMap['/' + currentPath]) {
+        dirMap['/' + currentPath] = {
+          name: parts[i],
+          path: '/' + currentPath,
+          isDir: true,
+          children: [],
+          hasMd: false,
+        };
+        if (prev) {
+          dirMap['/' + prev].children.push(dirMap['/' + currentPath]);
+        }
+      }
+    }
+    const parentDirPath = currentPath ? '/' + currentPath : '/';
+    const fileName = parts[parts.length - 1];
+    const entry = {
+      name: fileName,
+      path: filePath,
+      isDir: false,
+      hasMd: true,
+      size: file.size,
+      modTime: file.lastModified,
+    };
+    if (dirMap[parentDirPath]) {
+      dirMap[parentDirPath].children.push(entry);
+    } else {
+      entries.push(entry);
+    }
+  }
+
+  function markHasMd(dirEntry) {
+    let found = false;
+    for (const child of dirEntry.children) {
+      if (child.isDir) {
+        if (markHasMd(child)) found = true;
+      } else if (child.hasMd) {
+        found = true;
+      }
+    }
+    dirEntry.hasMd = found;
+    return found;
+  }
+  for (const dirEntry of Object.values(dirMap)) {
+    dirEntry.children.sort((a, b) => {
+      if (a.isDir && !b.isDir) return -1;
+      if (!a.isDir && b.isDir) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+  const root = dirMap['/'] || {
+    name: '/',
+    path: '/',
+    isDir: true,
+    children: [],
+    hasMd: false,
+  };
+  if (root.children.length === 0) root.children = entries;
+  markHasMd(root);
+
+  if (parentPath === '/') return root;
+  return (
+    dirMap[parentPath] || {
+      name: parentPath.split('/').pop(),
+      path: parentPath,
+      isDir: true,
+      children: [],
+      hasMd: false,
+    }
+  );
+}
+
 async function readLocalFile(mountId, path) {
   const localMount = state.localMounts[mountId];
   if (!localMount) return null;
@@ -689,18 +780,25 @@ async function loadTree(mountId, path, force = false) {
   // Local mount: load via File System Access API
   const mount = state.mounts.find((m) => m.id === mountId);
   if (mount && mount._local && state.localMounts[mountId]) {
-    // Fallback mode: tree already built by onDirPicked, skip even on force
-    if (state.localMounts[mountId].fileMap) return;
-    try {
-      const localMount = state.localMounts[mountId];
-      const dirHandle = await getLocalDirHandle(localMount.handle, path);
-      if (!dirHandle) return;
-      const result = await readLocalDir(dirHandle, path);
-      state.treeData[mountId][path] = result;
-    } catch (e) {
-      console.error('Failed to load local tree:', e);
+    const localMount = state.localMounts[mountId];
+    // FSAA mode: read live directory handle
+    if (localMount.handle) {
+      try {
+        const dirHandle = await getLocalDirHandle(localMount.handle, path);
+        if (!dirHandle) return;
+        const result = await readLocalDir(dirHandle, path);
+        state.treeData[mountId][path] = result;
+      } catch (e) {
+        console.error('Failed to load local tree:', e);
+      }
+      return;
     }
-    return;
+    // Fallback mode (webkitdirectory): rebuild tree from fileMap
+    if (localMount.fileMap) {
+      const tree = buildTreeFromFileMap(localMount.fileMap, path);
+      state.treeData[mountId][path] = tree;
+      return;
+    }
   }
   try {
     const tree = await API.getTree(mountId, path);
