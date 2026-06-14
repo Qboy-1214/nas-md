@@ -264,16 +264,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (window._vditor && state.currentPath) saveCursorScrollToStorage();
   }, 2000);
 
-  // Start sidebar auto-refresh (pause when tab is hidden)
+  // Start sidebar auto-refresh and file content poll (pause when tab is hidden)
   startSidebarRefresh();
+  startFilePoll();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       // Save cursor position when tab is hidden (before refresh/navigation)
       if (window._vditor && state.currentPath) saveCursorScrollToStorage();
       stopSidebarRefresh();
+      stopFilePoll();
     } else {
       refreshTree();
       startSidebarRefresh();
+      startFilePoll();
     }
   });
 });
@@ -3072,27 +3075,20 @@ function collectFileMtimes(entries, files) {
 let _refreshTreeBusy = false;
 
 async function refreshTree() {
-  // Prevent concurrent refresh
   if (_refreshTreeBusy) return;
   _refreshTreeBusy = true;
   try {
-    // Refresh all expanded mount trees by reloading and comparing
     const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
     for (const mountId of expandedMountIds) {
-      // Collect expanded dir paths for this mount
       const expandedDirs = state.expandedMounts
         .filter((k) => k.startsWith(mountId + ':'))
         .map((k) => k.substring(mountId.length + 1));
-      expandedDirs.push('/'); // always refresh root
+      expandedDirs.push('/');
       for (const dirPath of expandedDirs) {
-        // Force reload without clearing cache first
-        // This prevents the tree from collapsing if the reload fails
         await loadTree(mountId, dirPath, true);
       }
     }
     renderSidebar();
-    // Auto-refresh current file content from disk
-    await refreshFromDisk(true);
   } finally {
     _refreshTreeBusy = false;
   }
@@ -3218,6 +3214,22 @@ function stopSidebarRefresh() {
   }
 }
 
+// === File content auto-poll ===
+let _filePollTimer = null;
+const FILE_POLL_INTERVAL = 5000; // 5 seconds
+
+function startFilePoll() {
+  if (_filePollTimer) return;
+  _filePollTimer = setInterval(() => refreshFromDisk(true), FILE_POLL_INTERVAL);
+}
+
+function stopFilePoll() {
+  if (_filePollTimer) {
+    clearInterval(_filePollTimer);
+    _filePollTimer = null;
+  }
+}
+
 // === Refresh from disk ===
 // eslint-disable-next-line no-unused-vars
 async function refreshFromDisk(silent) {
@@ -3279,9 +3291,6 @@ async function refreshFromDisk(silent) {
     console.error('[refreshFromDisk] error:', e);
     if (!silent) showToast('重新加载失败: ' + (e.message || '未知错误'));
   }
-
-  // Also refresh the directory tree
-  await refreshTree();
 }
 
 // === 离线支持 ===
