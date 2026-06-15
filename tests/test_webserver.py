@@ -990,7 +990,9 @@ class TestFileModTimeHeader:
             f"{writable_server_url}/api/mounts/writable/file?path=/hello.md"
         )
         assert status == 200
-        assert "x-mod-time" in headers, f"Missing X-Mod-Time header, got headers: {list(headers.keys())}"
+        assert (
+            "x-mod-time" in headers
+        ), f"Missing X-Mod-Time header, got headers: {list(headers.keys())}"
         mtime_str = headers["x-mod-time"]
         mtime = int(mtime_str)
         # Should be a reasonable millisecond timestamp (after year 2020)
@@ -1005,9 +1007,9 @@ class TestFileModTimeHeader:
         mtime_from_header = int(headers["x-mod-time"])
         actual_mtime_ms = int(os.path.getmtime(os.path.join(writable_dir, "hello.md")) * 1000)
         # Allow 1 second tolerance (filesystem mtime precision)
-        assert abs(mtime_from_header - actual_mtime_ms) < 2000, (
-            f"X-Mod-Time {mtime_from_header} too far from actual mtime {actual_mtime_ms}"
-        )
+        assert (
+            abs(mtime_from_header - actual_mtime_ms) < 2000
+        ), f"X-Mod-Time {mtime_from_header} too far from actual mtime {actual_mtime_ms}"
 
     def test_mod_time_updates_after_write(self, writable_server_url, writable_dir):
         """X-Mod-Time should change after file is modified."""
@@ -1048,8 +1050,12 @@ class TestCrossMountMoveSuccess:
         mgr = MountManager([])
         from nas_md.webserver import MountEntry
 
-        mgr.mounts.insert(0, MountEntry("mount-a", "Mount A", dir_a, public=True, readonly=False, host=True))
-        mgr.mounts.insert(1, MountEntry("mount-b", "Mount B", dir_b, public=True, readonly=False, host=True))
+        mgr.mounts.insert(
+            0, MountEntry("mount-a", "Mount A", dir_a, public=True, readonly=False, host=True)
+        )
+        mgr.mounts.insert(
+            1, MountEntry("mount-b", "Mount B", dir_b, public=True, readonly=False, host=True)
+        )
         MountHTTPHandler.mount_manager = mgr
         MountHTTPHandler.web_root = web_root
         MountHTTPHandler.search_dirs = [dir_a, dir_b]
@@ -1149,8 +1155,12 @@ class TestCrossMountCopySuccess:
         mgr = MountManager([])
         from nas_md.webserver import MountEntry
 
-        mgr.mounts.insert(0, MountEntry("mount-a", "Mount A", dir_a, public=True, readonly=False, host=True))
-        mgr.mounts.insert(1, MountEntry("mount-b", "Mount B", dir_b, public=True, readonly=False, host=True))
+        mgr.mounts.insert(
+            0, MountEntry("mount-a", "Mount A", dir_a, public=True, readonly=False, host=True)
+        )
+        mgr.mounts.insert(
+            1, MountEntry("mount-b", "Mount B", dir_b, public=True, readonly=False, host=True)
+        )
         MountHTTPHandler.mount_manager = mgr
         MountHTTPHandler.web_root = web_root
         MountHTTPHandler.search_dirs = [dir_a, dir_b]
