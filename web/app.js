@@ -187,6 +187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             /* ignore */
           }
           initEditor(content, state.editorMode, !!mount.readonly);
+          window._originalContent = content;
           // Record mtime for local mounts
           if (mount._local) {
             try {
@@ -2454,38 +2455,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
       showToast('已恢复本地缓存版本');
     }
     initEditor(finalContent, state.editorMode, !!mount.readonly);
-    console.log(
-      '[openFile]',
-      path,
-      'mountId=',
-      mount.id,
-      '_local=',
-      mount._local,
-      'hasHandle=',
-      !!state.localMounts[mount.id],
-      'contentLen=',
-      content.length,
-      'contentRepr:',
-      JSON.stringify(content),
-    );
-    // Debug: check getValue vs _originalContent after 1000ms
-    const _path = path;
-    const _mountId = mount.id;
-    setTimeout(() => {
-      const cur = window._vditor ? window._vditor.getValue() : 'NO_VDITOR';
-      console.log(
-        '[openFile-check]',
-        _path,
-        'mountId=',
-        _mountId,
-        'getValue===orig:',
-        cur === window._originalContent,
-        'getValue repr:',
-        JSON.stringify(cur),
-        'orig repr:',
-        JSON.stringify(window._originalContent),
-      );
-    }, 1000);
+    window._originalContent = finalContent;
     setFileInfo(mount.id, path);
     state.dirty = false;
     startDirtyCheck();
@@ -3171,7 +3141,7 @@ async function pollCurrentFile() {
       state.fileMtimes[key] = { mtime: newMtime, size: newSize };
     }
   } catch (_e) {
-    // File may have been deleted, ignore
+    /* file may have been deleted, ignore */
   }
 }
 
