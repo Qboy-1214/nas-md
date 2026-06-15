@@ -170,10 +170,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           // Show rename/delete buttons if writable and not root
           const _renameBtn = $('rename-top-btn');
           const _deleteBtn = $('delete-top-btn');
+          const _downloadBtn = $('download-top-btn');
+          const _exportPdfBtn = $('export-pdf-top-btn');
           if (_renameBtn)
             _renameBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           if (_deleteBtn)
             _deleteBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
+          if (_downloadBtn)
+            _downloadBtn.style.display = lastPath !== '/' && lastPath.endsWith('.md') ? '' : 'none';
+          if (_exportPdfBtn)
+            _exportPdfBtn.style.display =
+              lastPath !== '/' && lastPath.endsWith('.md') ? '' : 'none';
           // Show refresh button when a file is open
           const _refreshBtn = $('btn-refresh');
           if (_refreshBtn) _refreshBtn.style.display = lastPath !== '/' ? '' : 'none';
@@ -1941,6 +1948,8 @@ async function deleteCurrentFile() {
     $('breadcrumb').textContent = '';
     $('rename-top-btn').style.display = 'none';
     $('delete-top-btn').style.display = 'none';
+    $('download-top-btn').style.display = 'none';
+    $('export-pdf-top-btn').style.display = 'none';
     $('editor-modes').style.display = 'none';
     $('save-group').style.display = 'none';
     if (window._vditor) window._vditor.destroy();
@@ -1950,6 +1959,59 @@ async function deleteCurrentFile() {
     console.error('Delete failed:', e);
     showToast('删除失败');
   }
+}
+
+function downloadCurrentFile() {
+  const path = state.currentPath;
+  const mountId = state.currentMountId;
+  if (!path || !mountId || path === '/') return;
+
+  const name = path.substring(path.lastIndexOf('/') + 1);
+  const content = window._vditor ? window._vditor.getValue() : '';
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('已下载 ' + name);
+}
+
+function exportCurrentPDF() {
+  const path = state.currentPath;
+  const mountId = state.currentMountId;
+  if (!path || !mountId || path === '/') return;
+
+  if (!window._vditor) return;
+  const html = window._vditor.getHTML();
+  const name = path.substring(path.lastIndexOf('/') + 1).replace(/\.md$/i, '');
+
+  const printWin = window.open('', '_blank');
+  if (!printWin) {
+    showToast('请允许弹出窗口以导出PDF');
+    return;
+  }
+  printWin.document.write(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${name}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #333; line-height: 1.6; }
+  h1, h2, h3, h4, h5, h6 { margin-top: 1.5em; margin-bottom: 0.5em; }
+  pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }
+  code { background: #f5f5f5; padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin: 1em 0; padding: 0.5em 1em; color: #666; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  img { max-width: 100%; }
+  @media print { body { margin: 0; padding: 0; } }
+</style></head><body>${html}</body></html>`);
+  printWin.document.close();
+  printWin.onload = () => {
+    printWin.print();
+  };
 }
 
 function showRenameModal() {
@@ -2499,11 +2561,20 @@ async function openFile(path, preferredMountId, searchKeyword) {
     // Show rename/delete buttons if file is writable and not root
     const renameBtn = $('rename-top-btn');
     const deleteBtn = $('delete-top-btn');
+    const downloadBtn = $('download-top-btn');
+    const exportPdfBtn = $('export-pdf-top-btn');
     if (renameBtn) {
       renameBtn.style.display = !mount.readonly && path !== '/' ? '' : 'none';
     }
     if (deleteBtn) {
       deleteBtn.style.display = !mount.readonly && path !== '/' ? '' : 'none';
+    }
+    // Download and export PDF: show for any md file (readonly is ok)
+    if (downloadBtn) {
+      downloadBtn.style.display = path !== '/' && path.endsWith('.md') ? '' : 'none';
+    }
+    if (exportPdfBtn) {
+      exportPdfBtn.style.display = path !== '/' && path.endsWith('.md') ? '' : 'none';
     }
     $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
