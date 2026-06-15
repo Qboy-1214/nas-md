@@ -211,7 +211,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 mtime: serverMtime,
                 size: content.length,
               };
-              console.log('[restore] server mount mtime recorded:', serverMtime, 'size:', content.length);
+              console.log(
+                '[restore] server mount mtime recorded:',
+                serverMtime,
+                'size:',
+                content.length,
+              );
             } else {
               console.log('[restore] server mount: no mtime from API response');
             }

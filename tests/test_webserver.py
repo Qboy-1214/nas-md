@@ -1106,7 +1106,7 @@ class TestCrossMountMoveSuccess:
 
     def test_cross_mount_move_duplicate_returns_409(self, dual_mount_server):
         """Cross-mount move to existing file should return 409 with suggested name."""
-        url, dir_a, dir_b = dual_mount_server
+        url, _dir_a, dir_b = dual_mount_server
         # Create a file with same name in destination
         with open(os.path.join(dir_b, "source.md"), "w", encoding="utf-8") as f:
             f.write("# Existing\n")
@@ -1194,7 +1194,7 @@ class TestCrossMountCopySuccess:
 
     def test_cross_mount_copy_duplicate_returns_409(self, dual_mount_server):
         """Cross-mount copy to existing file should return 409."""
-        url, dir_a, dir_b = dual_mount_server
+        url, _dir_a, dir_b = dual_mount_server
         with open(os.path.join(dir_b, "original.md"), "w", encoding="utf-8") as f:
             f.write("# Existing\n")
         status, body = _post(
