@@ -2072,35 +2072,28 @@ function exportCurrentPDF() {
   if (!window._vditor) return;
   const name = path.substring(path.lastIndexOf('/') + 1).replace(/\.md$/i, '');
 
-  // Build a temporary container with Vditor's rendered preview HTML
-  const html = window._vditor.getHTML();
-  const container = document.createElement('div');
-  container.innerHTML = html;
-  container.style.cssText =
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.6;padding:20px;max-width:800px;';
-  document.body.appendChild(container);
+  // Switch to preview mode first to ensure mermaid diagrams are rendered,
+  // then use browser's native print to produce a real PDF with selectable
+  // text, searchable content, and proper SVG rendering.
+  const prevMode = window._vditor.getCurrentMode();
+  window._vditor.preview();
 
-  showToast('正在生成PDF...');
+  // Wait for mermaid and other async renders to complete
+  setTimeout(() => {
+    document.title = name;
+    window.print();
 
-  html2pdf()
-    .set({
-      margin: [10, 10, 10, 10],
-      filename: name + '.pdf',
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-    })
-    .from(container)
-    .save()
-    .then(() => {
-      document.body.removeChild(container);
-      showToast('PDF已导出');
-    })
-    .catch((err) => {
-      document.body.removeChild(container);
-      console.error('PDF export failed:', err);
-      showToast('PDF导出失败');
-    });
+    // Restore previous editor mode after print dialog closes
+    setTimeout(() => {
+      if (prevMode === 'ir') {
+        window._vditor.ir();
+      } else if (prevMode === 'sv') {
+        window._vditor.sv();
+      } else if (prevMode === 'wysiwyg') {
+        window._vditor.wysiwyg();
+      }
+    }, 100);
+  }, 1000);
 }
 
 function shareCurrentFile() {

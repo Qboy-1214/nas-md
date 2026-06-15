@@ -30,7 +30,6 @@ export default [
         Event: "readonly",
         FormData: "readonly",
         Blob: "readonly",
-        html2pdf: "readonly",
         URL: "readonly",
         URLSearchParams: "readonly",
         DOMParser: "readonly",

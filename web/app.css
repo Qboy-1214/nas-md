@@ -2175,3 +2175,79 @@ a:hover {
     --sidebar-w: 260px;
   }
 }
+
+/* === Print / Export PDF === */
+@media print {
+  /* Hide everything except the editor content */
+  .sidebar,
+  .topbar,
+  .toast,
+  .modal-overlay,
+  #new-file-modal,
+  .rename-top-btn,
+  #share-top-btn,
+  .vditor-toolbar,
+  .vditor-preview__action {
+    display: none !important;
+  }
+
+  /* Remove layout constraints */
+  .layout {
+    display: block !important;
+  }
+
+  /* Expand editor to full page */
+  .main-content {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  #vditor {
+    border: none !important;
+    height: auto !important;
+  }
+
+  /* In preview mode, the entire content is in .vditor-preview */
+  .vditor-preview {
+    width: 100% !important;
+    padding: 0 !important;
+  }
+
+  /* Ensure preview content has good print styling */
+  .vditor-reset {
+    max-width: 100% !important;
+    padding: 0 !important;
+    color: #000 !important;
+    background: #fff !important;
+  }
+
+  /* Force light theme for print */
+  .vditor-ir,
+  .vditor-wysiwyg,
+  .vditor-preview {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* Ensure SVGs (mermaid diagrams) render properly */
+  .vditor-reset svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Avoid breaking inside elements */
+  blockquote,
+  table,
+  pre,
+  svg,
+  img {
+    break-inside: avoid;
+  }
+
+  /* Page margins */
+  @page {
+    margin: 15mm;
+  }
+}
