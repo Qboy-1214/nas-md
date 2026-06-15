@@ -148,11 +148,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (mount) {
       try {
         let content;
+        let serverMtime = null;
         if (mount._local && state.localMounts[mount.id]) {
           content = await readLocalFile(mount.id, lastPath);
         } else {
           const result = await API.getFile(mount.id, lastPath);
           content = result ? result.content : null;
+          if (result && result.mtime) serverMtime = result.mtime;
         }
         if (content !== null) {
           state.currentPath = lastPath;
@@ -188,7 +190,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
           initEditor(content, state.editorMode, !!mount.readonly);
           window._originalContent = content;
-          // Record mtime for local mounts
+          // Record mtime for all mounts
           if (mount._local) {
             try {
               const handle = await getLocalFileHandle(state.localMounts[mount.id].handle, lastPath);
@@ -201,6 +203,17 @@ document.addEventListener('DOMContentLoaded', async () => {
               }
             } catch (_e) {
               /* file may have been deleted */
+            }
+          } else {
+            // Server mount: use mtime from the initial API response
+            if (serverMtime) {
+              state.fileMtimes[mount.id + ':' + lastPath] = {
+                mtime: serverMtime,
+                size: content.length,
+              };
+              console.log('[restore] server mount mtime recorded:', serverMtime, 'size:', content.length);
+            } else {
+              console.log('[restore] server mount: no mtime from API response');
             }
           }
           setFileInfo(mount.id, lastPath);
@@ -235,6 +248,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             renderSidebar();
           })();
           renderSidebar();
+
+          // Start auto-refresh timers (normally set up after the fallback block,
+          // but we return early here so must start them before returning)
+          window.addEventListener('beforeunload', () => saveCursorScrollToStorage());
+          setInterval(() => {
+            if (window._vditor && state.currentPath) saveCursorScrollToStorage();
+          }, 2000);
+          startSidebarRefresh();
+          startFilePoll();
+          document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+              if (window._vditor && state.currentPath) saveCursorScrollToStorage();
+              stopSidebarRefresh();
+              stopFilePoll();
+            } else {
+              refreshTree();
+              startSidebarRefresh();
+              startFilePoll();
+            }
+          });
           return;
         }
       } catch (e) {
@@ -267,13 +300,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Start sidebar auto-refresh (pause when tab is hidden)
   startSidebarRefresh();
+  startFilePoll();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       if (window._vditor && state.currentPath) saveCursorScrollToStorage();
       stopSidebarRefresh();
+      stopFilePoll();
     } else {
       refreshTree();
       startSidebarRefresh();
+      startFilePoll();
     }
   });
 });
@@ -797,6 +833,17 @@ async function loadTree(mountId, path, force = false) {
   if (!force && state.treeData[mountId][path]) return;
   // Local mount: load via File System Access API
   const mount = state.mounts.find((m) => m.id === mountId);
+  console.log(
+    '[loadTree]',
+    mountId,
+    path,
+    'force=',
+    force,
+    'local=',
+    mount?._local,
+    'hasLocalMount=',
+    !!state.localMounts[mountId],
+  );
   if (mount && mount._local && state.localMounts[mountId]) {
     const localMount = state.localMounts[mountId];
     // FSAA mode: read live directory handle
@@ -1202,6 +1249,8 @@ function setupDragDrop() {
     };
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', _dragData.path);
+    // Store structured drag info so drop handler can recover if dragend fires first
+    e.dataTransfer.setData('application/x-nasmd-drag', JSON.stringify(_dragData));
     el.classList.add('dragging');
   });
 
@@ -1260,6 +1309,16 @@ function setupDragDrop() {
     const destPath = dropEl.dataset.dropPath;
 
     dropEl.classList.remove('drop-target');
+
+    // Recover _dragData if dragend cleared it before drop fired
+    if (!_dragData) {
+      try {
+        const dragJson = e.dataTransfer.getData('application/x-nasmd-drag');
+        if (dragJson) _dragData = JSON.parse(dragJson);
+      } catch (_) {
+        /* ignore */
+      }
+    }
 
     // Handle external file drop (from OS file manager)
     if (!_dragData && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
@@ -1398,6 +1457,7 @@ function setupDragDrop() {
       }
     } finally {
       state._fileOpInProgress = false;
+      _dragData = null;
     }
   });
 }
@@ -3063,6 +3123,12 @@ async function refreshTree() {
   _refreshTreeBusy = true;
   try {
     const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
+    console.log(
+      '[refreshTree] expandedMounts=',
+      expandedMountIds,
+      'allMounts=',
+      state.mounts.map((m) => m.id + '(' + (m._local ? 'local' : 'server') + ')'),
+    );
     for (const mountId of expandedMountIds) {
       const expandedDirs = state.expandedMounts
         .filter((k) => k.startsWith(mountId + ':'))
@@ -3076,8 +3142,6 @@ async function refreshTree() {
   } finally {
     _refreshTreeBusy = false;
   }
-  // Auto-refresh file content (fire-and-forget, no circular dependency)
-  pollCurrentFile();
 }
 
 /**
@@ -3086,16 +3150,53 @@ async function refreshTree() {
  * silently reload the content.
  */
 async function pollCurrentFile() {
-  if (!state.currentPath || !state.currentMountId || !window._vditor) return;
+  if (!state.currentPath || !state.currentMountId || !window._vditor) {
+    console.log('[poll] skip: no path/mount/vditor', {
+      path: state.currentPath,
+      mountId: state.currentMountId,
+      vditor: !!window._vditor,
+    });
+    return;
+  }
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (!mount) return;
+  if (!mount) {
+    console.log('[poll] skip: mount not found for', state.currentMountId);
+    return;
+  }
+  const curVal = window._vditor.getValue();
+  const origVal = window._originalContent;
+  console.log(
+    '[poll] checking',
+    state.currentPath,
+    'local=',
+    mount._local,
+    'dirty=',
+    curVal !== origVal,
+    'curLen=',
+    curVal?.length,
+    'origLen=',
+    origVal?.length,
+    'origType=',
+    typeof origVal,
+  );
   // Skip if editor has unsaved changes
-  if (window._vditor.getValue() !== window._originalContent) return;
+  if (curVal !== origVal) {
+    console.log('[poll] skip: editor has unsaved changes');
+    return;
+  }
 
   try {
     const key = state.currentMountId + ':' + state.currentPath;
     const prev = state.fileMtimes[key];
-    if (!prev) return;
+    if (!prev) {
+      console.log(
+        '[poll] skip: no fileMtimes entry for',
+        key,
+        'allKeys=',
+        Object.keys(state.fileMtimes),
+      );
+      return;
+    }
 
     let newMtime = null;
     let newSize = null;
@@ -3104,32 +3205,70 @@ async function pollCurrentFile() {
     if (mount._local && state.localMounts[state.currentMountId]) {
       // Local mount with File System Access API handle
       const localMount = state.localMounts[state.currentMountId];
+      console.log(
+        '[poll] local mount: handle=',
+        !!localMount.handle,
+        'fileMap=',
+        !!localMount.fileMap,
+      );
       const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
-      if (!handle) return;
+      if (!handle) {
+        console.log('[poll] skip: getLocalFileHandle returned null for', state.currentPath);
+        return;
+      }
       const file = await handle.getFile();
       newMtime = file.lastModified;
       newSize = file.size;
       // Always read content and compare directly (lastModified may not update reliably)
       newContent = await file.text();
-      if (newContent === window._vditor.getValue()) {
+      console.log(
+        '[poll] local: diskLen=',
+        newContent.length,
+        'editorLen=',
+        curVal.length,
+        'diskMtime=',
+        newMtime,
+        'prevMtime=',
+        prev.mtime,
+        'same=',
+        newContent === curVal,
+      );
+      if (newContent === curVal) {
         // Content unchanged — update stored mtime and skip
         state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+        console.log('[poll] content unchanged, updated mtime');
         return;
       }
+      console.log('[poll] CHANGE DETECTED, reloading editor...');
     } else {
       // Host mount (mounted via backend /mounts.json): poll API for X-Mod-Time
+      console.log('[poll] server mount: fetching mtime...');
       const resp = await fetch(
         '/api/mounts/' +
           encodeURIComponent(state.currentMountId) +
           '/file?path=' +
           encodeURIComponent(state.currentPath),
       );
+      console.log('[poll] server mount: resp.status=', resp.status);
       if (!resp.ok) return;
       const modTimeHeader = resp.headers.get('X-Mod-Time');
-      if (!modTimeHeader) return;
+      if (!modTimeHeader) {
+        console.log('[poll] server mount: no X-Mod-Time header');
+        return;
+      }
       newMtime = parseInt(modTimeHeader, 10);
       const text = await resp.text();
       newSize = text.length;
+      console.log(
+        '[poll] server: newMtime=',
+        newMtime,
+        'prevMtime=',
+        prev.mtime,
+        'newSize=',
+        newSize,
+        'prevSize=',
+        prev.size,
+      );
       if (prev.mtime !== newMtime || prev.size !== newSize) {
         newContent = text;
       }
@@ -3139,15 +3278,38 @@ async function pollCurrentFile() {
       window._vditor.setValue(newContent);
       window._originalContent = newContent;
       state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+      console.log('[poll] DONE: editor reloaded with new content');
+    } else {
+      console.log('[poll] no content change needed');
     }
-  } catch (_e) {
-    /* file may have been deleted, ignore */
+  } catch (e) {
+    console.log('[poll] ERROR:', e.message || e);
   }
 }
 
 // === Sidebar auto-refresh ===
 let _sidebarRefreshTimer = null;
-const SIDEBAR_REFRESH_INTERVAL = 5000; // 5 seconds
+const SIDEBAR_REFRESH_INTERVAL = 1000; // 1 second
+
+// === File content auto-poll (independent from sidebar refresh) ===
+let _filePollTimer = null;
+const FILE_POLL_INTERVAL = 1000; // 1 second
+
+function startFilePoll() {
+  if (_filePollTimer) return;
+  async function tick() {
+    await pollCurrentFile();
+    _filePollTimer = setTimeout(tick, FILE_POLL_INTERVAL);
+  }
+  _filePollTimer = setTimeout(tick, FILE_POLL_INTERVAL);
+}
+
+function stopFilePoll() {
+  if (_filePollTimer) {
+    clearTimeout(_filePollTimer);
+    _filePollTimer = null;
+  }
+}
 
 function startSidebarRefresh() {
   if (_sidebarRefreshTimer) return;

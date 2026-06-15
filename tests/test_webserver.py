@@ -979,3 +979,238 @@ class TestSearchVisibility:
             assert "mount_id" in r, f"Result missing mount_id: {r}"
             assert "rel_path" in r, f"Result missing rel_path: {r}"
             assert r["mount_id"] is not None, f"mount_id should not be None: {r}"
+
+
+class TestFileModTimeHeader:
+    """Test that GET /api/mounts/{id}/file returns X-Mod-Time header."""
+
+    def test_file_response_has_mod_time_header(self, writable_server_url, writable_dir):
+        """GET file should include X-Mod-Time header with millisecond timestamp."""
+        status, _body, headers = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path=/hello.md"
+        )
+        assert status == 200
+        assert "x-mod-time" in headers, f"Missing X-Mod-Time header, got headers: {list(headers.keys())}"
+        mtime_str = headers["x-mod-time"]
+        mtime = int(mtime_str)
+        # Should be a reasonable millisecond timestamp (after year 2020)
+        assert mtime > 1577836800000, f"X-Mod-Time seems too old: {mtime}"
+
+    def test_mod_time_matches_file_mtime(self, writable_server_url, writable_dir):
+        """X-Mod-Time should match the file's actual mtime in milliseconds."""
+        status, _body, headers = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path=/hello.md"
+        )
+        assert status == 200
+        mtime_from_header = int(headers["x-mod-time"])
+        actual_mtime_ms = int(os.path.getmtime(os.path.join(writable_dir, "hello.md")) * 1000)
+        # Allow 1 second tolerance (filesystem mtime precision)
+        assert abs(mtime_from_header - actual_mtime_ms) < 2000, (
+            f"X-Mod-Time {mtime_from_header} too far from actual mtime {actual_mtime_ms}"
+        )
+
+    def test_mod_time_updates_after_write(self, writable_server_url, writable_dir):
+        """X-Mod-Time should change after file is modified."""
+        status1, _body1, headers1 = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path=/hello.md"
+        )
+        assert status1 == 200
+        mtime1 = int(headers1["x-mod-time"])
+
+        # Wait briefly then modify the file
+        time.sleep(0.1)
+        with open(os.path.join(writable_dir, "hello.md"), "w", encoding="utf-8") as f:
+            f.write("# Modified content\n")
+
+        status2, _body2, headers2 = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path=/hello.md"
+        )
+        assert status2 == 200
+        mtime2 = int(headers2["x-mod-time"])
+        assert mtime2 >= mtime1, f"X-Mod-Time should not decrease: {mtime2} < {mtime1}"
+
+
+class TestCrossMountMoveSuccess:
+    """Test successful cross-mount move operations."""
+
+    @pytest.fixture
+    def dual_mount_server(self, web_root):
+        """Server with two writable mounts for cross-mount operations."""
+        dir_a = tempfile.mkdtemp(prefix="nasmd_mountA_")
+        dir_b = tempfile.mkdtemp(prefix="nasmd_mountB_")
+        with open(os.path.join(dir_a, "source.md"), "w", encoding="utf-8") as f:
+            f.write("# Source File\n")
+        os.makedirs(os.path.join(dir_a, "srcdir"), exist_ok=True)
+        with open(os.path.join(dir_a, "srcdir", "nested.md"), "w", encoding="utf-8") as f:
+            f.write("## Nested\n")
+
+        port = _find_free_port()
+        mgr = MountManager([])
+        from nas_md.webserver import MountEntry
+
+        mgr.mounts.insert(0, MountEntry("mount-a", "Mount A", dir_a, public=True, readonly=False, host=True))
+        mgr.mounts.insert(1, MountEntry("mount-b", "Mount B", dir_b, public=True, readonly=False, host=True))
+        MountHTTPHandler.mount_manager = mgr
+        MountHTTPHandler.web_root = web_root
+        MountHTTPHandler.search_dirs = [dir_a, dir_b]
+
+        server = _create_server("127.0.0.1", port, MountHTTPHandler, cert_dir="")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        yield f"http://127.0.0.1:{port}", dir_a, dir_b
+        server.shutdown()
+        shutil.rmtree(dir_a, ignore_errors=True)
+        shutil.rmtree(dir_b, ignore_errors=True)
+
+    def test_cross_mount_move_file_success(self, dual_mount_server):
+        """Move a file from mount-a to mount-b."""
+        url, dir_a, dir_b = dual_mount_server
+        status, body = _post(
+            f"{url}/api/cross-mount-move"
+            "?srcMount=mount-a&srcPath=/source.md"
+            "&destMount=mount-b&destDir=/",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        # Source should be removed
+        assert not os.path.exists(os.path.join(dir_a, "source.md"))
+        # Destination should exist
+        assert os.path.isfile(os.path.join(dir_b, "source.md"))
+        with open(os.path.join(dir_b, "source.md"), encoding="utf-8") as f:
+            assert f.read() == "# Source File\n"
+
+    def test_cross_mount_move_directory_success(self, dual_mount_server):
+        """Move a directory from mount-a to mount-b."""
+        url, dir_a, dir_b = dual_mount_server
+        status, body = _post(
+            f"{url}/api/cross-mount-move"
+            "?srcMount=mount-a&srcPath=/srcdir"
+            "&destMount=mount-b&destDir=/",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        # Source should be removed
+        assert not os.path.exists(os.path.join(dir_a, "srcdir"))
+        # Destination should exist with contents
+        assert os.path.isdir(os.path.join(dir_b, "srcdir"))
+        assert os.path.isfile(os.path.join(dir_b, "srcdir", "nested.md"))
+
+    def test_cross_mount_move_duplicate_returns_409(self, dual_mount_server):
+        """Cross-mount move to existing file should return 409 with suggested name."""
+        url, dir_a, dir_b = dual_mount_server
+        # Create a file with same name in destination
+        with open(os.path.join(dir_b, "source.md"), "w", encoding="utf-8") as f:
+            f.write("# Existing\n")
+        status, body = _post(
+            f"{url}/api/cross-mount-move"
+            "?srcMount=mount-a&srcPath=/source.md"
+            "&destMount=mount-b&destDir=/",
+        )
+        assert status == 409
+        data = json.loads(body)
+        assert data.get("error") == "duplicate"
+        assert "suggested_name" in data
+
+    def test_cross_mount_move_with_overwrite(self, dual_mount_server):
+        """Cross-mount move with overwrite=1 should replace existing file."""
+        url, dir_a, dir_b = dual_mount_server
+        with open(os.path.join(dir_b, "source.md"), "w", encoding="utf-8") as f:
+            f.write("# Existing\n")
+        status, body = _post(
+            f"{url}/api/cross-mount-move"
+            "?srcMount=mount-a&srcPath=/source.md"
+            "&destMount=mount-b&destDir=/&overwrite=1",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        # Destination should have the source content
+        with open(os.path.join(dir_b, "source.md"), encoding="utf-8") as f:
+            assert f.read() == "# Source File\n"
+        # Source should be removed
+        assert not os.path.exists(os.path.join(dir_a, "source.md"))
+
+
+class TestCrossMountCopySuccess:
+    """Test successful cross-mount copy operations."""
+
+    @pytest.fixture
+    def dual_mount_server(self, web_root):
+        """Server with two writable mounts for cross-mount operations."""
+        dir_a = tempfile.mkdtemp(prefix="nasmd_mountA_")
+        dir_b = tempfile.mkdtemp(prefix="nasmd_mountB_")
+        with open(os.path.join(dir_a, "original.md"), "w", encoding="utf-8") as f:
+            f.write("# Original\n")
+
+        port = _find_free_port()
+        mgr = MountManager([])
+        from nas_md.webserver import MountEntry
+
+        mgr.mounts.insert(0, MountEntry("mount-a", "Mount A", dir_a, public=True, readonly=False, host=True))
+        mgr.mounts.insert(1, MountEntry("mount-b", "Mount B", dir_b, public=True, readonly=False, host=True))
+        MountHTTPHandler.mount_manager = mgr
+        MountHTTPHandler.web_root = web_root
+        MountHTTPHandler.search_dirs = [dir_a, dir_b]
+
+        server = _create_server("127.0.0.1", port, MountHTTPHandler, cert_dir="")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        yield f"http://127.0.0.1:{port}", dir_a, dir_b
+        server.shutdown()
+        shutil.rmtree(dir_a, ignore_errors=True)
+        shutil.rmtree(dir_b, ignore_errors=True)
+
+    def test_cross_mount_copy_file_success(self, dual_mount_server):
+        """Copy a file from mount-a to mount-b."""
+        url, dir_a, dir_b = dual_mount_server
+        status, body = _post(
+            f"{url}/api/cross-mount-copy"
+            "?srcMount=mount-a&srcPath=/original.md"
+            "&destMount=mount-b&destDir=/",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        # Source should still exist
+        assert os.path.isfile(os.path.join(dir_a, "original.md"))
+        # Destination should exist
+        assert os.path.isfile(os.path.join(dir_b, "original.md"))
+        with open(os.path.join(dir_b, "original.md"), encoding="utf-8") as f:
+            assert f.read() == "# Original\n"
+
+    def test_cross_mount_copy_duplicate_returns_409(self, dual_mount_server):
+        """Cross-mount copy to existing file should return 409."""
+        url, dir_a, dir_b = dual_mount_server
+        with open(os.path.join(dir_b, "original.md"), "w", encoding="utf-8") as f:
+            f.write("# Existing\n")
+        status, body = _post(
+            f"{url}/api/cross-mount-copy"
+            "?srcMount=mount-a&srcPath=/original.md"
+            "&destMount=mount-b&destDir=/",
+        )
+        assert status == 409
+        data = json.loads(body)
+        assert data.get("error") == "duplicate"
+
+    def test_cross_mount_copy_with_overwrite(self, dual_mount_server):
+        """Cross-mount copy with overwrite=1 should replace existing file."""
+        url, dir_a, dir_b = dual_mount_server
+        with open(os.path.join(dir_b, "original.md"), "w", encoding="utf-8") as f:
+            f.write("# Existing\n")
+        status, body = _post(
+            f"{url}/api/cross-mount-copy"
+            "?srcMount=mount-a&srcPath=/original.md"
+            "&destMount=mount-b&destDir=/&overwrite=1",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("ok") is True
+        # Source should still exist
+        assert os.path.isfile(os.path.join(dir_a, "original.md"))
+        # Destination should have the source content
+        with open(os.path.join(dir_b, "original.md"), encoding="utf-8") as f:
+            assert f.read() == "# Original\n"
