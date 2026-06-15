@@ -1996,32 +1996,37 @@ function exportCurrentPDF() {
   if (!path || !mountId || path === '/') return;
 
   if (!window._vditor) return;
-  const html = window._vditor.getHTML();
   const name = path.substring(path.lastIndexOf('/') + 1).replace(/\.md$/i, '');
 
-  const printWin = window.open('', '_blank');
-  if (!printWin) {
-    showToast('请允许弹出窗口以导出PDF');
-    return;
-  }
-  printWin.document.write(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${name}</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #333; line-height: 1.6; }
-  h1, h2, h3, h4, h5, h6 { margin-top: 1.5em; margin-bottom: 0.5em; }
-  pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }
-  code { background: #f5f5f5; padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
-  pre code { background: none; padding: 0; }
-  blockquote { border-left: 4px solid #ddd; margin: 1em 0; padding: 0.5em 1em; color: #666; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
-  img { max-width: 100%; }
-  @media print { body { margin: 0; padding: 0; } }
-</style></head><body>${html}</body></html>`);
-  printWin.document.close();
-  printWin.onload = () => {
-    printWin.print();
-  };
+  // Build a temporary container with Vditor's rendered preview HTML
+  const html = window._vditor.getHTML();
+  const container = document.createElement('div');
+  container.innerHTML = html;
+  container.style.cssText =
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.6;padding:20px;max-width:800px;';
+  document.body.appendChild(container);
+
+  showToast('正在生成PDF...');
+
+  html2pdf()
+    .set({
+      margin: [10, 10, 10, 10],
+      filename: name + '.pdf',
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    })
+    .from(container)
+    .save()
+    .then(() => {
+      document.body.removeChild(container);
+      showToast('PDF已导出');
+    })
+    .catch((err) => {
+      document.body.removeChild(container);
+      console.error('PDF export failed:', err);
+      showToast('PDF导出失败');
+    });
 }
 
 function showRenameModal() {
