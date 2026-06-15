@@ -3107,7 +3107,7 @@ async function refreshTree() {
     _refreshTreeBusy = false;
   }
   // Auto-refresh file content (fire-and-forget, no circular dependency)
-  refreshFromDisk(true);
+  pollCurrentFile();
 }
 
 /**
@@ -3116,61 +3116,26 @@ async function refreshTree() {
  * silently reload the content.
  */
 async function pollCurrentFile() {
-  if (!state.currentPath || !state.currentMountId || !window._vditor) {
-    console.log(
-      '[poll] skip: no path/mount/vditor',
-      state.currentPath,
-      state.currentMountId,
-      !!window._vditor,
-    );
-    return;
-  }
+  if (!state.currentPath || !state.currentMountId || !window._vditor) return;
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (!mount) {
-    console.log('[poll] skip: mount not found for', state.currentMountId);
-    return;
-  }
+  if (!mount) return;
   // Skip if editor has unsaved changes
-  const _curVal = window._vditor.getValue();
-  if (_curVal !== window._originalContent) {
-    console.log('[poll] skip: unsaved changes for', state.currentMountId, state.currentPath);
-    console.log('[poll]   getValue:', JSON.stringify(_curVal));
-    console.log('[poll]   orig:', JSON.stringify(window._originalContent));
-    return;
-  }
+  if (window._vditor.getValue() !== window._originalContent) return;
 
   try {
     const key = state.currentMountId + ':' + state.currentPath;
     const prev = state.fileMtimes[key];
-    if (!prev) {
-      console.log(
-        '[poll] skip: no prev mtime for',
-        key,
-        'all keys:',
-        Object.keys(state.fileMtimes),
-      );
-      return;
-    }
+    if (!prev) return;
 
     let newMtime = null;
     let newSize = null;
     let newContent = null;
 
-    console.log(
-      '[poll] mount._local=',
-      mount._local,
-      'has localMount=',
-      !!state.localMounts[state.currentMountId],
-    );
-
     if (mount._local && state.localMounts[state.currentMountId]) {
       // Local mount with File System Access API handle
       const localMount = state.localMounts[state.currentMountId];
       const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
-      if (!handle) {
-        console.log('[poll] skip: getLocalFileHandle returned null for', state.currentPath);
-        return;
-      }
+      if (!handle) return;
       const file = await handle.getFile();
       newMtime = file.lastModified;
       newSize = file.size;
@@ -3189,27 +3154,23 @@ async function pollCurrentFile() {
           '/file?path=' +
           encodeURIComponent(state.currentPath),
       );
-      console.log('[poll] host: resp.status=', resp.status);
       if (!resp.ok) return;
       const modTimeHeader = resp.headers.get('X-Mod-Time');
       if (!modTimeHeader) return;
       newMtime = parseInt(modTimeHeader, 10);
       const text = await resp.text();
       newSize = text.length;
-      console.log('[poll] host: prev mtime=', prev.mtime, 'new mtime=', newMtime);
       if (prev.mtime !== newMtime || prev.size !== newSize) {
         newContent = text;
       }
     }
 
     if (newContent) {
-      console.log('[poll] CHANGE DETECTED, updating editor');
       window._vditor.setValue(newContent);
       window._originalContent = newContent;
       state.fileMtimes[key] = { mtime: newMtime, size: newSize };
     }
-  } catch (e) {
-    console.log('[poll] error:', e.message);
+  } catch (_e) {
     // File may have been deleted, ignore
   }
 }
@@ -3252,21 +3213,11 @@ async function refreshFromDisk(silent) {
     let content = null;
 
     if (mount._local && state.localMounts[mount.id]) {
-      const localMount = state.localMounts[mount.id];
-      const hasHandle = !!localMount.handle;
-      const hasFileMap = !!localMount.fileMap;
-      console.log('[refreshFromDisk] local mount, handle=' + hasHandle + ', fileMap=' + hasFileMap);
       content = await readLocalFile(mount.id, state.currentPath);
       if (content === null) {
-        console.log('[refreshFromDisk] readLocalFile returned null');
         if (!silent) showToast('文件可能已被删除');
         return;
       }
-      const currentVal = window._vditor.getValue();
-      const same = content === currentVal;
-      console.log(
-        `[refreshFromDisk] disk=${content.length} editor=${currentVal.length} same=${same}`,
-      );
       state.fileMtimes[mount.id + ':' + state.currentPath] = {
         mtime: Date.now(),
         size: content.length,
@@ -3297,7 +3248,6 @@ async function refreshFromDisk(silent) {
       if (!silent) showToast('已从磁盘重新加载');
     }
   } catch (e) {
-    console.error('[refreshFromDisk] error:', e);
     if (!silent) showToast('重新加载失败: ' + (e.message || '未知错误'));
   }
 }
