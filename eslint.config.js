@@ -29,6 +29,7 @@ export default [
         HTMLElement: "readonly",
         Event: "readonly",
         FormData: "readonly",
+        Blob: "readonly",
         URL: "readonly",
         URLSearchParams: "readonly",
         DOMParser: "readonly",
