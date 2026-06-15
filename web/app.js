@@ -11,6 +11,14 @@ function _normContent(s) {
 function _isContentDirty(cur, orig) {
   return _normContent(cur) !== _normContent(orig);
 }
+function _parseShareHash() {
+  const hash = window.location.hash;
+  if (!hash || !hash.startsWith('#file=')) return null;
+  const raw = hash.substring(6); // e.g. "mount-1:/docs/readme.md"
+  const slashIdx = raw.indexOf('/');
+  if (slashIdx < 0) return null;
+  return { mountId: raw.substring(0, slashIdx), path: raw.substring(slashIdx) };
+}
 
 // === 状态 ===
 const state = {
@@ -150,6 +158,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     /* IndexedDB not available, skip */
   }
   await loadRecentFiles();
+
+  // Check URL hash for shared file link: #file=mountId:/path/to/file.md
+  const hashFile = _parseShareHash();
+  if (hashFile) {
+    const { mountId: shareMountId, path: sharePath } = hashFile;
+    const mount = state.mounts.find((m) => m.id === shareMountId);
+    if (mount && !mount._local) {
+      try {
+        let content;
+        let serverMtime = null;
+        const result = await API.getFile(shareMountId, sharePath);
+        content = result ? result.content : null;
+        if (result && result.mtime) serverMtime = result.mtime;
+        if (content !== null) {
+          state.currentPath = sharePath;
+          state.currentMountId = shareMountId;
+          state.searchResults = [];
+          $('breadcrumb').textContent = mount.name + sharePath + (mount.readonly ? ' 🔒' : '');
+          $('editor-modes').style.display = mount.readonly
+            ? 'none'
+            : sharePath.endsWith('.md')
+              ? ''
+              : 'none';
+          $('save-group').style.display = mount.readonly ? 'none' : '';
+          const _renameBtn = $('rename-top-btn');
+          const _deleteBtn = $('delete-top-btn');
+          const _downloadBtn = $('download-top-btn');
+          const _exportPdfBtn = $('export-pdf-top-btn');
+          const _shareBtn = $('share-top-btn');
+          if (_renameBtn)
+            _renameBtn.style.display = !mount.readonly && sharePath !== '/' ? '' : 'none';
+          if (_deleteBtn)
+            _deleteBtn.style.display = !mount.readonly && sharePath !== '/' ? '' : 'none';
+          if (_downloadBtn) _downloadBtn.style.display = sharePath.endsWith('.md') ? '' : 'none';
+          if (_exportPdfBtn) _exportPdfBtn.style.display = sharePath.endsWith('.md') ? '' : 'none';
+          if (_shareBtn) _shareBtn.style.display = sharePath !== '/' ? '' : 'none';
+          showPage('editor');
+          if (window._vditor) window._vditor.destroy();
+          initEditor(content, state.editorMode, !!mount.readonly);
+          // Record mtime for server mount
+          if (serverMtime) {
+            state.fileMtimes[shareMountId + ':' + sharePath] = {
+              mtime: serverMtime,
+              size: content.length,
+            };
+          }
+          setFileInfo(shareMountId, sharePath);
+          state.dirty = false;
+          startDirtyCheck();
+          renderSidebar();
+          startSidebarRefresh();
+          startFilePoll();
+          localStorage.setItem('nasmd_last_path', sharePath);
+          localStorage.setItem('nasmd_last_mount', shareMountId);
+          // Clear hash so refresh doesn't re-trigger
+          history.replaceState(null, '', window.location.pathname);
+          return;
+        }
+      } catch (_e) {
+        console.warn('Failed to open shared file:', _e);
+      }
+    }
+  }
+
   // Restore last opened file, or fall back to welcome.md
   const lastPath = localStorage.getItem('nasmd_last_path');
   const lastMountId = localStorage.getItem('nasmd_last_mount');
@@ -182,6 +254,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const _deleteBtn = $('delete-top-btn');
           const _downloadBtn = $('download-top-btn');
           const _exportPdfBtn = $('export-pdf-top-btn');
+          const _shareBtn = $('share-top-btn');
           if (_renameBtn)
             _renameBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           if (_deleteBtn)
@@ -191,6 +264,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (_exportPdfBtn)
             _exportPdfBtn.style.display =
               lastPath !== '/' && lastPath.endsWith('.md') ? '' : 'none';
+          if (_shareBtn) _shareBtn.style.display = !mount._local && lastPath !== '/' ? '' : 'none';
           // Show refresh button when a file is open
           const _refreshBtn = $('btn-refresh');
           if (_refreshBtn) _refreshBtn.style.display = lastPath !== '/' ? '' : 'none';
@@ -2029,6 +2103,31 @@ function exportCurrentPDF() {
     });
 }
 
+function shareCurrentFile() {
+  const path = state.currentPath;
+  const mountId = state.currentMountId;
+  if (!path || !mountId || path === '/') return;
+
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount || mount._local) return;
+
+  // Build share URL: #file=mountId:/path/to/file.md
+  const url = window.location.origin + window.location.pathname + '#file=' + mountId + path;
+  navigator.clipboard
+    .writeText(url)
+    .then(() => showToast('分享链接已复制'))
+    .catch(() => {
+      // Fallback: select text in a temporary input
+      const input = document.createElement('input');
+      input.value = url;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      showToast('分享链接已复制');
+    });
+}
+
 function showRenameModal() {
   const path = state.currentPath;
   const mountId = state.currentMountId;
@@ -2578,6 +2677,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
     const deleteBtn = $('delete-top-btn');
     const downloadBtn = $('download-top-btn');
     const exportPdfBtn = $('export-pdf-top-btn');
+    const shareBtn = $('share-top-btn');
     if (renameBtn) {
       renameBtn.style.display = !mount.readonly && path !== '/' ? '' : 'none';
     }
@@ -2590,6 +2690,10 @@ async function openFile(path, preferredMountId, searchKeyword) {
     }
     if (exportPdfBtn) {
       exportPdfBtn.style.display = path !== '/' && path.endsWith('.md') ? '' : 'none';
+    }
+    // Share: show for server mount files only (not local mounts)
+    if (shareBtn) {
+      shareBtn.style.display = !mount._local && path !== '/' ? '' : 'none';
     }
     $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
