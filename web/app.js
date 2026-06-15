@@ -2,6 +2,16 @@
  * app.js - 应用主逻辑（原生 JS，无框架）
  */
 
+// === 辅助函数 ===
+// Vditor's getValue() may normalize content (e.g. add trailing newline).
+// Use this for dirty comparison and originalContent sync to avoid false positives.
+function _normContent(s) {
+  return typeof s === 'string' ? s.replace(/\r\n/g, '\n').replace(/\n+$/, '') : '';
+}
+function _isContentDirty(cur, orig) {
+  return _normContent(cur) !== _normContent(orig);
+}
+
 // === 状态 ===
 const state = {
   mounts: [],
@@ -196,7 +206,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             /* ignore */
           }
           initEditor(content, state.editorMode, !!mount.readonly);
-          window._originalContent = content;
+          // Note: window._originalContent is set by Vditor's after() callback
           // Record mtime for all mounts
           if (mount._local) {
             try {
@@ -2591,7 +2601,8 @@ async function openFile(path, preferredMountId, searchKeyword) {
       showToast('已恢复本地缓存版本');
     }
     initEditor(finalContent, state.editorMode, !!mount.readonly);
-    window._originalContent = finalContent;
+    // Note: window._originalContent is set by Vditor's after() callback
+    // to match Vditor's normalized content (e.g. trailing newline handling)
     setFileInfo(mount.id, path);
     state.dirty = false;
     startDirtyCheck();
@@ -2658,7 +2669,7 @@ function startDirtyCheck() {
 
 function onEditorInput() {
   if (!window._vditor) return;
-  const isDirty = window._vditor.getValue() !== window._originalContent;
+  const isDirty = _isContentDirty(window._vditor.getValue(), window._originalContent);
   if (isDirty !== state.dirty) {
     state.dirty = isDirty;
     const btn = $('btn-save');
@@ -2812,7 +2823,7 @@ async function saveFile({ silent = false } = {}) {
     if (mount && mount._local && state.localMounts[mount.id]) {
       const ok = await writeLocalFile(mount.id, state.currentPath, content);
       if (!ok) throw new Error('写入本机文件失败');
-      window._originalContent = content;
+      window._originalContent = window._vditor.getValue();
       markClean();
       clearLocalStorage(state.currentPath);
       if (!silent) showToast('已保存');
@@ -2845,7 +2856,7 @@ async function saveFile({ silent = false } = {}) {
       if (resp && resp.error) {
         throw new Error(resp.error);
       }
-      window._originalContent = content;
+      window._originalContent = window._vditor.getValue();
       markClean();
       clearLocalStorage(state.currentPath);
       if (!silent) showToast('已保存');
@@ -3241,13 +3252,14 @@ async function pollCurrentFile() {
   }
   const curVal = window._vditor.getValue();
   const origVal = window._originalContent;
+  const dirty = _isContentDirty(curVal, origVal);
   console.log(
     '[poll] checking',
     state.currentPath,
     'local=',
     mount._local,
     'dirty=',
-    curVal !== origVal,
+    dirty,
     'curLen=',
     curVal?.length,
     'origLen=',
@@ -3256,7 +3268,7 @@ async function pollCurrentFile() {
     typeof origVal,
   );
   // Skip if editor has unsaved changes
-  if (curVal !== origVal) {
+  if (dirty) {
     console.log('[poll] skip: editor has unsaved changes');
     return;
   }
@@ -3352,7 +3364,7 @@ async function pollCurrentFile() {
 
     if (newContent) {
       window._vditor.setValue(newContent);
-      window._originalContent = newContent;
+      window._originalContent = window._vditor.getValue();
       state.fileMtimes[key] = { mtime: newMtime, size: newSize };
       console.log('[poll] DONE: editor reloaded with new content');
     } else {
@@ -3452,7 +3464,7 @@ async function refreshFromDisk(silent) {
 
     if (content !== null) {
       window._vditor.setValue(content);
-      window._originalContent = content;
+      window._originalContent = window._vditor.getValue();
       if (!silent) showToast('已从磁盘重新加载');
     }
   } catch (e) {

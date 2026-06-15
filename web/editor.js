@@ -954,7 +954,12 @@ function getEditorContent() {
   return _vditor ? _vditor.getValue() : '';
 }
 function isDirty() {
-  return _vditor ? _vditor.getValue() !== _originalContent : false;
+  if (!_vditor) return false;
+  const cur = _vditor.getValue();
+  const orig = _originalContent;
+  // Normalize both to avoid false positives from Vditor's trailing newline
+  const norm = (s) => (typeof s === 'string' ? s.replace(/\r\n/g, '\n').replace(/\n+$/, '') : '');
+  return norm(cur) !== norm(orig);
 }
 function markSaved() {
   _originalContent = getEditorContent();
