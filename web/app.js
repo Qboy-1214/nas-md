@@ -2067,33 +2067,23 @@ function downloadCurrentFile() {
 function exportCurrentPDF() {
   const path = state.currentPath;
   const mountId = state.currentMountId;
-  if (!path || !mountId || path === '/') return;
+  if (!path || !mountId || path === '/') {
+    showToast('请先打开一个文件');
+    return;
+  }
 
-  if (!window._vditor) return;
+  if (!window._vditor) {
+    showToast('编辑器尚未就绪');
+    return;
+  }
+
   const name = path.substring(path.lastIndexOf('/') + 1).replace(/\.md$/i, '');
 
-  // Switch to preview mode first to ensure mermaid diagrams are rendered,
-  // then use browser's native print to produce a real PDF with selectable
-  // text, searchable content, and proper SVG rendering.
-  const prevMode = window._vditor.getCurrentMode();
-  window._vditor.preview();
-
-  // Wait for mermaid and other async renders to complete
-  setTimeout(() => {
-    document.title = name;
-    window.print();
-
-    // Restore previous editor mode after print dialog closes
-    setTimeout(() => {
-      if (prevMode === 'ir') {
-        window._vditor.ir();
-      } else if (prevMode === 'sv') {
-        window._vditor.sv();
-      } else if (prevMode === 'wysiwyg') {
-        window._vditor.wysiwyg();
-      }
-    }, 100);
-  }, 1000);
+  // Use browser's native print to produce a real PDF with selectable text,
+  // heading-based outline, and proper SVG/mermaid rendering.
+  // The @media print CSS rules hide the editor and show only the preview.
+  document.title = name;
+  window.print();
 }
 
 function shareCurrentFile() {

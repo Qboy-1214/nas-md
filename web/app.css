@@ -2187,13 +2187,16 @@ a:hover {
   .rename-top-btn,
   #share-top-btn,
   .vditor-toolbar,
-  .vditor-preview__action {
+  .vditor-preview__action,
+  .vditor-panel {
     display: none !important;
   }
 
   /* Remove layout constraints */
   .layout {
     display: block !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
   /* Expand editor to full page */
@@ -2202,14 +2205,41 @@ a:hover {
     padding: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
   #vditor {
     border: none !important;
     height: auto !important;
+    overflow: visible !important;
   }
 
-  /* In preview mode, the entire content is in .vditor-preview */
+  /* Allow all Vditor internal containers to expand */
+  .vditor-content,
+  .vditor-ir,
+  .vditor-ir__preview,
+  .vditor-preview,
+  .vditor-reset {
+    height: auto !important;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* IR mode: hide editor, show only preview pane */
+  .vditor-ir__editor {
+    display: none !important;
+  }
+  .vditor-ir__preview {
+    width: 100% !important;
+    padding: 0 !important;
+    border: none !important;
+  }
+
+  /* SV mode: hide editor textarea, show only preview */
+  .vditor-sv {
+    display: none !important;
+  }
   .vditor-preview {
     width: 100% !important;
     padding: 0 !important;
@@ -2235,6 +2265,12 @@ a:hover {
   .vditor-reset svg {
     max-width: 100% !important;
     height: auto !important;
+  }
+
+  /* Ensure mermaid code blocks are visible */
+  .vditor-reset .mermaid,
+  .vditor-reset .language-mermaid {
+    display: block !important;
   }
 
   /* Avoid breaking inside elements */
