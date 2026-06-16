@@ -3324,12 +3324,6 @@ async function refreshTree() {
   _refreshTreeBusy = true;
   try {
     const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
-    console.log(
-      '[refreshTree] expandedMounts=',
-      expandedMountIds,
-      'allMounts=',
-      state.mounts.map((m) => m.id + '(' + (m._local ? 'local' : 'server') + ')'),
-    );
     for (const mountId of expandedMountIds) {
       const expandedDirs = state.expandedMounts
         .filter((k) => k.startsWith(mountId + ':'))
@@ -3351,151 +3345,78 @@ async function refreshTree() {
  * silently reload the content.
  */
 async function pollCurrentFile() {
-  if (!state.currentPath || !state.currentMountId || !window._vditor) {
-    console.log('[poll] skip: no path/mount/vditor', {
-      path: state.currentPath,
-      mountId: state.currentMountId,
-      vditor: !!window._vditor,
-    });
-    return;
-  }
+  if (!state.currentPath || !state.currentMountId || !window._vditor) return;
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (!mount) {
-    console.log('[poll] skip: mount not found for', state.currentMountId);
-    return;
-  }
+  if (!mount) return;
+
+  // Skip if editor has unsaved changes
   const curVal = window._vditor.getValue();
   const origVal = window._originalContent;
-  const dirty = _isContentDirty(curVal, origVal);
-  console.log(
-    '[poll] checking',
-    state.currentPath,
-    'local=',
-    mount._local,
-    'dirty=',
-    dirty,
-    'curLen=',
-    curVal?.length,
-    'origLen=',
-    origVal?.length,
-    'origType=',
-    typeof origVal,
-  );
-  // Skip if editor has unsaved changes
-  if (dirty) {
-    console.log('[poll] skip: editor has unsaved changes');
-    return;
-  }
+  if (_isContentDirty(curVal, origVal)) return;
 
   try {
     const key = state.currentMountId + ':' + state.currentPath;
     const prev = state.fileMtimes[key];
-    if (!prev) {
-      console.log(
-        '[poll] skip: no fileMtimes entry for',
-        key,
-        'allKeys=',
-        Object.keys(state.fileMtimes),
-      );
-      return;
-    }
+    if (!prev) return;
 
     let newMtime = null;
     let newSize = null;
     let newContent = null;
 
     if (mount._local && state.localMounts[state.currentMountId]) {
-      // Local mount with File System Access API handle
+      // Local mount: read file and compare content directly
       const localMount = state.localMounts[state.currentMountId];
-      console.log(
-        '[poll] local mount: handle=',
-        !!localMount.handle,
-        'fileMap=',
-        !!localMount.fileMap,
-      );
       const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
-      if (!handle) {
-        console.log('[poll] skip: getLocalFileHandle returned null for', state.currentPath);
-        return;
-      }
+      if (!handle) return;
       const file = await handle.getFile();
       newMtime = file.lastModified;
       newSize = file.size;
-      // Always read content and compare directly (lastModified may not update reliably)
       newContent = await file.text();
-      console.log(
-        '[poll] local: diskLen=',
-        newContent.length,
-        'editorLen=',
-        curVal.length,
-        'diskMtime=',
-        newMtime,
-        'prevMtime=',
-        prev.mtime,
-        'same=',
-        newContent === curVal,
-      );
       if (newContent === curVal) {
-        // Content unchanged — update stored mtime and skip
         state.fileMtimes[key] = { mtime: newMtime, size: newSize };
-        console.log('[poll] content unchanged, updated mtime');
         return;
       }
-      console.log('[poll] CHANGE DETECTED, reloading editor...');
     } else {
-      // Host mount (mounted via backend /mounts.json): poll API for X-Mod-Time
-      console.log('[poll] server mount: fetching mtime...');
+      // Server mount: use lightweight /mtime endpoint first
+      const mtimeResp = await fetch(
+        '/api/mounts/' +
+          encodeURIComponent(state.currentMountId) +
+          '/mtime?path=' +
+          encodeURIComponent(state.currentPath),
+      );
+      if (!mtimeResp.ok) return;
+      const mtimeData = await mtimeResp.json();
+      newMtime = mtimeData.modTime;
+      newSize = mtimeData.size;
+      // Only download content if mtime or size changed
+      if (prev.mtime === newMtime && prev.size === newSize) return;
       const resp = await fetch(
         '/api/mounts/' +
           encodeURIComponent(state.currentMountId) +
           '/file?path=' +
           encodeURIComponent(state.currentPath),
       );
-      console.log('[poll] server mount: resp.status=', resp.status);
       if (!resp.ok) return;
-      const modTimeHeader = resp.headers.get('X-Mod-Time');
-      if (!modTimeHeader) {
-        console.log('[poll] server mount: no X-Mod-Time header');
-        return;
-      }
-      newMtime = parseInt(modTimeHeader, 10);
-      const text = await resp.text();
-      newSize = text.length;
-      console.log(
-        '[poll] server: newMtime=',
-        newMtime,
-        'prevMtime=',
-        prev.mtime,
-        'newSize=',
-        newSize,
-        'prevSize=',
-        prev.size,
-      );
-      if (prev.mtime !== newMtime || prev.size !== newSize) {
-        newContent = text;
-      }
+      newContent = await resp.text();
     }
 
     if (newContent) {
       window._vditor.setValue(newContent);
       window._originalContent = window._vditor.getValue();
       state.fileMtimes[key] = { mtime: newMtime, size: newSize };
-      console.log('[poll] DONE: editor reloaded with new content');
-    } else {
-      console.log('[poll] no content change needed');
     }
-  } catch (e) {
-    console.log('[poll] ERROR:', e.message || e);
+  } catch (_e) {
+    // Silently ignore poll errors
   }
 }
 
 // === Sidebar auto-refresh ===
 let _sidebarRefreshTimer = null;
-const SIDEBAR_REFRESH_INTERVAL = 1000; // 1 second
+const SIDEBAR_REFRESH_INTERVAL = 5000; // 5 seconds
 
 // === File content auto-poll (independent from sidebar refresh) ===
 let _filePollTimer = null;
-const FILE_POLL_INTERVAL = 1000; // 1 second
+const FILE_POLL_INTERVAL = 5000; // 5 seconds
 
 function startFilePoll() {
   if (_filePollTimer) return;
