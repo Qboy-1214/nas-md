@@ -2701,38 +2701,25 @@ async function openFile(path, preferredMountId, searchKeyword) {
 
     // Ensure the mount and all parent directories are expanded
     // so the current file is visible in the sidebar.
-    // Also ensure tree data is loaded for each parent directory.
     if (!state.expandedMounts.includes(mount.id)) {
       state.expandedMounts.push(mount.id);
     }
     const parts = path.split('/').filter(Boolean);
-    const treeLoadPromises = [];
-    // Ensure root tree data is loaded
-    if (!state.treeData[mount.id]?.['/']) {
-      treeLoadPromises.push(loadTree(mount.id, '/'));
-    }
     for (let i = 1; i < parts.length; i++) {
       const dirPath = '/' + parts.slice(0, i).join('/');
       const dirKey = mount.id + ':' + dirPath;
       if (!state.expandedMounts.includes(dirKey)) {
         state.expandedMounts.push(dirKey);
       }
-      // Ensure this directory's tree data is loaded
-      if (!state.treeData[mount.id]?.[dirPath]) {
-        treeLoadPromises.push(loadTree(mount.id, dirPath));
-      }
-    }
-    if (treeLoadPromises.length > 0) {
-      await Promise.all(treeLoadPromises);
     }
 
     renderSidebar();
 
-    // Scroll the active file into view in the sidebar
+    // Scroll the active file into view after sidebar renders
     setTimeout(() => {
       const activeEl = document.querySelector('.tree-item.active');
       if (activeEl) activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }, 50);
+    }, 100);
 
     loadBacklinks(path);
     startSyncPolling();
