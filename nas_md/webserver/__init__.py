@@ -730,12 +730,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_recursive_tree(mount_id, qs)
                 return
 
-            # /api/mounts/{id}/mtime — lightweight mtime check
-            if "/api/mounts/" in path and path.endswith("/mtime"):
-                mount_id = path.split("/api/mounts/")[1].split("/mtime")[0]
-                self._handle_mtime(mount_id, qs)
-                return
-
             # /api/mounts/{id}/file
             if "/api/mounts/" in path and path.endswith("/file"):
                 mount_id = path.split("/api/mounts/")[1].split("/file")[0]
@@ -1264,31 +1258,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if tree is None:
             return self._send_error("Cannot build tree", 500)
         self._send_json(tree.to_dict())
-
-    def _handle_mtime(self, mount_id: str, qs: dict):
-        """Lightweight endpoint that returns only the modification time and size of a file."""
-        if not self.mount_manager:
-            return self._send_error("No mounts configured", 404)
-        mount = self.mount_manager.find_mount(mount_id)
-        if not mount:
-            return self._send_error("Mount not found", 404)
-        session_id = self._get_session_id()
-        visible = self._visible_mounts(session_id)
-        if mount not in visible:
-            return self._send_error("Mount not found", 404)
-        rel_path = qs.get("path", [None])[0]
-        if not rel_path:
-            return self._send_error("Missing path parameter", 400)
-        abs_path = self.mount_manager._safe_path(mount, rel_path)
-        if abs_path is None:
-            return self._send_error("Path escapes mount root", 403)
-        if not os.path.isfile(abs_path):
-            return self._send_error("File not found", 404)
-        try:
-            st = os.stat(abs_path)
-            self._send_json({"modTime": int(st.st_mtime * 1000), "size": st.st_size})
-        except OSError as e:
-            self._send_error(str(e), 500)
 
     def _handle_file(self, mount_id: str, qs: dict):
         if not self.mount_manager:
