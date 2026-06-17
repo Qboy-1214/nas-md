@@ -3331,8 +3331,11 @@ async function refreshTree() {
 /**
  * Poll the current open file for external modifications (local mounts only).
  * If the file was modified externally and the editor has no unsaved changes,
- * silently reload the content.
+ * silently reload the content. If the editor has focus, defer the reload
+ * until the editor loses focus to avoid interrupting the user.
  */
+let _externalChangePending = null; // { content, mtime, size, key }
+
 async function pollCurrentFile() {
   if (_saveInProgress) {
     console.log('[poll] skip: save in progress');
@@ -3346,12 +3349,8 @@ async function pollCurrentFile() {
     });
     return;
   }
-  // Never reload content while the editor has focus — the user is actively editing
-  const vditorEl = document.getElementById('vditor');
-  if (vditorEl && vditorEl.contains(document.activeElement)) {
-    console.log('[poll] skip: editor has focus (user is editing)');
-    return;
-  }
+  const editorHasFocus =
+    document.getElementById('vditor')?.contains(document.activeElement) ?? false;
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
   if (!mount) {
     console.log('[poll] skip: mount not found for', state.currentMountId);
@@ -3367,6 +3366,8 @@ async function pollCurrentFile() {
     mount._local,
     'dirty=',
     dirty,
+    'focused=',
+    editorHasFocus,
     'curLen=',
     curVal?.length,
     'origLen=',
@@ -3470,10 +3471,17 @@ async function pollCurrentFile() {
     }
 
     if (newContent) {
-      window._vditor.setValue(newContent);
-      window._originalContent = window._vditor.getValue();
-      state.fileMtimes[key] = { mtime: newMtime, size: newSize };
-      console.log('[poll] DONE: editor reloaded with new content');
+      if (editorHasFocus) {
+        // Defer reload until editor loses focus to avoid interrupting the user
+        _externalChangePending = { content: newContent, mtime: newMtime, size: newSize, key };
+        console.log('[poll] CHANGE DETECTED, deferred (editor has focus)');
+      } else {
+        window._vditor.setValue(newContent);
+        window._originalContent = window._vditor.getValue();
+        state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+        _externalChangePending = null;
+        console.log('[poll] DONE: editor reloaded with new content');
+      }
     } else {
       console.log('[poll] no content change needed');
     }
@@ -3486,12 +3494,38 @@ async function pollCurrentFile() {
 let _sidebarRefreshTimer = null;
 const SIDEBAR_REFRESH_INTERVAL = 1000; // 1 second
 
+// === Apply deferred external change when editor loses focus ===
+function _applyDeferredExternalChange() {
+  if (!_externalChangePending) return;
+  const { content, mtime, size, key } = _externalChangePending;
+  _externalChangePending = null;
+  if (!window._vditor || !state.currentPath) return;
+  // Only apply if still on the same file
+  const curKey = state.currentMountId + ':' + state.currentPath;
+  if (key !== curKey) return;
+  // Skip if editor became dirty while deferred
+  if (_isContentDirty(window._vditor.getValue(), window._originalContent)) return;
+  window._vditor.setValue(content);
+  window._originalContent = window._vditor.getValue();
+  state.fileMtimes[key] = { mtime, size };
+  console.log('[poll] deferred reload applied on blur');
+}
+
 // === File content auto-poll (independent from sidebar refresh) ===
 let _filePollTimer = null;
 const FILE_POLL_INTERVAL = 1000; // 1 second
 
 function startFilePoll() {
   if (_filePollTimer) return;
+  // Bind blur handler to apply deferred external changes when editor loses focus
+  const vditorEl = document.getElementById('vditor');
+  if (vditorEl && !vditorEl._deferredBlurBound) {
+    vditorEl.addEventListener('focusout', () => {
+      // Use setTimeout to let the new focus target settle
+      setTimeout(_applyDeferredExternalChange, 100);
+    });
+    vditorEl._deferredBlurBound = true;
+  }
   async function tick() {
     await pollCurrentFile();
     _filePollTimer = setTimeout(tick, FILE_POLL_INTERVAL);
