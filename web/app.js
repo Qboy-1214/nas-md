@@ -2878,6 +2878,9 @@ function toggleBacklinks() {
 
 // === Save-in-progress flag to prevent pollCurrentFile race condition ===
 let _saveInProgress = false;
+// Track the content we last saved to disk, so the poll can distinguish
+// between our own save and an external modification.
+let _lastSavedContent = null;
 
 async function saveFile({ silent = false } = {}) {
   _saveInProgress = true;
@@ -2890,6 +2893,7 @@ async function saveFile({ silent = false } = {}) {
       return;
     }
     const content = window._vditor.getValue();
+    _lastSavedContent = content;
 
     // Show saving state on button (only for manual save)
     const btn = $('btn-save');
@@ -2915,7 +2919,7 @@ async function saveFile({ silent = false } = {}) {
       if (mount && mount._local && state.localMounts[mount.id]) {
         const ok = await writeLocalFile(mount.id, state.currentPath, content);
         if (!ok) throw new Error('写入本机文件失败');
-        window._originalContent = window._vditor.getValue();
+        window._originalContent = content;
         markClean();
         clearLocalStorage(state.currentPath);
         if (!silent) showToast('已保存');
@@ -2948,7 +2952,7 @@ async function saveFile({ silent = false } = {}) {
         if (resp && resp.error) {
           throw new Error(resp.error);
         }
-        window._originalContent = window._vditor.getValue();
+        window._originalContent = content;
         markClean();
         clearLocalStorage(state.currentPath);
         if (!silent) showToast('已保存');
@@ -3329,161 +3333,74 @@ async function refreshTree() {
 }
 
 /**
- * Poll the current open file for external modifications (local mounts only).
- * If the file was modified externally and the editor has no unsaved changes,
- * silently reload the content. If the editor has focus, defer the reload
- * until the editor loses focus to avoid interrupting the user.
+ * Poll the current open file for external modifications.
+ * Detects external changes by comparing disk content with what we last saved
+ * (_lastSavedContent). This avoids false positives when the user edits after
+ * a save — the editor content will differ from disk, but that's our own edit,
+ * not an external change.
  */
-let _externalChangePending = null; // { content, mtime, size, key }
-
 async function pollCurrentFile() {
   if (_saveInProgress) {
     console.log('[poll] skip: save in progress');
     return;
   }
   if (!state.currentPath || !state.currentMountId || !window._vditor) {
-    console.log('[poll] skip: no path/mount/vditor', {
-      path: state.currentPath,
-      mountId: state.currentMountId,
-      vditor: !!window._vditor,
-    });
     return;
   }
-  const editorHasFocus =
-    document.getElementById('vditor')?.contains(document.activeElement) ?? false;
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (!mount) {
-    console.log('[poll] skip: mount not found for', state.currentMountId);
-    return;
-  }
-  const curVal = window._vditor.getValue();
-  const origVal = window._originalContent;
-  const dirty = _isContentDirty(curVal, origVal);
-  console.log(
-    '[poll] checking',
-    state.currentPath,
-    'local=',
-    mount._local,
-    'dirty=',
-    dirty,
-    'focused=',
-    editorHasFocus,
-    'curLen=',
-    curVal?.length,
-    'origLen=',
-    origVal?.length,
-    'origType=',
-    typeof origVal,
-  );
-  // Skip if editor has unsaved changes
-  if (dirty) {
-    console.log('[poll] skip: editor has unsaved changes');
-    return;
-  }
+  if (!mount) return;
 
   try {
     const key = state.currentMountId + ':' + state.currentPath;
     const prev = state.fileMtimes[key];
-    if (!prev) {
-      console.log(
-        '[poll] skip: no fileMtimes entry for',
-        key,
-        'allKeys=',
-        Object.keys(state.fileMtimes),
-      );
-      return;
-    }
+    if (!prev) return;
 
     let newMtime = null;
     let newSize = null;
     let newContent = null;
 
     if (mount._local && state.localMounts[state.currentMountId]) {
-      // Local mount with File System Access API handle
+      // Local mount: read file and compare with _lastSavedContent
       const localMount = state.localMounts[state.currentMountId];
-      console.log(
-        '[poll] local mount: handle=',
-        !!localMount.handle,
-        'fileMap=',
-        !!localMount.fileMap,
-      );
       const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
-      if (!handle) {
-        console.log('[poll] skip: getLocalFileHandle returned null for', state.currentPath);
-        return;
-      }
+      if (!handle) return;
       const file = await handle.getFile();
       newMtime = file.lastModified;
       newSize = file.size;
-      // Always read content and compare directly (lastModified may not update reliably)
-      newContent = await file.text();
-      console.log(
-        '[poll] local: diskLen=',
-        newContent.length,
-        'editorLen=',
-        curVal.length,
-        'diskMtime=',
-        newMtime,
-        'prevMtime=',
-        prev.mtime,
-        'same=',
-        newContent === curVal,
-      );
-      if (newContent === curVal) {
-        // Content unchanged — update stored mtime and skip
+      const diskContent = await file.text();
+      if (diskContent === _lastSavedContent) {
+        // Disk matches what we last saved — no external change
         state.fileMtimes[key] = { mtime: newMtime, size: newSize };
-        console.log('[poll] content unchanged, updated mtime');
         return;
       }
-      console.log('[poll] CHANGE DETECTED, reloading editor...');
+      // External change detected
+      newContent = diskContent;
+      console.log('[poll] external change detected on local mount');
     } else {
-      // Host mount (mounted via backend /mounts.json): poll API for X-Mod-Time
-      console.log('[poll] server mount: fetching mtime...');
+      // Server mount: poll API for X-Mod-Time
       const resp = await fetch(
         '/api/mounts/' +
           encodeURIComponent(state.currentMountId) +
           '/file?path=' +
           encodeURIComponent(state.currentPath),
       );
-      console.log('[poll] server mount: resp.status=', resp.status);
       if (!resp.ok) return;
       const modTimeHeader = resp.headers.get('X-Mod-Time');
-      if (!modTimeHeader) {
-        console.log('[poll] server mount: no X-Mod-Time header');
-        return;
-      }
+      if (!modTimeHeader) return;
       newMtime = parseInt(modTimeHeader, 10);
       const text = await resp.text();
       newSize = text.length;
-      console.log(
-        '[poll] server: newMtime=',
-        newMtime,
-        'prevMtime=',
-        prev.mtime,
-        'newSize=',
-        newSize,
-        'prevSize=',
-        prev.size,
-      );
       if (prev.mtime !== newMtime || prev.size !== newSize) {
         newContent = text;
       }
     }
 
     if (newContent) {
-      if (editorHasFocus) {
-        // Defer reload until editor loses focus to avoid interrupting the user
-        _externalChangePending = { content: newContent, mtime: newMtime, size: newSize, key };
-        console.log('[poll] CHANGE DETECTED, deferred (editor has focus)');
-      } else {
-        window._vditor.setValue(newContent);
-        window._originalContent = window._vditor.getValue();
-        state.fileMtimes[key] = { mtime: newMtime, size: newSize };
-        _externalChangePending = null;
-        console.log('[poll] DONE: editor reloaded with new content');
-      }
-    } else {
-      console.log('[poll] no content change needed');
+      window._vditor.setValue(newContent);
+      window._originalContent = newContent;
+      _lastSavedContent = newContent;
+      state.fileMtimes[key] = { mtime: newMtime, size: newSize };
+      console.log('[poll] editor reloaded with external content');
     }
   } catch (e) {
     console.log('[poll] ERROR:', e.message || e);
@@ -3494,38 +3411,12 @@ async function pollCurrentFile() {
 let _sidebarRefreshTimer = null;
 const SIDEBAR_REFRESH_INTERVAL = 1000; // 1 second
 
-// === Apply deferred external change when editor loses focus ===
-function _applyDeferredExternalChange() {
-  if (!_externalChangePending) return;
-  const { content, mtime, size, key } = _externalChangePending;
-  _externalChangePending = null;
-  if (!window._vditor || !state.currentPath) return;
-  // Only apply if still on the same file
-  const curKey = state.currentMountId + ':' + state.currentPath;
-  if (key !== curKey) return;
-  // Skip if editor became dirty while deferred
-  if (_isContentDirty(window._vditor.getValue(), window._originalContent)) return;
-  window._vditor.setValue(content);
-  window._originalContent = window._vditor.getValue();
-  state.fileMtimes[key] = { mtime, size };
-  console.log('[poll] deferred reload applied on blur');
-}
-
 // === File content auto-poll (independent from sidebar refresh) ===
 let _filePollTimer = null;
 const FILE_POLL_INTERVAL = 1000; // 1 second
 
 function startFilePoll() {
   if (_filePollTimer) return;
-  // Bind blur handler to apply deferred external changes when editor loses focus
-  const vditorEl = document.getElementById('vditor');
-  if (vditorEl && !vditorEl._deferredBlurBound) {
-    vditorEl.addEventListener('focusout', () => {
-      // Use setTimeout to let the new focus target settle
-      setTimeout(_applyDeferredExternalChange, 100);
-    });
-    vditorEl._deferredBlurBound = true;
-  }
   async function tick() {
     await pollCurrentFile();
     _filePollTimer = setTimeout(tick, FILE_POLL_INTERVAL);
@@ -3605,7 +3496,8 @@ async function refreshFromDisk(silent) {
 
     if (content !== null) {
       window._vditor.setValue(content);
-      window._originalContent = window._vditor.getValue();
+      window._originalContent = content;
+      _lastSavedContent = content;
       if (!silent) showToast('已从磁盘重新加载');
     }
   } catch (e) {

@@ -535,6 +535,7 @@ function initEditor(content, mode, readonly) {
       // Sync window._originalContent with Vditor's normalized content
       // (Vditor may add trailing newline or normalize content)
       window._originalContent = _vditor.getValue();
+      window._lastSavedContent = _vditor.getValue();
       _originalContent = _vditor.getValue();
       // Hide Vditor's preview toolbar (Desktop/Tablet/Mobile buttons)
       const style = document.createElement('style');
