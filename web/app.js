@@ -3346,6 +3346,12 @@ async function pollCurrentFile() {
     });
     return;
   }
+  // Never reload content while the editor has focus — the user is actively editing
+  const vditorEl = document.getElementById('vditor');
+  if (vditorEl && vditorEl.contains(document.activeElement)) {
+    console.log('[poll] skip: editor has focus (user is editing)');
+    return;
+  }
   const mount = state.mounts.find((m) => m.id === state.currentMountId);
   if (!mount) {
     console.log('[poll] skip: mount not found for', state.currentMountId);
