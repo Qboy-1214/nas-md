@@ -2975,9 +2975,9 @@ async function saveFile({ silent = false } = {}) {
       clearLocalStorage(state.currentPath);
       if (!silent) showToast('已保存');
       else showToast('自动保存完成');
-      // Update mtime from server response
+      // Update mtime from server response (use null size to avoid char/byte mismatch)
       if (resp && resp.modTime) {
-        state.fileMtimes[key] = { mtime: resp.modTime, size: content.length };
+        state.fileMtimes[key] = { mtime: resp.modTime, size: null };
       }
       // Notify if conflict was detected
       if (resp && resp.conflict) {
@@ -3388,8 +3388,9 @@ async function pollCurrentFile() {
       const mtimeData = await mtimeResp.json();
       newMtime = mtimeData.modTime;
       newSize = mtimeData.size;
-      // Only download content if mtime or size changed
-      if (prev.mtime === newMtime && prev.size === newSize) return;
+      // Only download content if mtime changed (size comparison is unreliable:
+      // JS content.length counts chars, server st_size counts bytes)
+      if (prev.mtime === newMtime) return;
       const resp = await fetch(
         '/api/mounts/' +
           encodeURIComponent(state.currentMountId) +
