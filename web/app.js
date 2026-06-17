@@ -2876,100 +2876,110 @@ function toggleBacklinks() {
   if (panel) panel.classList.toggle('collapsed');
 }
 
+// === Save-in-progress flag to prevent pollCurrentFile race condition ===
+let _saveInProgress = false;
+
 async function saveFile({ silent = false } = {}) {
-  if (!state.currentPath || !state.currentMountId || !window._vditor) return;
-  // Check if current mount is readonly
-  const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (mount && mount.readonly) {
-    if (!silent) showToast('此文件不允许修改');
-    return;
-  }
-  const content = window._vditor.getValue();
-
-  // Show saving state on button (only for manual save)
-  const btn = $('btn-save');
-  if (!silent && btn) {
-    btn.classList.add('saving');
-    btn.disabled = true;
-  }
-
-  if (!navigator.onLine) {
-    // Offline: save to localStorage
-    saveToLocalStorage(state.currentPath, content);
-    markClean();
-    if (!silent) {
-      showToast('已离线保存，恢复连接后自动同步');
-      btn.classList.remove('saving');
-      btn.disabled = false;
-    }
-    return;
-  }
-
+  _saveInProgress = true;
   try {
-    // Local mount: save via File System Access API
-    if (mount && mount._local && state.localMounts[mount.id]) {
-      const ok = await writeLocalFile(mount.id, state.currentPath, content);
-      if (!ok) throw new Error('写入本机文件失败');
-      window._originalContent = window._vditor.getValue();
-      markClean();
-      clearLocalStorage(state.currentPath);
-      if (!silent) showToast('已保存');
-      // Update mtime after local save
-      try {
-        const handle = await getLocalFileHandle(
-          state.localMounts[mount.id].handle,
-          state.currentPath,
-        );
-        if (handle) {
-          const file = await handle.getFile();
-          state.fileMtimes[mount.id + ':' + state.currentPath] = {
-            mtime: file.lastModified,
-            size: file.size,
-          };
-        }
-      } catch (_e) {
-        /* ignore */
-      }
-    } else {
-      // Server mount: save with optimistic lock (expected_mtime)
-      const key = state.currentMountId + ':' + state.currentPath;
-      const expectedMtime = state.fileMtimes[key]?.mtime || null;
-      const resp = await API.putFile(
-        state.currentMountId,
-        state.currentPath,
-        content,
-        expectedMtime,
-      );
-      if (resp && resp.error) {
-        throw new Error(resp.error);
-      }
-      window._originalContent = window._vditor.getValue();
-      markClean();
-      clearLocalStorage(state.currentPath);
-      if (!silent) showToast('已保存');
-      else showToast('自动保存完成');
-      // Update mtime from server response
-      if (resp && resp.modTime) {
-        state.fileMtimes[key] = { mtime: resp.modTime, size: content.length };
-      }
-      // Notify if conflict was detected
-      if (resp && resp.conflict) {
-        showToast('文件在外部已被修改，已创建冲突副本（.conflict.md）');
-      }
-      // Trigger sync after save
-      performSync();
+    if (!state.currentPath || !state.currentMountId || !window._vditor) return;
+    // Check if current mount is readonly
+    const mount = state.mounts.find((m) => m.id === state.currentMountId);
+    if (mount && mount.readonly) {
+      if (!silent) showToast('此文件不允许修改');
+      return;
     }
-  } catch (e) {
-    // Fallback to localStorage on error
-    saveToLocalStorage(state.currentPath, content);
-    if (!silent) showToast('保存失败，已缓存到本地');
-    else showToast('自动保存失败');
-    console.error(e);
-  } finally {
+    const content = window._vditor.getValue();
+
+    // Show saving state on button (only for manual save)
+    const btn = $('btn-save');
     if (!silent && btn) {
-      btn.classList.remove('saving');
-      btn.disabled = false;
+      btn.classList.add('saving');
+      btn.disabled = true;
     }
+
+    if (!navigator.onLine) {
+      // Offline: save to localStorage
+      saveToLocalStorage(state.currentPath, content);
+      markClean();
+      if (!silent) {
+        showToast('已离线保存，恢复连接后自动同步');
+        btn.classList.remove('saving');
+        btn.disabled = false;
+      }
+      return;
+    }
+
+    try {
+      // Local mount: save via File System Access API
+      if (mount && mount._local && state.localMounts[mount.id]) {
+        const ok = await writeLocalFile(mount.id, state.currentPath, content);
+        if (!ok) throw new Error('写入本机文件失败');
+        window._originalContent = window._vditor.getValue();
+        markClean();
+        clearLocalStorage(state.currentPath);
+        if (!silent) showToast('已保存');
+        // Update mtime after local save
+        try {
+          const handle = await getLocalFileHandle(
+            state.localMounts[mount.id].handle,
+            state.currentPath,
+          );
+          if (handle) {
+            const file = await handle.getFile();
+            state.fileMtimes[mount.id + ':' + state.currentPath] = {
+              mtime: file.lastModified,
+              size: file.size,
+            };
+          }
+        } catch (_e) {
+          /* ignore */
+        }
+      } else {
+        // Server mount: save with optimistic lock (expected_mtime)
+        const key = state.currentMountId + ':' + state.currentPath;
+        const expectedMtime = state.fileMtimes[key]?.mtime || null;
+        const resp = await API.putFile(
+          state.currentMountId,
+          state.currentPath,
+          content,
+          expectedMtime,
+        );
+        if (resp && resp.error) {
+          throw new Error(resp.error);
+        }
+        window._originalContent = window._vditor.getValue();
+        markClean();
+        clearLocalStorage(state.currentPath);
+        if (!silent) showToast('已保存');
+        else showToast('自动保存完成');
+        // Update mtime from server response
+        if (resp && resp.modTime) {
+          state.fileMtimes[key] = { mtime: resp.modTime, size: content.length };
+        }
+        // Notify if conflict was detected
+        if (resp && resp.conflict) {
+          showToast('文件在外部已被修改，已创建冲突副本（.conflict.md）');
+        }
+        // Trigger sync after save
+        performSync();
+      }
+    } catch (e) {
+      // Fallback to localStorage on error
+      saveToLocalStorage(state.currentPath, content);
+      if (!silent) showToast('保存失败，已缓存到本地');
+      else showToast('自动保存失败');
+      console.error(e);
+    } finally {
+      _saveInProgress = false;
+      if (!silent && btn) {
+        btn.classList.remove('saving');
+        btn.disabled = false;
+      }
+    }
+  } catch (_e) {
+    // Outer catch: ensure _saveInProgress is reset even for early returns
+    _saveInProgress = false;
   }
 }
 
@@ -3324,6 +3334,10 @@ async function refreshTree() {
  * silently reload the content.
  */
 async function pollCurrentFile() {
+  if (_saveInProgress) {
+    console.log('[poll] skip: save in progress');
+    return;
+  }
   if (!state.currentPath || !state.currentMountId || !window._vditor) {
     console.log('[poll] skip: no path/mount/vditor', {
       path: state.currentPath,
