@@ -2768,14 +2768,9 @@ function onEditorInput() {
     if (btn) btn.classList.toggle('dirty', isDirty);
   }
   if (isDirty && state.autoSave && state.currentPath) {
-    const mount = state.mounts.find((m) => m.id === state.currentMountId);
-    if (mount && mount._local && state.localMounts[mount.id]) {
-      // Local mount: save immediately
-      saveFile({ silent: true });
-    } else {
-      // Server mount: debounce 1500ms
-      scheduleAutoSave();
-    }
+    // Debounce auto-save for all mount types to avoid race condition
+    // with pollCurrentFile reading stale disk content
+    scheduleAutoSave();
   }
 }
 window.onEditorInput = onEditorInput;
