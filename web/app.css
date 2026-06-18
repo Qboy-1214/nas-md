@@ -1292,6 +1292,17 @@ a:hover {
 .vditor-preview table td,
 .vditor-preview table th {
   border-color: #e5e3df !important;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 400px;
+}
+
+/* Table layout: allow columns to share width proportionally */
+.vditor-ir table,
+.vditor-wysiwyg table,
+.vditor-preview table {
+  table-layout: fixed;
 }
 
 /* Heading prefix markers */
@@ -1595,6 +1606,10 @@ a:hover {
 .dark .vditor-preview table td,
 .dark .vditor-preview table th {
   border-color: #333333 !important;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 400px;
 }
 
 .dark .vditor-ir code,
@@ -1782,6 +1797,10 @@ a:hover {
 .vditor-preview table td,
 .vditor-preview table th {
   border-color: #e5e3df !important;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 400px;
 }
 
 .vditor-ir .vditor-reset > h1:before,
@@ -1982,6 +2001,10 @@ a:hover {
 .dark .vditor-preview table td,
 .dark .vditor-preview table th {
   border-color: #333333 !important;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 400px;
 }
 
 .dark .vditor-ir code,
