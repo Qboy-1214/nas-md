@@ -712,6 +712,12 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_public_mounts()
                 return
 
+            # SSE endpoint for collaborative editing
+            if path == "/api/events":
+                qs = parse_qs(parsed.query)
+                self._handle_sse(qs)
+                return
+
             # Static files (public, no auth needed for frontend)
             # Also serves SPA routes like /admin, /graph etc. via fallback to index.html
             if not path.startswith("/api/"):
@@ -1362,9 +1368,51 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         body = self._read_body()
         # Create parent dirs
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+
+        # Read old content for diff (before overwriting)
+        old_content = None
+        if os.path.isfile(abs_path):
+            try:
+                with open(abs_path, "rb") as f:
+                    old_content = f.read()
+            except OSError:
+                pass
+
         with open(abs_path, "wb") as f:
             f.write(body)
         st = os.stat(abs_path)
+
+        # Broadcast changes to SSE clients (collaborative editing)
+        if old_content is not None:
+            try:
+                from nas_md.webserver.paragraph_diff import compute_diff
+                from nas_md.webserver.sse_handler import sse_broadcast
+
+                old_text = old_content.decode("utf-8", errors="replace")
+                new_text = body.decode("utf-8", errors="replace")
+                if old_text != new_text:
+                    changes = compute_diff(old_text, new_text)
+                    if changes:
+                        sse_broadcast(
+                            f"{mount_id}:{rel_path}",
+                            exclude_id=session_id,
+                            event={
+                                "type": "remote_edit",
+                                "authorId": session_id,
+                                "authorName": self.headers.get(
+                                    "X-Client-Name", "Anonymous"
+                                ),
+                                "authorColor": self.headers.get(
+                                    "X-Client-Color", "#3498db"
+                                ),
+                                "mountId": mount_id,
+                                "path": rel_path,
+                                "changes": changes,
+                            },
+                        )
+            except Exception as e:
+                logger.warning("SSE broadcast failed: %s", e)
+
         self._send_json(
             {
                 "status": "ok",
@@ -1475,6 +1523,52 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 logger.error("Search index update after delete failed: %s", e)
         self._send_json({"status": "ok"})
+
+    def _handle_sse(self, qs: dict):
+        """Handle SSE connection for real-time collaborative editing.
+
+        GET /api/events?file=mountId:path
+        """
+        from nas_md.webserver.sse_handler import (
+            register_sse_client,
+            SSEConnectionHandler,
+        )
+
+        file_key = qs.get("file", [None])[0]
+        if not file_key:
+            return self._send_error("Missing file parameter", 400)
+
+        # Parse identity from query params (sent by client)
+        author_name = qs.get("name", ["Anonymous"])[0]
+        author_color = qs.get("color", ["#3498db"])[0]
+
+        # Verify session/cookie
+        session_id = self._get_session_id()
+
+        # Send SSE headers
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")  # Disable nginx buffering
+        self._flush_session_cookie()
+        self.end_headers()
+
+        # Register SSE connection
+        conn = register_sse_client(self, file_key, author_name, author_color)
+
+        # Send initial connected event
+        conn.send_event({"type": "connected", "clientId": conn.client_id})
+
+        # Keep connection alive with periodic pings
+        try:
+            while not conn.is_closed:
+                time.sleep(30)
+                conn.send_event({"type": "ping"})
+        except Exception:
+            pass
+        finally:
+            conn.detach()
 
     # --- Search handler ---
 
