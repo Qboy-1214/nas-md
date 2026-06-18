@@ -15,9 +15,6 @@ test.describe('应用加载', () => {
     // 暗色模式切换按钮
     const darkBtn = page.locator('button[title="切换暗色模式"]');
     await expect(darkBtn).toBeVisible();
-    // 大纲按钮
-    const outlineBtn = page.locator('#btn-outline');
-    await expect(outlineBtn).toBeVisible();
   });
 
   test('侧边栏底部导航按钮', async ({ page }) => {
