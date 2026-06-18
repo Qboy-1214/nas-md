@@ -207,7 +207,7 @@ a:hover {
 .layout {
   display: flex;
   height: 100vh;
-  overflow: hidden;
+  overflow: auto;
 }
 
 /* === Sidebar === */
@@ -873,7 +873,7 @@ a:hover {
 /* Editor Area */
 .editor-area {
   flex: 1;
-  overflow: hidden;
+  overflow: visible;
   position: relative;
 }
 .editor-container {
@@ -883,7 +883,7 @@ a:hover {
 }
 .editor-container #vditor {
   flex: 1;
-  min-height: 0;
+  min-height: auto;
   border: none !important;
 }
 
@@ -1256,12 +1256,6 @@ a:hover {
 }
 .vditor-content {
   padding: 0 !important;
-  overflow: auto !important;
-}
-
-/* IR mode: allow preview area to scroll for large content (mermaid, etc.) */
-.vditor-ir {
-  overflow-y: auto !important;
 }
 
 /* Code blocks */
