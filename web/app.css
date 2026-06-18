@@ -1256,6 +1256,12 @@ a:hover {
 }
 .vditor-content {
   padding: 0 !important;
+  overflow: auto !important;
+}
+
+/* IR mode: allow preview area to scroll for large content (mermaid, etc.) */
+.vditor-ir {
+  overflow-y: auto !important;
 }
 
 /* Code blocks */
