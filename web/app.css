@@ -206,8 +206,8 @@ a:hover {
 /* === Layout === */
 .layout {
   display: flex;
-  min-height: 100vh;
-  overflow: visible;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* === Sidebar === */
@@ -873,8 +873,9 @@ a:hover {
 /* Editor Area */
 .editor-area {
   flex: 1;
-  overflow: visible;
+  overflow: hidden;
   position: relative;
+  min-height: 0;
 }
 .editor-container {
   height: 100%;
@@ -883,7 +884,7 @@ a:hover {
 }
 .editor-container #vditor {
   flex: 1;
-  min-height: auto;
+  min-height: 0;
   border: none !important;
 }
 
@@ -1250,24 +1251,12 @@ a:hover {
 /* === Vditor Hardcoded Overrides === */
 .vditor {
   border: none !important;
-  height: auto !important;
-  overflow: visible !important;
 }
 .vditor-toolbar {
   border-bottom: 1px solid var(--c-border) !important;
 }
 .vditor-content {
   padding: 0 !important;
-  height: auto !important;
-  overflow: visible !important;
-}
-.vditor-ir,
-.vditor-wysiwyg,
-.vditor-preview,
-.vditor-sv {
-  height: auto !important;
-  overflow: visible !important;
-  max-height: none !important;
 }
 
 /* Mermaid diagram nodes: override inline white-space: nowrap to allow wrapping */
