@@ -154,6 +154,8 @@ class DirEntry:
         self.children: list[DirEntry] = []
         self.has_md: bool = False  # True if this subtree contains any .md file
         self.is_empty: bool = False  # True if this directory has no children
+        # True if this subtree contains any empty directory (propagated upward)
+        self.has_empty_dir: bool = False
 
     def to_dict(self) -> dict:
         d = {
@@ -164,6 +166,7 @@ class DirEntry:
             "modTime": self.mod_time,
             "hasMd": self.has_md,
             "isEmpty": self.is_empty,
+            "hasEmptyDir": self.has_empty_dir,
         }
         if self.children:
             d["children"] = [c.to_dict() for c in self.children]
@@ -447,6 +450,9 @@ class MountManager:
                     entry.children.append(child_tree)
                     if child_tree.has_md:
                         entry.has_md = True
+                    # Propagate has_empty_dir: child is empty or contains empty dirs
+                    if child_tree.is_empty or child_tree.has_empty_dir:
+                        entry.has_empty_dir = True
         elif is_dir:
             # At max depth, check emptiness from listing
             entry.is_empty = len(self.list_dir(mount, rel_path)) == 0

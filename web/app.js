@@ -514,23 +514,26 @@ async function readLocalDir(dirHandle, parentPath) {
       const subChildren = [];
       let hasMd = false;
       let isEmpty = true;
+      let hasEmptyDir = false;
       try {
         const subHandle = await dirHandle.getDirectoryHandle(entry.name);
         const subResult = await readLocalDir(subHandle, entryPath);
         subChildren.push(...(subResult.children || []));
         hasMd = subResult.hasMd || false;
         isEmpty = subResult.isEmpty || false;
+        hasEmptyDir = subResult.hasEmptyDir || false;
       } catch (_e) {
         /* skip unreadable dirs */
       }
-      // Include dirs that contain .md files or are empty
-      if (hasMd || isEmpty) {
+      // Include dirs that contain .md files, are empty, or contain empty dirs
+      if (hasMd || isEmpty || hasEmptyDir) {
         children.push({
           name: entry.name,
           path: entryPath,
           isDir: true,
           hasMd,
           isEmpty,
+          hasEmptyDir,
           children: subChildren,
         });
       }
@@ -553,7 +556,17 @@ async function readLocalDir(dirHandle, parentPath) {
   });
   const hasMd = children.some((c) => c.hasMd);
   const isEmpty = !hasRawEntries;
-  return { name: dirHandle.name, path: parentPath, isDir: true, children, hasMd, isEmpty };
+  // Propagate hasEmptyDir: any child is empty or contains empty dirs
+  const hasEmptyDir = children.some((c) => c.isDir && (c.isEmpty || c.hasEmptyDir));
+  return {
+    name: dirHandle.name,
+    path: parentPath,
+    isDir: true,
+    children,
+    hasMd,
+    isEmpty,
+    hasEmptyDir,
+  };
 }
 
 async function buildTreeFromFileMap(fileMap, parentPath) {
@@ -618,6 +631,19 @@ async function buildTreeFromFileMap(fileMap, parentPath) {
     dirEntry.hasMd = found;
     return found;
   }
+  // Propagate hasEmptyDir: a dir has it if any child dir is empty or has empty dirs
+  function markHasEmptyDir(dirEntry) {
+    if (!dirEntry.isDir) return false;
+    let found = false;
+    for (const child of dirEntry.children) {
+      if (child.isDir) {
+        markHasEmptyDir(child);
+        if (child.isEmpty || child.hasEmptyDir) found = true;
+      }
+    }
+    dirEntry.hasEmptyDir = found;
+    return found;
+  }
   for (const dirEntry of Object.values(dirMap)) {
     dirEntry.children.sort((a, b) => {
       if (a.isDir && !b.isDir) return -1;
@@ -634,6 +660,7 @@ async function buildTreeFromFileMap(fileMap, parentPath) {
   };
   if (root.children.length === 0) root.children = entries;
   markHasMd(root);
+  markHasEmptyDir(root);
 
   if (parentPath === '/') return root;
   return (
@@ -1163,8 +1190,8 @@ function renderEntries(entries, mountId, _parentPath) {
       if (e.name.startsWith('.')) return false;
       // Always show .md files
       if (!e.isDir && e.name.toLowerCase().endsWith('.md')) return true;
-      // Show directories that have .md files or are empty
-      if (e.isDir && (e.hasMd || e.isEmpty)) return true;
+      // Show directories that have .md files, are empty, or contain empty dirs
+      if (e.isDir && (e.hasMd || e.isEmpty || e.hasEmptyDir)) return true;
       // Hide non-md files and directories without .md files that aren't empty
       return false;
     })
