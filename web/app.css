@@ -1250,12 +1250,66 @@ a:hover {
 /* === Vditor Hardcoded Overrides === */
 .vditor {
   border: none !important;
+  height: auto !important;
+  overflow: visible !important;
 }
 .vditor-toolbar {
   border-bottom: 1px solid var(--c-border) !important;
 }
 .vditor-content {
   padding: 0 !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+.vditor-ir,
+.vditor-wysiwyg,
+.vditor-preview,
+.vditor-sv {
+  height: auto !important;
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+/* Mermaid diagram nodes: override inline white-space: nowrap to allow wrapping */
+.vditor-ir .mermaid div,
+.vditor-ir .language-mermaid div,
+.vditor-wysiwyg .mermaid div,
+.vditor-wysiwyg .language-mermaid div,
+.vditor-preview .mermaid div,
+.vditor-preview .language-mermaid div {
+  white-space: normal !important;
+}
+.vditor-ir .mermaid span.nodeLabel,
+.vditor-ir .language-mermaid span.nodeLabel,
+.vditor-wysiwyg .mermaid span.nodeLabel,
+.vditor-wysiwyg .language-mermaid span.nodeLabel,
+.vditor-preview .mermaid span.nodeLabel,
+.vditor-preview .language-mermaid span.nodeLabel {
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  display: inline-block !important;
+  padding-bottom: 8px !important;
+}
+
+/* Mermaid: allow foreignObject content to expand beyond fixed height */
+.vditor-ir .mermaid foreignObject,
+.vditor-ir .language-mermaid foreignObject,
+.vditor-wysiwyg .mermaid foreignObject,
+.vditor-wysiwyg .language-mermaid foreignObject,
+.vditor-preview .mermaid foreignObject,
+.vditor-preview .language-mermaid foreignObject {
+  overflow: visible !important;
+}
+.vditor-ir .mermaid foreignObject > div,
+.vditor-ir .language-mermaid foreignObject > div,
+.vditor-wysiwyg .mermaid foreignObject > div,
+.vditor-wysiwyg .language-mermaid foreignObject > div,
+.vditor-preview .mermaid foreignObject > div,
+.vditor-preview .language-mermaid foreignObject > div {
+  overflow: visible !important;
+  max-height: none !important;
+  height: auto !important;
 }
 
 /* Code blocks */

@@ -250,6 +250,39 @@ function rewriteEditorImages() {
   });
 }
 
+// Adjust mermaid node rect heights to fit expanded content
+function fixMermaidNodeHeights() {
+  const vditorEl = document.getElementById('vditor');
+  if (!vditorEl) return;
+  const areas = vditorEl.querySelectorAll('.vditor-ir, .vditor-wysiwyg, .vditor-preview');
+  areas.forEach((area) => {
+    area.querySelectorAll('.mermaid, .language-mermaid').forEach((m) => {
+      const svg = m.querySelector('svg');
+      if (svg) {
+        // Allow SVG content to overflow so expanded nodes aren't clipped
+        svg.style.overflow = 'visible';
+      }
+      m.querySelectorAll('.node').forEach((node) => {
+        const fo = node.querySelector('foreignObject');
+        if (!fo) return;
+        const contentDiv = fo.querySelector('div');
+        if (!contentDiv) return;
+        // Measure actual content height
+        const contentHeight = contentDiv.scrollHeight;
+        const rect = node.querySelector('rect');
+        if (rect) {
+          const currentH = parseFloat(rect.getAttribute('height') || '0');
+          if (contentHeight > currentH) {
+            const newH = contentHeight + 8;
+            rect.setAttribute('height', newH);
+            fo.setAttribute('height', newH);
+          }
+        }
+      });
+    });
+  });
+}
+
 // State saved before mode switch, restored after reinit
 let _pendingRestore = null;
 // { headingText, scrollPercent, cursorViewportOffset, svCursorPos }
@@ -576,12 +609,14 @@ function initEditor(content, mode, readonly) {
       // Rewrite relative image paths in editor content
       rewriteEditorImages();
       _addHeadingIdsToEditor(vditorEl);
+      fixMermaidNodeHeights();
       const contentEl =
         vditorEl.querySelector('.vditor-ir') || vditorEl.querySelector('.vditor-wysiwyg');
       if (contentEl) {
         new MutationObserver(() => {
           rewriteEditorImages();
           _addHeadingIdsToEditor(vditorEl);
+          fixMermaidNodeHeights();
         }).observe(contentEl, {
           childList: true,
           subtree: true,
@@ -592,6 +627,7 @@ function initEditor(content, mode, readonly) {
         new MutationObserver(() => {
           rewriteEditorImages();
           _addHeadingIdsToEditor(vditorEl);
+          fixMermaidNodeHeights();
         }).observe(previewEl, {
           childList: true,
           subtree: true,
