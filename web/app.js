@@ -2847,6 +2847,53 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
 }
 
+// === 侧边栏拖拽调整宽度 ===
+(function initSidebarResizer() {
+  const sidebar = document.getElementById('sidebar');
+  const resizer = document.getElementById('sidebar-resizer');
+  if (!sidebar || !resizer) return;
+
+  // 恢复上次保存的宽度
+  const savedWidth = localStorage.getItem('nasmd_sidebar_width');
+  if (savedWidth) {
+    sidebar.style.width = savedWidth + 'px';
+  }
+
+  let isDragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    startX = e.clientX;
+    startWidth = sidebar.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const delta = e.clientX - startX;
+    let newWidth = startWidth + delta;
+    // 限制最小/最大宽度
+    const minWidth = 180;
+    const maxWidth = Math.min(window.innerWidth - 300, 600);
+    newWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
+    sidebar.style.width = newWidth + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('nasmd_sidebar_width', sidebar.offsetWidth);
+  });
+})();
+
 // === 暗色模式 ===
 if (localStorage.getItem('nasmd_dark') === '1') {
   document.documentElement.classList.add('dark');
@@ -3750,13 +3797,15 @@ async function loadRecentFiles() {
     seen.add(key);
     return true;
   });
-  // Sort by access time (most recent first), fall back to modTime
-  deduped.sort((a, b) => {
-    const aTime = state.accessLog[a.mountId + ':' + a.path] || a.modTime || 0;
-    const bTime = state.accessLog[b.mountId + ':' + b.path] || b.modTime || 0;
+  // Only include files this machine has actually accessed (per-browser accessLog)
+  const accessed = deduped.filter((f) => state.accessLog[f.mountId + ':' + f.path]);
+  // Sort by access time only (most recent first)
+  accessed.sort((a, b) => {
+    const aTime = state.accessLog[a.mountId + ':' + a.path] || 0;
+    const bTime = state.accessLog[b.mountId + ':' + b.path] || 0;
     return bTime - aTime;
   });
-  state.recentFiles = deduped.slice(0, 10);
+  state.recentFiles = accessed.slice(0, 10);
   renderRecentFiles();
 }
 

@@ -213,7 +213,7 @@ a:hover {
 /* === Sidebar === */
 .sidebar {
   width: var(--sidebar-w);
-  min-width: var(--sidebar-w);
+  min-width: 180px;
   background: var(--c-bg-sidebar);
   border-right: 1px solid var(--c-border);
   display: flex;
@@ -221,6 +221,23 @@ a:hover {
   transition: width 0.2s ease;
   overflow: hidden;
   height: 100vh;
+  flex-shrink: 0;
+}
+
+.sidebar-resizer {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  height: 100vh;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s ease;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer.dragging {
+  background: var(--c-primary);
 }
 
 .sidebar-header {
@@ -727,6 +744,7 @@ a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .rename-top-btn {
@@ -754,6 +772,7 @@ a:hover {
   align-items: center;
   gap: var(--s-xs);
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* Editor Mode — Segmented Tab */
@@ -763,7 +782,7 @@ a:hover {
 }
 
 .editor-modes button {
-  padding: var(--s-sm) var(--s-md);
+  padding: var(--s-sm) var(--s-sm);
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -775,6 +794,8 @@ a:hover {
   transition: all 0.15s ease;
   position: relative;
   bottom: -1px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .editor-modes button:hover {
@@ -793,20 +814,23 @@ a:hover {
   display: flex;
   align-items: center;
   gap: var(--s-xs);
+  flex-shrink: 0;
 }
 
 /* Save Button — Ghost style */
 .save-btn {
-  padding: var(--s-xs) var(--s-md);
+  padding: var(--s-xxs) var(--s-sm);
   background: transparent;
   color: var(--c-steel);
   border: 1px solid var(--c-border-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   font-size: var(--f-body-sm);
   font-weight: var(--fw-medium);
   cursor: pointer;
   transition: all 0.15s ease;
-  height: var(--button-h);
+  height: 30px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .save-btn:hover:not(:disabled) {
