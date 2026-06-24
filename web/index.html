@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="lib/fonts/inter.css" />
     <link rel="stylesheet" href="lib/vditor/index.css" />
     <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="highlight.css" />
   </head>
   <body>
     <div class="layout">
@@ -199,6 +200,27 @@
               <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
             </svg>
           </button>
+          <button
+            class="rename-top-btn"
+            id="history-top-btn"
+            onclick="showVersionHistory()"
+            title="版本历史"
+            style="display: none"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </button>
           <div class="topbar-actions">
             <div class="editor-modes" id="editor-modes" style="display: none">
               <button onclick="setEditorMode('ir')" title="即时渲染模式">即时</button>
@@ -357,6 +379,11 @@
 
       <script src="lib/vditor/index.min.js"></script>
       <script src="lib/d3/d3.min.js"></script>
+      <script src="identity.js"></script>
+      <script src="sse_client.js"></script>
+      <script src="sync_layer.js"></script>
+      <script src="version_history.js"></script>
+      <script src="mermaid_enhancer.js"></script>
       <script src="files.js"></script>
       <script src="editor.js"></script>
       <script src="app.js"></script>

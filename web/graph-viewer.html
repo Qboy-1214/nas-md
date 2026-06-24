@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nas-md 知识图谱</title>
+    <style>
+      :root {
+        --bg-primary: #0a0e17;
+        --bg-secondary: #111827;
+        --bg-tertiary: #1a2236;
+        --text-primary: #e2e8f0;
+        --text-secondary: #94a3b8;
+        --text-muted: #64748b;
+        --accent-cyan: #06b6d4;
+        --accent-green: #10b981;
+        --accent-amber: #f59e0b;
+        --accent-purple: #8b5cf6;
+        --accent-rose: #f43f5e;
+        --border-color: #1e293b;
+        --glow-cyan: rgba(6, 182, 212, 0.15);
+        --glow-green: rgba(16, 185, 129, 0.15);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family:
+          'Inter',
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        overflow: hidden;
+        height: 100vh;
+      }
+
+      /* Header */
+      .header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 48px;
+        background: var(--bg-secondary);
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+        z-index: 100;
+        gap: 12px;
+      }
+
+      .header h1 {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--accent-cyan);
+        white-space: nowrap;
+      }
+
+      .header .stats {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-left: auto;
+      }
+
+      .search-box {
+        position: relative;
+      }
+
+      .search-box input {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 4px 10px 4px 28px;
+        font-size: 12px;
+        color: var(--text-primary);
+        width: 220px;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+
+      .search-box input:focus {
+        border-color: var(--accent-cyan);
+      }
+
+      .search-box::before {
+        content: '\1F50D';
+        position: absolute;
+        left: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 11px;
+        opacity: 0.5;
+      }
+
+      /* Canvas */
+      #canvas {
+        position: fixed;
+        top: 48px;
+        left: 0;
+        right: 0;
+        bottom: 40px;
+      }
+
+      #canvas svg {
+        width: 100%;
+        height: 100%;
+      }
+
+      /* Side panel */
+      .side-panel {
+        position: fixed;
+        top: 48px;
+        right: -360px;
+        width: 360px;
+        bottom: 40px;
+        background: var(--bg-secondary);
+        border-left: 1px solid var(--border-color);
+        transition: right 0.3s ease;
+        z-index: 50;
+        overflow-y: auto;
+        padding: 16px;
+      }
+
+      .side-panel.open {
+        right: 0;
+      }
+
+      .side-panel h3 {
+        font-size: 13px;
+        color: var(--accent-cyan);
+        margin-bottom: 8px;
+      }
+
+      .side-panel .detail-row {
+        margin-bottom: 12px;
+      }
+      .side-panel .detail-label {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 3px;
+      }
+
+      .side-panel .detail-value {
+        font-size: 12px;
+        color: var(--text-primary);
+        line-height: 1.5;
+        word-break: break-all;
+      }
+
+      .side-panel .tag-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .side-panel .tag {
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color);
+      }
+
+      /* Layer bar */
+      .layer-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 40px;
+        background: var(--bg-secondary);
+        border-top: 1px solid var(--border-color);
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        gap: 6px;
+        z-index: 50;
+        overflow-x: auto;
+      }
+
+      .layer-btn {
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 4px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.2s;
+      }
+
+      .layer-btn:hover {
+        border-color: var(--accent-cyan);
+        color: var(--accent-cyan);
+      }
+
+      .layer-btn.active {
+        background: var(--glow-cyan);
+        border-color: var(--accent-cyan);
+        color: var(--accent-cyan);
+      }
+
+      /* Legend */
+      .legend {
+        position: fixed;
+        bottom: 48px;
+        left: 12px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 10px 12px;
+        z-index: 50;
+        font-size: 11px;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 4px;
+        color: var(--text-secondary);
+      }
+
+      .legend-item:last-child {
+        margin-bottom: 0;
+      }
+
+      .legend-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+
+      /* Tooltip */
+      .tooltip {
+        position: fixed;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 11px;
+        color: var(--text-primary);
+        pointer-events: none;
+        z-index: 200;
+        max-width: 260px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        display: none;
+      }
+
+      .tooltip .tt-name {
+        font-weight: 600;
+        color: var(--accent-cyan);
+        margin-bottom: 2px;
+      }
+
+      .tooltip .tt-path {
+        font-size: 10px;
+        color: var(--text-muted);
+        font-family: monospace;
+      }
+
+      /* Loading */
+      .loading {
+        position: fixed;
+        inset: 0;
+        background: var(--bg-primary);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 500;
+        transition: opacity 0.5s;
+      }
+
+      .loading.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .loading-spinner {
+        width: 40px;
+        height: 40px;
+        border: 2px solid var(--border-color);
+        border-top-color: var(--accent-cyan);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .loading-text {
+        margin-top: 12px;
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+
+      /* Tour */
+      .tour-bar {
+        position: fixed;
+        top: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 8px 16px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        z-index: 50;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      }
+
+      .tour-bar .tour-title {
+        color: var(--accent-amber);
+        font-weight: 600;
+      }
+
+      .tour-bar .tour-btn {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 2px 8px;
+        font-size: 11px;
+        color: var(--text-primary);
+        cursor: pointer;
+      }
+
+      .tour-bar .tour-btn:hover {
+        border-color: var(--accent-cyan);
+        color: var(--accent-cyan);
+      }
+
+      /* Controls */
+      .controls {
+        position: fixed;
+        bottom: 48px;
+        right: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        z-index: 50;
+      }
+
+      .ctrl-btn {
+        width: 32px;
+        height: 32px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        color: var(--text-secondary);
+        font-size: 16px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .ctrl-btn:hover {
+        border-color: var(--accent-cyan);
+        color: var(--accent-cyan);
+      }
+
+      /* Node detail section headers in panel */
+      .side-panel .section-title {
+        font-size: 11px;
+        color: var(--accent-amber);
+        margin-top: 16px;
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .side-panel .edge-item {
+        font-size: 11px;
+        color: var(--text-muted);
+        padding: 2px 0;
+        font-family: monospace;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="loading" id="loading">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">加载知识图谱...</div>
+    </div>
+
+    <div class="header">
+      <h1>&#9889; nas-md 知识图谱</h1>
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="搜索节点..." />
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <div id="canvas"><svg id="graphSvg"></svg></div>
+
+    <div class="side-panel" id="sidePanel">
+      <h3>节点详情</h3>
+      <div id="panelContent"></div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-dot" style="background: #06b6d4"></div>
+        项目 / 模块
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background: #10b981"></div>
+        代码文件
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background: #8b5cf6"></div>
+        函数
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background: #f59e0b"></div>
+        类
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background: #f43f5e"></div>
+        文档
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background: #64748b"></div>
+        配置
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background: #ec4899"></div>
+        测试
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="ctrl-btn" id="zoomIn" title="放大">+</button>
+      <button class="ctrl-btn" id="zoomOut" title="缩小">-</button>
+      <button class="ctrl-btn" id="resetView" title="重置">&#8634;</button>
+    </div>
+
+    <div class="layer-bar" id="layerBar"></div>
+
+    <div class="tour-bar" id="tourBar" style="display: none">
+      <span class="tour-title" id="tourTitle"></span>
+      <span id="tourDesc"></span>
+      <button class="tour-btn" id="tourPrev">&#9664; 上一步</button>
+      <button class="tour-btn" id="tourNext">下一步 &#9654;</button>
+      <button class="tour-btn" id="tourClose">X</button>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+      <div class="tt-name"></div>
+      <div class="tt-path"></div>
+    </div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script>
+      // === Config ===
+      const GRAPH_PATH = '../.understand-anything/knowledge-graph.json';
+
+      const TYPE_COLORS = {
+        project: '#06b6d4',
+        module: '#06b6d4',
+        file: '#10b981',
+        function: '#8b5cf6',
+        class: '#f59e0b',
+        document: '#f43f5e',
+        config: '#64748b',
+        test: '#ec4899',
+      };
+
+      const CODE_LANGS = new Set(['python', 'javascript', 'typescript', 'jsx', 'tsx']);
+      const CONFIG_EXTS = new Set(['.json', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.env']);
+      const DOC_EXTS = new Set(['.md', '.txt', '.rst']);
+      const CONFIG_NAMES = new Set([
+        'dockerfile',
+        'docker-compose',
+        'makefile',
+        'vagrantfile',
+        'gemfile',
+        'rakefile',
+      ]);
+
+      function getNodeColor(d) {
+        if (d.type === 'project') return '#06b6d4';
+        if (d.type === 'module') return '#06b6d4';
+        if (d.type === 'function') return '#8b5cf6';
+        if (d.type === 'class') return '#f59e0b';
+
+        if (d.type === 'file') {
+          const lang = (d.language || '').toLowerCase();
+          const fp = (d.filePath || '').toLowerCase();
+          const fn = fp.split('/').pop() || '';
+          const ext = fn.includes('.') ? fn.slice(fn.lastIndexOf('.')) : '';
+          if (CONFIG_NAMES.has(fn.replace('.', '')) || CONFIG_EXTS.has(ext)) return '#64748b';
+          if (fp.includes('.github/workflows')) return '#64748b';
+          if (fp.includes('docker-compose') || fp.includes('dockerfile')) return '#64748b';
+          if (DOC_EXTS.has(ext)) return '#f43f5e';
+          if (
+            fp.includes('/test') ||
+            fp.includes('/spec') ||
+            fn.startsWith('test_') ||
+            fn.endsWith('.spec.js')
+          )
+            return '#ec4899';
+          if (CODE_LANGS.has(lang)) return '#10b981';
+          if (lang === 'html' || lang === 'css') return '#f59e0b';
+          if (lang === 'yaml' || lang === 'json') return '#64748b';
+        }
+        return '#64748b';
+      }
+
+      function getNodeRadius(d) {
+        switch (d.type) {
+          case 'project':
+            return 14;
+          case 'module':
+            return 10;
+          case 'file':
+            return 6;
+          case 'function':
+            return 4;
+          case 'class':
+            return 5;
+          default:
+            return 4;
+        }
+      }
+
+      // === State ===
+      let graphData = null;
+      let simulation = null;
+      let svg, g, link, node, label;
+      let currentLayerId = null;
+      let tourStep = -1;
+
+      // === Load ===
+      async function loadGraph() {
+        try {
+          const resp = await fetch(GRAPH_PATH);
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          graphData = await resp.json();
+          initViz();
+          document.getElementById('loading').classList.add('hidden');
+        } catch (err) {
+          document.querySelector('.loading-text').textContent = '加载失败: ' + err.message;
+          document.querySelector('.loading-text').style.color = '#f43f5e';
+        }
+      }
+
+      // === Init ===
+      function initViz() {
+        const svgEl = document.getElementById('graphSvg');
+        const W = window.innerWidth;
+        const H = window.innerHeight - 48 - 40;
+
+        svg = d3.select(svgEl).attr('width', W).attr('height', H);
+
+        // Arrow markers
+        const defs = svg.append('defs');
+        ['imports', 'contains', 'depends_on', 'calls'].forEach((type) => {
+          defs
+            .append('marker')
+            .attr('id', 'arrow-' + type)
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 18)
+            .attr('refY', 0)
+            .attr('markerWidth', 6)
+            .attr('markerHeight', 6)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-5L10,0L0,5')
+            .attr('fill', '#334155');
+        });
+
+        g = svg.append('g');
+
+        // Zoom
+        const zoom = d3
+          .zoom()
+          .scaleExtent([0.05, 4])
+          .on('zoom', (event) => g.attr('transform', event.transform));
+
+        svg.call(zoom);
+        svg.on('dblclick.zoom', null);
+
+        // Prepare data — show file-level nodes only (hide function/class for clarity)
+        const allNodes = graphData.nodes.map((d) => ({ ...d }));
+        const visibleNodes = allNodes.filter(
+          (n) => n.type === 'project' || n.type === 'module' || n.type === 'file',
+        );
+        const visibleIds = new Set(visibleNodes.map((n) => n.id));
+        const visibleLinks = graphData.edges.filter((l) => {
+          const sid = typeof l.source === 'object' ? l.source.id : l.source;
+          const tid = typeof l.target === 'object' ? l.target.id : l.target;
+          return visibleIds.has(sid) && visibleIds.has(tid);
+        });
+
+        // Simulation
+        simulation = d3
+          .forceSimulation(visibleNodes)
+          .force(
+            'link',
+            d3
+              .forceLink(visibleLinks)
+              .id((d) => d.id)
+              .distance(50)
+              .strength(0.2),
+          )
+          .force('charge', d3.forceManyBody().strength(-150))
+          .force('center', d3.forceCenter(W / 2, H / 2))
+          .force('collision', d3.forceCollide().radius(15))
+          .alphaDecay(0.02);
+
+        // Links
+        link = g
+          .append('g')
+          .selectAll('line')
+          .data(visibleLinks)
+          .join('line')
+          .attr('stroke', '#334155')
+          .attr('stroke-width', 0.6)
+          .attr('stroke-opacity', 0.35)
+          .attr('marker-end', (d) => 'url(#arrow-' + (d.type || 'imports') + ')');
+
+        // Nodes
+        node = g
+          .append('g')
+          .selectAll('circle')
+          .data(visibleNodes)
+          .join('circle')
+          .attr('r', (d) => getNodeRadius(d))
+          .attr('fill', (d) => getNodeColor(d))
+          .attr('stroke', (d) => getNodeColor(d))
+          .attr('stroke-width', 1.2)
+          .attr('stroke-opacity', 0.25)
+          .attr('cursor', 'pointer')
+          .call(d3.drag().on('start', dragStarted).on('drag', dragged).on('end', dragEnded))
+          .on('click', (event, d) => selectNode(d))
+          .on('mouseenter', (event, d) => showTooltip(event, d))
+          .on('mouseleave', hideTooltip);
+
+        // Labels
+        label = g
+          .append('g')
+          .selectAll('text')
+          .data(visibleNodes)
+          .join('text')
+          .text((d) => (d.name.length > 18 ? d.name.slice(0, 16) + '..' : d.name))
+          .attr('font-size', (d) => (d.type === 'project' ? 10 : 7.5))
+          .attr('fill', '#94a3b8')
+          .attr('text-anchor', 'middle')
+          .attr('dy', (d) => getNodeRadius(d) + 10)
+          .attr('pointer-events', 'none')
+          .attr('paint-order', 'stroke')
+          .attr('stroke', '#0a0e17')
+          .attr('stroke-width', 3);
+
+        simulation.on('tick', () => {
+          link
+            .attr('x1', (d) => d.source.x)
+            .attr('y1', (d) => d.source.y)
+            .attr('x2', (d) => d.target.x)
+            .attr('y2', (d) => d.target.y);
+          node.attr('cx', (d) => d.x).attr('cy', (d) => d.y);
+          label.attr('x', (d) => d.x).attr('y', (d) => d.y);
+        });
+
+        // Stats
+        document.getElementById('stats').textContent =
+          graphData.nodes.length + ' 节点 / ' + graphData.edges.length + ' 边';
+
+        buildLayerBar();
+
+        // Search
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+          highlightSearch(e.target.value.toLowerCase().trim());
+        });
+
+        // Zoom controls
+        document
+          .getElementById('zoomIn')
+          .addEventListener('click', () => svg.transition().duration(300).call(zoom.scaleBy, 1.3));
+        document
+          .getElementById('zoomOut')
+          .addEventListener('click', () => svg.transition().duration(300).call(zoom.scaleBy, 0.7));
+        document
+          .getElementById('resetView')
+          .addEventListener('click', () =>
+            svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity),
+          );
+
+        // Tour
+        document.getElementById('tourPrev').addEventListener('click', () => {
+          if (tourStep > 0) {
+            tourStep--;
+            showTourStep();
+          }
+        });
+        document.getElementById('tourNext').addEventListener('click', () => {
+          if (tourStep < graphData.tour.length - 1) {
+            tourStep++;
+            showTourStep();
+          }
+        });
+        document.getElementById('tourClose').addEventListener('click', () => {
+          tourStep = -1;
+          document.getElementById('tourBar').style.display = 'none';
+          resetHighlight();
+        });
+      }
+
+      function buildLayerBar() {
+        const bar = document.getElementById('layerBar');
+        bar.innerHTML = '';
+
+        const allBtn = document.createElement('button');
+        allBtn.className = 'layer-btn active';
+        allBtn.textContent = '全部';
+        allBtn.addEventListener('click', () => {
+          currentLayerId = null;
+          resetHighlight();
+          bar.querySelectorAll('.layer-btn').forEach((b) => b.classList.remove('active'));
+          allBtn.classList.add('active');
+        });
+        bar.appendChild(allBtn);
+
+        for (const layer of graphData.layers || []) {
+          const btn = document.createElement('button');
+          btn.className = 'layer-btn';
+          btn.textContent = layer.name + ' (' + layer.nodeIds.length + ')';
+          btn.addEventListener('click', () => {
+            currentLayerId = layer.id;
+            highlightLayer(layer);
+            bar.querySelectorAll('.layer-btn').forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+          });
+          bar.appendChild(btn);
+        }
+
+        // Tour button
+        const tourBtn = document.createElement('button');
+        tourBtn.className = 'layer-btn';
+        tourBtn.textContent = '\u{1F3AF} 导览';
+        tourBtn.style.marginLeft = 'auto';
+        tourBtn.addEventListener('click', () => {
+          if (tourStep === -1) {
+            tourStep = 0;
+            document.getElementById('tourBar').style.display = 'flex';
+            showTourStep();
+          } else {
+            tourStep = -1;
+            document.getElementById('tourBar').style.display = 'none';
+            resetHighlight();
+          }
+        });
+        bar.appendChild(tourBtn);
+      }
+
+      function highlightLayer(layer) {
+        const idSet = new Set(layer.nodeIds);
+        node.attr('opacity', (d) => (idSet.has(d.id) ? 1 : 0.06));
+        link.attr('opacity', (d) =>
+          idSet.has(d.source?.id || d.source) && idSet.has(d.target?.id || d.target) ? 0.5 : 0.01,
+        );
+        label.attr('opacity', (d) => (idSet.has(d.id) ? 1 : 0.03));
+      }
+
+      function resetHighlight() {
+        node.attr('opacity', 1);
+        link.attr('opacity', 0.35);
+        label.attr('opacity', 1);
+      }
+
+      function highlightSearch(q) {
+        if (!q) {
+          resetHighlight();
+          return;
+        }
+        const matchIds = new Set();
+        for (const n of graphData.nodes) {
+          if (
+            (n.name || '').toLowerCase().includes(q) ||
+            (n.summary || '').toLowerCase().includes(q) ||
+            (n.filePath || '').toLowerCase().includes(q) ||
+            (n.tags || []).some((t) => t.toLowerCase().includes(q))
+          ) {
+            matchIds.add(n.id);
+          }
+        }
+        node.attr('opacity', (d) => (matchIds.has(d.id) ? 1 : 0.05));
+        link.attr('opacity', (d) =>
+          matchIds.has(d.source?.id || d.source) || matchIds.has(d.target?.id || d.target)
+            ? 0.4
+            : 0.01,
+        );
+        label.attr('opacity', (d) => (matchIds.has(d.id) ? 1 : 0.02));
+      }
+
+      function selectNode(d) {
+        const panel = document.getElementById('sidePanel');
+        const content = document.getElementById('panelContent');
+
+        const edges = (graphData.edges || []).filter((e) => {
+          const sid = typeof e.source === 'object' ? e.source.id : e.source;
+          const tid = typeof e.target === 'object' ? e.target.id : e.target;
+          return sid === d.id || tid === d.id;
+        });
+        const incoming = edges.filter((e) => {
+          const tid = typeof e.target === 'object' ? e.target.id : e.target;
+          return tid === d.id;
+        });
+        const outgoing = edges.filter((e) => {
+          const sid = typeof e.source === 'object' ? e.source.id : e.source;
+          return sid === d.id;
+        });
+
+        let html = '';
+        const row = (label, value) =>
+          '<div class="detail-row"><div class="detail-label">' +
+          label +
+          '</div><div class="detail-value">' +
+          (value || '-') +
+          '</div></div>';
+        html += row('名称', d.name);
+        html += row('类型', d.type);
+        html += row('摘要', d.summary);
+        html += row('路径', d.filePath);
+
+        if (d.tags && d.tags.length) {
+          html +=
+            '<div class="detail-row"><div class="detail-label">标签</div><div class="tag-list">' +
+            d.tags.map((t) => '<span class="tag">' + t + '</span>').join('') +
+            '</div></div>';
+        }
+
+        if (d.language) html += row('语言', d.language);
+        if (d.complexity) html += row('复杂度', d.complexity);
+
+        if (incoming.length > 0) {
+          html += '<div class="section-title">引用方 (' + incoming.length + ')</div>';
+          incoming.forEach((e) => {
+            const sid = typeof e.source === 'object' ? e.source.id : e.source;
+            html += '<div class="edge-item">' + sid + ' \u2192</div>';
+          });
+        }
+        if (outgoing.length > 0) {
+          html += '<div class="section-title">依赖方 (' + outgoing.length + ')</div>';
+          outgoing.forEach((e) => {
+            const tid = typeof e.target === 'object' ? e.target.id : e.target;
+            html += '<div class="edge-item">\u2192 ' + tid + '</div>';
+          });
+        }
+
+        content.innerHTML = html;
+        panel.classList.add('open');
+
+        // Highlight connected
+        const connected = new Set();
+        for (const e of edges) {
+          connected.add(typeof e.source === 'object' ? e.source.id : e.source);
+          connected.add(typeof e.target === 'object' ? e.target.id : e.target);
+        }
+        node.attr('opacity', (n) => (connected.has(n.id) ? 1 : 0.12));
+        link.attr('opacity', (e) => {
+          const sid = typeof e.source === 'object' ? e.source.id : e.source;
+          const tid = typeof e.target === 'object' ? e.target.id : e.target;
+          return connected.has(sid) && connected.has(tid) ? 0.6 : 0.02;
+        });
+        label.attr('opacity', (n) => (connected.has(n.id) ? 1 : 0.05));
+      }
+
+      function showTourStep() {
+        const step = graphData.tour[tourStep];
+        if (!step) return;
+        document.getElementById('tourTitle').textContent =
+          tourStep + 1 + '/' + graphData.tour.length + ' ' + step.title;
+        document.getElementById('tourDesc').textContent = step.description || '';
+        document.getElementById('tourPrev').disabled = tourStep === 0;
+        document.getElementById('tourNext').disabled = tourStep === graphData.tour.length - 1;
+
+        const idSet = new Set(step.nodeIds);
+        node.attr('opacity', (d) => (idSet.has(d.id) ? 1 : 0.06));
+        link.attr('opacity', (d) =>
+          idSet.has(d.source?.id || d.source) && idSet.has(d.target?.id || d.target) ? 0.5 : 0.01,
+        );
+        label.attr('opacity', (d) => (idSet.has(d.id) ? 1 : 0.03));
+
+        // Focus
+        const firstNode = node.data().find((d) => idSet.has(d.id));
+        if (firstNode && firstNode.x) {
+          const svgEl = document.getElementById('graphSvg');
+          const W = svgEl.clientWidth,
+            H = svgEl.clientHeight;
+          const scale = 1.2;
+          const tx = W / 2 - firstNode.x * scale;
+          const ty = H / 2 - firstNode.y * scale;
+          d3.select(svgEl)
+            .transition()
+            .duration(600)
+            .call(d3.zoom().transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+        }
+      }
+
+      function showTooltip(event, d) {
+        const tt = document.getElementById('tooltip');
+        tt.querySelector('.tt-name').textContent = d.name;
+        tt.querySelector('.tt-path').textContent = d.filePath || d.type;
+        tt.style.display = 'block';
+        tt.style.left = event.clientX + 12 + 'px';
+        tt.style.top = event.clientY - 10 + 'px';
+      }
+
+      function hideTooltip() {
+        document.getElementById('tooltip').style.display = 'none';
+      }
+
+      function dragStarted(event, d) {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+      }
+
+      function dragged(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+      }
+
+      function dragEnded(event, d) {
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+      }
+
+      // === Start ===
+      loadGraph();
+    </script>
+  </body>
+</html>

@@ -712,6 +712,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_public_mounts()
                 return
 
+            # SSE endpoint for collaborative editing
+            if path == "/api/events":
+                qs = parse_qs(parsed.query)
+                self._handle_sse(qs)
+                return
+
+            # Version history endpoint
+            if path == "/api/history":
+                qs = parse_qs(parsed.query)
+                self._handle_history(qs)
+                return
+
             # Static files (public, no auth needed for frontend)
             # Also serves SPA routes like /admin, /graph etc. via fallback to index.html
             if not path.startswith("/api/"):
@@ -1362,9 +1374,73 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         body = self._read_body()
         # Create parent dirs
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+
+        # Read old content for diff (before overwriting)
+        old_content = None
+        if os.path.isfile(abs_path):
+            try:
+                with open(abs_path, "rb") as f:
+                    old_content = f.read()
+            except OSError:
+                pass
+
         with open(abs_path, "wb") as f:
             f.write(body)
         st = os.stat(abs_path)
+
+        # Broadcast changes to SSE clients (collaborative editing)
+        if old_content is not None:
+            try:
+                from nas_md.webserver.paragraph_diff import compute_diff
+                from nas_md.webserver.sse_handler import sse_broadcast
+
+                old_text = old_content.decode("utf-8", errors="replace")
+                new_text = body.decode("utf-8", errors="replace")
+                if old_text != new_text:
+                    changes = compute_diff(old_text, new_text)
+                    if changes:
+                        author_name = self.headers.get("X-Client-Name", "Anonymous")
+                        author_color = self.headers.get("X-Client-Color", "#3498db")
+                        sse_broadcast(
+                            f"{mount_id}:{rel_path}",
+                            exclude_id=session_id,
+                            event={
+                                "type": "remote_edit",
+                                "authorId": session_id,
+                                "authorName": author_name,
+                                "authorColor": author_color,
+                                "mountId": mount_id,
+                                "path": rel_path,
+                                "changes": changes,
+                                "modTime": int(st.st_mtime * 1000),
+                            },
+                        )
+                        # Record version history
+                        try:
+                            from nas_md.webserver.version_history import (
+                                record_version,
+                            )
+
+                            record_version(
+                                file_key=f"{mount_id}:{rel_path}",
+                                author_id=session_id,
+                                author_name=author_name,
+                                author_color=author_color,
+                                changes=changes,
+                                content_snapshot=new_text,
+                                previous_content=old_text,
+                            )
+                            logger.info(
+                                "Version recorded for %s:%s by %s",
+                                mount_id,
+                                rel_path,
+                                author_name,
+                            )
+                        except Exception as e:
+                            logger.warning("Version history record failed: %s", e)
+            except Exception as e:
+                logger.warning("SSE broadcast failed: %s", e)
+
         self._send_json(
             {
                 "status": "ok",
@@ -1475,6 +1551,93 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 logger.error("Search index update after delete failed: %s", e)
         self._send_json({"status": "ok"})
+
+    def _handle_history(self, qs: dict):
+        """Handle version history query.
+
+        GET /api/history?file=mountId:path&limit=20
+        GET /api/history?file=mountId:path&version=0  (get content + previous for diff)
+        """
+        from nas_md.webserver.version_history import (
+            get_history,
+            get_version_with_previous,
+        )
+
+        file_key = qs.get("file", [None])[0]
+        if not file_key:
+            self._send_json({"error": "missing file parameter"})
+            return
+
+        # Decode file key (mountId:path)
+        if ":" in file_key:
+            parts = file_key.split(":", 1)
+            mount_id = parts[0]
+            rel_path = parts[1]
+            # URL-decode the path
+            from urllib.parse import unquote
+
+            rel_path = unquote(rel_path)
+            file_key = f"{mount_id}:{rel_path}"
+
+        version_idx = qs.get("version", [None])[0]
+        if version_idx is not None:
+            # Get version content + previous version content for diff
+            result = get_version_with_previous(file_key, int(version_idx))
+            if result is None:
+                self._send_json({"error": "version not found"})
+            else:
+                self._send_json(result)
+            return
+
+        limit = int(qs.get("limit", ["20"])[0])
+        history = get_history(file_key, limit)
+        self._send_json({"versions": history})
+
+    def _handle_sse(self, qs: dict):
+        """Handle SSE connection for real-time collaborative editing.
+
+        GET /api/events?file=mountId:path
+        """
+        from nas_md.webserver.sse_handler import (
+            register_sse_client,
+            SSEConnectionHandler as SSEConnectionHandler,
+        )
+
+        file_key = qs.get("file", [None])[0]
+        if not file_key:
+            return self._send_error("Missing file parameter", 400)
+
+        # Parse identity from query params (sent by client)
+        author_name = qs.get("name", ["Anonymous"])[0]
+        author_color = qs.get("color", ["#3498db"])[0]
+
+        # Verify session/cookie
+        self._get_session_id()
+
+        # Send SSE headers
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")  # Disable nginx buffering
+        self._flush_session_cookie()
+        self.end_headers()
+
+        # Register SSE connection
+        conn = register_sse_client(self, file_key, author_name, author_color)
+
+        # Send initial connected event
+        conn.send_event({"type": "connected", "clientId": conn.client_id})
+
+        # Keep connection alive with periodic pings
+        try:
+            while not conn.is_closed:
+                time.sleep(30)
+                conn.send_event({"type": "ping"})
+        except Exception:
+            pass
+        finally:
+            conn.detach()
 
     # --- Search handler ---
 

@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .env
 storage/mounts.json
+storage/.version_history/
 storage-test-e2e/
 tokens/
 *.db
@@ -16,3 +17,6 @@ test-results/
 playwright-report/
 playwright-output.txt
 pytest-output.txt
+.coverage
+.mimocode/
+.understand-anything/
