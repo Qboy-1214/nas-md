@@ -64,6 +64,11 @@ export default [
         clearTreeCache: "readonly",
         renderFileTree: "readonly",
         indexedDB: "readonly",
+        crypto: "readonly",
+        XMLSerializer: "readonly",
+        btoa: "readonly",
+        Image: "readonly",
+        EventSource: "readonly",
       },
     },
     rules: {

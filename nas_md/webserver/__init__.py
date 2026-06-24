@@ -718,6 +718,12 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_sse(qs)
                 return
 
+            # Version history endpoint
+            if path == "/api/history":
+                qs = parse_qs(parsed.query)
+                self._handle_history(qs)
+                return
+
             # Static files (public, no auth needed for frontend)
             # Also serves SPA routes like /admin, /graph etc. via fallback to index.html
             if not path.startswith("/api/"):
@@ -1393,23 +1399,45 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 if old_text != new_text:
                     changes = compute_diff(old_text, new_text)
                     if changes:
+                        author_name = self.headers.get("X-Client-Name", "Anonymous")
+                        author_color = self.headers.get("X-Client-Color", "#3498db")
                         sse_broadcast(
                             f"{mount_id}:{rel_path}",
                             exclude_id=session_id,
                             event={
                                 "type": "remote_edit",
                                 "authorId": session_id,
-                                "authorName": self.headers.get(
-                                    "X-Client-Name", "Anonymous"
-                                ),
-                                "authorColor": self.headers.get(
-                                    "X-Client-Color", "#3498db"
-                                ),
+                                "authorName": author_name,
+                                "authorColor": author_color,
                                 "mountId": mount_id,
                                 "path": rel_path,
                                 "changes": changes,
+                                "modTime": int(st.st_mtime * 1000),
                             },
                         )
+                        # Record version history
+                        try:
+                            from nas_md.webserver.version_history import (
+                                record_version,
+                            )
+
+                            record_version(
+                                file_key=f"{mount_id}:{rel_path}",
+                                author_id=session_id,
+                                author_name=author_name,
+                                author_color=author_color,
+                                changes=changes,
+                                content_snapshot=new_text,
+                                previous_content=old_text,
+                            )
+                            logger.info(
+                                "Version recorded for %s:%s by %s",
+                                mount_id,
+                                rel_path,
+                                author_name,
+                            )
+                        except Exception as e:
+                            logger.warning("Version history record failed: %s", e)
             except Exception as e:
                 logger.warning("SSE broadcast failed: %s", e)
 
@@ -1524,6 +1552,47 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 logger.error("Search index update after delete failed: %s", e)
         self._send_json({"status": "ok"})
 
+    def _handle_history(self, qs: dict):
+        """Handle version history query.
+
+        GET /api/history?file=mountId:path&limit=20
+        GET /api/history?file=mountId:path&version=0  (get content + previous for diff)
+        """
+        from nas_md.webserver.version_history import (
+            get_history,
+            get_version_with_previous,
+        )
+
+        file_key = qs.get("file", [None])[0]
+        if not file_key:
+            self._send_json({"error": "missing file parameter"})
+            return
+
+        # Decode file key (mountId:path)
+        if ":" in file_key:
+            parts = file_key.split(":", 1)
+            mount_id = parts[0]
+            rel_path = parts[1]
+            # URL-decode the path
+            from urllib.parse import unquote
+
+            rel_path = unquote(rel_path)
+            file_key = f"{mount_id}:{rel_path}"
+
+        version_idx = qs.get("version", [None])[0]
+        if version_idx is not None:
+            # Get version content + previous version content for diff
+            result = get_version_with_previous(file_key, int(version_idx))
+            if result is None:
+                self._send_json({"error": "version not found"})
+            else:
+                self._send_json(result)
+            return
+
+        limit = int(qs.get("limit", ["20"])[0])
+        history = get_history(file_key, limit)
+        self._send_json({"versions": history})
+
     def _handle_sse(self, qs: dict):
         """Handle SSE connection for real-time collaborative editing.
 
@@ -1531,7 +1600,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         """
         from nas_md.webserver.sse_handler import (
             register_sse_client,
-            SSEConnectionHandler,
+            SSEConnectionHandler as SSEConnectionHandler,
         )
 
         file_key = qs.get("file", [None])[0]
@@ -1543,7 +1612,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         author_color = qs.get("color", ["#3498db"])[0]
 
         # Verify session/cookie
-        session_id = self._get_session_id()
+        self._get_session_id()
 
         # Send SSE headers
         self.send_response(200)

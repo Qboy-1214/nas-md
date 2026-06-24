@@ -2377,3 +2377,185 @@ a:hover {
     margin: 15mm;
   }
 }
+
+/* ═══════════════════════════════════════════
+   Mermaid Diagram Enhancer
+   ═══════════════════════════════════════════ */
+
+/* Toolbar: inserted before .language-mermaid */
+.mme-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--c-surface, #f8f8f7);
+  border: 1px solid var(--c-border, #e5e3df);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Tabs: code / chart */
+.mme-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--c-surface, #f0f0ee);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.mme-tab {
+  padding: 4px 14px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--c-text-muted, #999);
+  cursor: pointer;
+  border-radius: 5px;
+  transition: all 0.15s ease;
+  font-weight: 500;
+}
+
+.mme-tab:hover {
+  color: var(--c-text, #37352f);
+}
+
+.mme-tab.active {
+  background: var(--c-canvas, #fff);
+  color: var(--c-text, #37352f);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* Controls area */
+.mme-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--c-steel, #78787a);
+  cursor: pointer;
+  border-radius: 5px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.mme-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--c-text, #37352f);
+  border-color: var(--c-border, #e5e3df);
+}
+
+.mme-btn:active {
+  transform: scale(0.95);
+}
+
+.mme-btn.mme-copied {
+  background: rgba(39, 174, 96, 0.15);
+  color: #27ae60;
+  border-color: rgba(39, 174, 96, 0.3);
+}
+
+.mme-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--c-border, #e5e3df);
+  margin: 0 4px;
+}
+
+/* Chart target: the original mermaid element, styled to connect with toolbar */
+.mme-chart-target,
+.language-mermaid[data-mme-enhanced] {
+  border: 1px solid var(--c-border, #e5e3df) !important;
+  border-top: none !important;
+  border-radius: 0 0 8px 8px !important;
+  padding: 16px !important;
+  overflow: auto !important;
+  max-height: 70vh !important;
+  text-align: center !important;
+  background: var(--c-canvas, #fff) !important;
+}
+
+.mme-chart-target svg,
+.language-mermaid[data-mme-enhanced] svg {
+  transition: transform 0.2s ease;
+  transform-origin: top left;
+  max-width: none !important;
+}
+
+/* Code area: appears after the mermaid block */
+.mme-code-area {
+  margin: 0 !important;
+  padding: 16px !important;
+  background: var(--c-bg-code, #f6f5f4) !important;
+  border: 1px solid var(--c-border, #e5e3df) !important;
+  border-top: none !important;
+  border-radius: 0 0 8px 8px !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  overflow: auto !important;
+  max-height: 60vh !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+
+.mme-code-area code {
+  font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace !important;
+  font-size: inherit !important;
+  background: none !important;
+  padding: 0 !important;
+  color: inherit !important;
+}
+
+/* ── Dark theme (chart area only, via CSS filter) ── */
+.mme-toolbar[data-mme-theme='dark'] ~ .language-mermaid[data-mme-enhanced],
+.mme-toolbar[data-mme-theme='dark'] ~ .mme-chart-target {
+  background: #1e1e2e !important;
+}
+
+.mme-toolbar[data-mme-theme='dark'] ~ .language-mermaid[data-mme-enhanced] svg,
+.mme-toolbar[data-mme-theme='dark'] ~ .mme-chart-target svg {
+  filter: invert(0.88) hue-rotate(180deg) contrast(0.95);
+}
+
+/* Dark theme toolbar */
+.mme-toolbar[data-mme-theme='dark'] {
+  background: #181825;
+  border-color: #313244;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-tabs {
+  background: #313244;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-tab {
+  color: #a6adc8;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-tab.active {
+  background: #45475a;
+  color: #cdd6f4;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-btn {
+  color: #a6adc8;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #cdd6f4;
+  border-color: #45475a;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-sep {
+  background: #45475a;
+}

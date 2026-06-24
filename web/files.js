@@ -26,6 +26,15 @@ const API = {
     if (window.state?.isAdmin) {
       headers['X-Admin'] = '1';
     }
+    // Add identity headers for collaborative editing
+    if (window.nasmdIdentity) {
+      const identity = window.nasmdIdentity.get();
+      if (identity) {
+        headers['X-Client-Id'] = identity.id;
+        headers['X-Client-Name'] = identity.name;
+        headers['X-Client-Color'] = identity.color;
+      }
+    }
     const resp = await fetch(`${_apiBase}${path}`, { ...options, headers });
     return resp;
   },

@@ -610,6 +610,7 @@ function initEditor(content, mode, readonly) {
       rewriteEditorImages();
       _addHeadingIdsToEditor(vditorEl);
       fixMermaidNodeHeights();
+      if (window._enhanceMermaid) window._enhanceMermaid();
       const contentEl =
         vditorEl.querySelector('.vditor-ir') || vditorEl.querySelector('.vditor-wysiwyg');
       if (contentEl) {
@@ -617,6 +618,7 @@ function initEditor(content, mode, readonly) {
           rewriteEditorImages();
           _addHeadingIdsToEditor(vditorEl);
           fixMermaidNodeHeights();
+          if (window._enhanceMermaid) window._enhanceMermaid();
         }).observe(contentEl, {
           childList: true,
           subtree: true,
@@ -628,6 +630,7 @@ function initEditor(content, mode, readonly) {
           rewriteEditorImages();
           _addHeadingIdsToEditor(vditorEl);
           fixMermaidNodeHeights();
+          if (window._enhanceMermaid) window._enhanceMermaid();
         }).observe(previewEl, {
           childList: true,
           subtree: true,

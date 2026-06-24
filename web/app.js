@@ -187,6 +187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const _downloadBtn = $('download-top-btn');
           const _exportPdfBtn = $('export-pdf-top-btn');
           const _shareBtn = $('share-top-btn');
+          const _historyBtn = $('history-top-btn');
           if (_renameBtn)
             _renameBtn.style.display = !mount.readonly && sharePath !== '/' ? '' : 'none';
           if (_deleteBtn)
@@ -194,9 +195,14 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (_downloadBtn) _downloadBtn.style.display = sharePath.endsWith('.md') ? '' : 'none';
           if (_exportPdfBtn) _exportPdfBtn.style.display = sharePath.endsWith('.md') ? '' : 'none';
           if (_shareBtn) _shareBtn.style.display = sharePath !== '/' ? '' : 'none';
+          if (_historyBtn) _historyBtn.style.display = sharePath.endsWith('.md') ? '' : 'none';
           showPage('editor');
           if (window._vditor) window._vditor.destroy();
           initEditor(content, state.editorMode, !!mount.readonly);
+          // Connect to SSE for collaborative editing (non-readonly files)
+          if (!mount.readonly && window.nasmdSSE) {
+            window.nasmdSSE.connect(shareMountId, sharePath);
+          }
           // Record mtime for server mount
           if (serverMtime) {
             state.fileMtimes[shareMountId + ':' + sharePath] = {
@@ -255,6 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const _downloadBtn = $('download-top-btn');
           const _exportPdfBtn = $('export-pdf-top-btn');
           const _shareBtn = $('share-top-btn');
+          const _historyBtn = $('history-top-btn');
           if (_renameBtn)
             _renameBtn.style.display = !mount.readonly && lastPath !== '/' ? '' : 'none';
           if (_deleteBtn)
@@ -265,6 +272,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             _exportPdfBtn.style.display =
               lastPath !== '/' && lastPath.endsWith('.md') ? '' : 'none';
           if (_shareBtn) _shareBtn.style.display = !mount._local && lastPath !== '/' ? '' : 'none';
+          if (_historyBtn)
+            _historyBtn.style.display = lastPath !== '/' && lastPath.endsWith('.md') ? '' : 'none';
           // Show refresh button when a file is open
           const _refreshBtn = $('btn-refresh');
           if (_refreshBtn) _refreshBtn.style.display = lastPath !== '/' ? '' : 'none';
@@ -280,6 +289,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             /* ignore */
           }
           initEditor(content, state.editorMode, !!mount.readonly);
+          // Connect to SSE for collaborative editing (non-readonly files)
+          if (!mount.readonly && window.nasmdSSE) {
+            window.nasmdSSE.connect(mount.id, lastPath);
+          }
           // Note: window._originalContent is set by Vditor's after() callback
           // Record mtime for all mounts
           if (mount._local) {
@@ -2113,6 +2126,17 @@ function exportCurrentPDF() {
   window.print();
 }
 
+function showVersionHistory() {
+  const path = state.currentPath;
+  const mountId = state.currentMountId;
+  if (!path || !mountId || path === '/') return;
+
+  const fileKey = mountId + ':' + path;
+  if (window.nasmdHistory) {
+    window.nasmdHistory.show(fileKey);
+  }
+}
+
 function shareCurrentFile() {
   const path = state.currentPath;
   const mountId = state.currentMountId;
@@ -2705,6 +2729,11 @@ async function openFile(path, preferredMountId, searchKeyword) {
     if (shareBtn) {
       shareBtn.style.display = !mount._local && path !== '/' ? '' : 'none';
     }
+    // Version history: show for any md file
+    const historyBtn = $('history-top-btn');
+    if (historyBtn) {
+      historyBtn.style.display = path !== '/' && path.endsWith('.md') ? '' : 'none';
+    }
     $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = mount.readonly ? 'none' : '';
     // Show refresh button when a file is open
@@ -2720,6 +2749,10 @@ async function openFile(path, preferredMountId, searchKeyword) {
       showToast('已恢复本地缓存版本');
     }
     initEditor(finalContent, state.editorMode, !!mount.readonly);
+    // Connect to SSE for collaborative editing (non-readonly files)
+    if (!mount.readonly && window.nasmdSSE) {
+      window.nasmdSSE.connect(mount.id, path);
+    }
     // Note: window._originalContent is set by Vditor's after() callback
     // to match Vditor's normalized content (e.g. trailing newline handling)
     setFileInfo(mount.id, path);

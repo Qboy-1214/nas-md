@@ -3,7 +3,6 @@
 import json
 import logging
 import threading
-import time
 from collections import defaultdict
 
 logger = logging.getLogger("webserver.sse")
@@ -106,7 +105,7 @@ def sse_broadcast(file_key: str, exclude_id: str, event: dict):
                 client.detach()
 
 
-def get_sse_client_count(file_key: str = None) -> int:
+def get_sse_client_count(file_key: str | None = None) -> int:
     """Get count of active SSE clients. For testing."""
     with _lock:
         if file_key:
