@@ -24,6 +24,7 @@ _HISTORY_DIR = os.path.join(
 class VersionEntry:
     """A single version snapshot."""
 
+    version: int  # monotonic version number from FileVersionStore
     timestamp: float
     author_id: str
     author_name: str
@@ -45,8 +46,10 @@ class FileHistory:
         author_color: str,
         changes: list,
         content_snapshot: str,
+        version: int = 0,
     ) -> VersionEntry:
         entry = VersionEntry(
+            version=version,
             timestamp=time.time(),
             author_id=author_id,
             author_name=author_name,
@@ -76,6 +79,7 @@ class FileHistory:
         return {
             "versions": [
                 {
+                    "version": v.version,
                     "timestamp": v.timestamp,
                     "author_id": v.author_id,
                     "author_name": v.author_name,
@@ -93,6 +97,7 @@ class FileHistory:
         fh = cls()
         for v in data.get("versions", []):
             entry = VersionEntry(
+                version=v.get("version", 0),
                 timestamp=v["timestamp"],
                 author_id=v["author_id"],
                 author_name=v["author_name"],
@@ -156,6 +161,7 @@ def record_version(
     changes: list,
     content_snapshot: str,
     previous_content: str | None = None,
+    version: int = 0,
 ) -> VersionEntry:
     """Record a new version for a file.
 
@@ -178,10 +184,16 @@ def record_version(
                 author_color="#95a5a6",
                 changes=[],
                 content_snapshot=previous_content,
+                version=0,
             )
 
         entry = _histories[file_key].add(
-            author_id, author_name, author_color, changes, content_snapshot
+            author_id,
+            author_name,
+            author_color,
+            changes,
+            content_snapshot,
+            version=version,
         )
         # Persist to disk
         _persist(file_key, _histories[file_key])
@@ -202,6 +214,7 @@ def get_history(file_key: str, limit: int = 20) -> list:
             return []
         return [
             {
+                "version": v.version,
                 "timestamp": v.timestamp,
                 "authorId": v.author_id,
                 "authorName": v.author_name,
@@ -251,6 +264,7 @@ def get_version_with_previous(file_key: str, index: int) -> dict | None:
         return {
             "content": v.content_snapshot,
             "previousContent": prev.content_snapshot if prev else None,
+            "version": v.version,
             "timestamp": v.timestamp,
             "authorName": v.author_name,
             "authorColor": v.author_color,
