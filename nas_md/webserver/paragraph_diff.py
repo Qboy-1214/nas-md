@@ -130,3 +130,51 @@ def apply_changes(text: str, changes: list) -> str:
                 result_paras.append(content)
 
     return "\n\n".join(result_paras)
+
+
+def merge_changes(existing: list, incoming: list) -> list:
+    """合并两个 changes 列表，处理段落级冲突。
+
+    策略（后写覆盖）：
+    - replace: 同 paraIdx 的，incoming 覆盖 existing
+    - delete: 同 paraIdx 的，incoming 胜出
+    - replace vs delete 同 paraIdx: incoming 胜出
+    - insert: 全部保留（不同位置不冲突）
+
+    返回合并后的 changes 列表（基于原文本的 paraIdx）。
+    """
+    if not existing:
+        return list(incoming)
+    if not incoming:
+        return list(existing)
+
+    existing_rd = {}  # paraIdx -> change
+    existing_inserts = []
+    for ch in existing:
+        t = ch.get("type")
+        if t in ("replace", "delete"):
+            existing_rd[ch.get("paraIdx", 0)] = ch
+        elif t == "insert":
+            existing_inserts.append(ch)
+
+    incoming_rd = {}
+    incoming_inserts = []
+    for ch in incoming:
+        t = ch.get("type")
+        if t in ("replace", "delete"):
+            incoming_rd[ch.get("paraIdx", 0)] = ch
+        elif t == "insert":
+            incoming_inserts.append(ch)
+
+    # 合并 replace/delete: incoming 覆盖 existing
+    merged_rd = dict(existing_rd)
+    for idx, ch in incoming_rd.items():
+        merged_rd[idx] = ch
+
+    result = []
+    result.extend(existing_inserts)
+    result.extend(incoming_inserts)
+    for idx in sorted(merged_rd.keys()):
+        result.append(merged_rd[idx])
+
+    return result

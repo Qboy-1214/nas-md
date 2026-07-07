@@ -110,3 +110,48 @@ def test_apply_changes_para_idx_out_of_range():
     ]
     result = apply_changes(text, changes)
     assert result == "para one\n\nappended"
+
+
+from nas_md.webserver.paragraph_diff import merge_changes
+
+
+def test_merge_changes_no_overlap():
+    """无段落重叠的changes应直接合并，全部保留。"""
+    existing = [{"type": "replace", "paraIdx": 0, "content": "A2"}]
+    incoming = [{"type": "replace", "paraIdx": 2, "content": "C2"}]
+    merged = merge_changes(existing, incoming)
+    assert len(merged) == 2
+    idxs = {c["paraIdx"] for c in merged}
+    assert idxs == {0, 2}
+
+
+def test_merge_changes_overlap_replace():
+    """同段落 replace 冲突，incoming 覆盖 existing（后写覆盖）。"""
+    existing = [{"type": "replace", "paraIdx": 1, "content": "from_existing"}]
+    incoming = [{"type": "replace", "paraIdx": 1, "content": "from_incoming"}]
+    merged = merge_changes(existing, incoming)
+    replaces = [c for c in merged if c["type"] == "replace" and c["paraIdx"] == 1]
+    assert len(replaces) == 1
+    assert replaces[0]["content"] == "from_incoming"
+
+
+def test_merge_changes_insert_non_conflict():
+    """insert 到不同位置应全部保留。"""
+    existing = [{"type": "insert", "paraIdx": 0, "content": "X"}]
+    incoming = [{"type": "insert", "paraIdx": 2, "content": "Y"}]
+    merged = merge_changes(existing, incoming)
+    assert len(merged) == 2
+
+
+def test_merge_changes_empty_existing():
+    """existing 为空时，merged = incoming。"""
+    merged = merge_changes([], [{"type": "replace", "paraIdx": 0, "content": "A"}])
+    assert len(merged) == 1
+    assert merged[0]["content"] == "A"
+
+
+def test_merge_changes_empty_incoming():
+    """incoming 为空时，merged = existing。"""
+    merged = merge_changes([{"type": "replace", "paraIdx": 0, "content": "A"}], [])
+    assert len(merged) == 1
+    assert merged[0]["content"] == "A"
