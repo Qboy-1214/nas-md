@@ -858,6 +858,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     self._handle_create(mount_id, qs)
                     return
 
+            # POST /api/mounts/{id}/changes — submit paragraph-level changes (version-driven)
+            if path.startswith("/api/mounts/") and path.endswith("/changes"):
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    mount_id = parts[3]
+                    qs = parse_qs(parsed.query)
+                    self._handle_submit_changes(mount_id, qs)
+                    return
+
             # POST /api/mounts/{id}/move — move file/folder to new path
             if path.startswith("/api/mounts/") and path.endswith("/move"):
                 parts = path.split("/")
@@ -1317,10 +1326,23 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             mtime = int(os.path.getmtime(abs_path) * 1000)
             with open(abs_path, "rb") as f:
                 data = f.read()
+            # Get current version from store (lazy-init if not present)
+            try:
+                from nas_md.webserver.file_version_store import get_store
+
+                file_key = f"{mount_id}:{rel_path}"
+                store = get_store()
+                version = store.get_current_version(file_key)
+                if version == 0:
+                    # Lazy-init so future writes track version
+                    store.init_file(file_key, abs_path, data.decode("utf-8", errors="replace"))
+            except Exception:
+                version = 0
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("X-Mod-Time", str(mtime))
+            self.send_header("X-File-Version", str(version))
             # Prevent browser caching so pollCurrentFile always gets fresh mtime/size
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
@@ -1497,6 +1519,121 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             }
         )
         return abs_path
+
+    def _handle_submit_changes(self, mount_id: str, qs: dict):
+        """Handle POST /api/mounts/{id}/changes — version-based paragraph merge.
+
+        Request body JSON:
+            {
+                "baseVersion": int,
+                "changes": [{type, paraIdx, content}, ...],
+                "authorName": str,
+                "authorColor": str
+            }
+        Response JSON:
+            {
+                "applied": bool,
+                "merged": bool,    # true if base_version was stale and merge happened
+                "newVersion": int,
+                "content": str     # final content after apply
+            }
+        """
+        if not self.mount_manager:
+            return self._send_error("No mounts configured", 404)
+        mount = self.mount_manager.find_mount(mount_id)
+        if not mount:
+            return self._send_error("Mount not found", 404)
+        session_id = self._get_session_id()
+        # Permission: same as PUT /file
+        if mount.host:
+            if not self._is_admin_request() and not mount.public:
+                return self._send_error("Mount not found", 404)
+        elif not self._owns_mount(mount, session_id):
+            return self._send_error("Mount not found", 404)
+        if mount.readonly:
+            return self._send_error("Mount is read-only", 403)
+
+        rel_path = qs.get("path", [None])[0]
+        if not rel_path:
+            return self._send_error("Missing path parameter", 400)
+        abs_path = self.mount_manager._safe_path(mount, rel_path)
+        if abs_path is None:
+            return self._send_error("Path escapes mount root", 403)
+
+        body = self._read_body()
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            return self._send_error(f"Invalid JSON body: {e}", 400)
+
+        base_version = int(payload.get("baseVersion", 0))
+        changes = payload.get("changes", [])
+        author_name = payload.get("authorName") or self.headers.get(
+            "X-Client-Name", "Anonymous"
+        )
+        author_color = payload.get("authorColor") or self.headers.get(
+            "X-Client-Color", "#3498db"
+        )
+
+        if not isinstance(changes, list):
+            return self._send_error("changes must be a list", 400)
+
+        from nas_md.webserver.file_version_store import get_store
+        from nas_md.webserver.paragraph_diff import apply_changes as apply_diff
+
+        store = get_store()
+        file_key = f"{mount_id}:{rel_path}"
+
+        # Lazy-init store with current disk content
+        try:
+            with open(abs_path, encoding="utf-8") as f:
+                current_content = f.read()
+        except OSError:
+            current_content = ""
+        store.init_file(file_key, abs_path, current_content)
+
+        # Pre-mark expected write to file_watcher so our own write isn't flagged external
+        try:
+            from nas_md.webserver.file_watcher import get_watcher
+
+            expected_content = apply_diff(current_content, changes)
+            get_watcher().mark_expected(mount_id, rel_path, expected_content)
+        except Exception:
+            pass  # watcher optional
+
+        result = store.apply_changes(
+            file_key=file_key,
+            file_path=abs_path,
+            base_version=base_version,
+            changes=changes,
+            author_id=session_id,
+            author_name=author_name,
+            author_color=author_color,
+        )
+
+        # Broadcast to other clients via SSE
+        if result.get("applied"):
+            try:
+                from nas_md.webserver.sse_handler import sse_broadcast
+
+                sse_broadcast(
+                    file_key,
+                    exclude_id=session_id,
+                    event={
+                        "type": "remote_edit",
+                        "authorId": session_id,
+                        "authorName": author_name,
+                        "authorColor": author_color,
+                        "mountId": mount_id,
+                        "path": rel_path,
+                        "changes": changes,
+                        "newVersion": result["newVersion"],
+                    },
+                )
+            except Exception as e:
+                logger.warning("SSE broadcast failed: %s", e)
+
+        self._send_json(result)
 
     def _handle_rename(self, mount_id: str, qs: dict):
         if not self.mount_manager:
