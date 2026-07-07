@@ -230,13 +230,20 @@
     // Update collaborator presence
     updateCollaborator(author);
 
-    // Update fileMtimes with server's new modTime so our next save uses the
-    // correct expected_mtime (avoids false conflict detection).
-    if (data.modTime && window.state && state.fileMtimes && data.mountId && data.path) {
-      var key = data.mountId + ':' + data.path;
-      var prev = state.fileMtimes[key];
-      var newSize = prev ? prev.size : 0;
-      state.fileMtimes[key] = { mtime: data.modTime, size: newSize };
+    // Update version state (replaces mtime tracking)
+    if (data.newVersion && window.state && data.mountId && data.path) {
+      var versionKey = data.mountId + ':' + data.path;
+      if (state.fileVersions) {
+        state.fileVersions[versionKey] = data.newVersion;
+      }
+      // If the edit is on the currently open file, bump baseVersion so the
+      // client's next save uses the fresh version (no false merge).
+      if (
+        state.currentMountId === data.mountId &&
+        state.currentPath === data.path
+      ) {
+        state.baseVersion = data.newVersion;
+      }
     }
 
     for (var i = 0; i < data.changes.length; i++) {
@@ -263,7 +270,52 @@
       for (var j = 0; j < batch.length; j++) {
         applyRemoteChange(batch[j].change, batch[j].author);
       }
+      // After applying remote changes, sync baseContent to the new editor content
+      // so the next local save diff is computed against the merged result.
+      if (window._vditor && window.state) {
+        var merged = window._vditor.getValue();
+        state.baseContent = merged;
+        window._originalContent = merged;
+      }
     }, 300);
+  }
+
+  // Handle external file modification (delivered by file_watcher via SSE)
+  function handleExternalReload(data) {
+    if (!data.mountId || !data.path) return;
+    if (!window.state) return;
+    // Only handle the currently open file
+    if (state.currentMountId !== data.mountId || state.currentPath !== data.path) {
+      return;
+    }
+
+    // Update version state regardless of whether we reload
+    if (data.newVersion) {
+      state.baseVersion = data.newVersion;
+      var key = data.mountId + ':' + data.path;
+      if (state.fileVersions) {
+        state.fileVersions[key] = data.newVersion;
+      }
+    }
+
+    // If user has unsaved edits, don't blow them away — let next save merge.
+    if (state.dirty) {
+      showToast('文件已被外部修改，你的未保存编辑将在下次保存时合并', 'info');
+      return;
+    }
+
+    // No unsaved edits — reload the editor with the new content
+    if (data.content && window._vditor) {
+      _applyingRemote = true;
+      window._vditor.setValue(data.content);
+      window._originalContent = data.content;
+      state.baseContent = data.content;
+      _lastSavedContent = data.content;
+      setTimeout(function () {
+        _applyingRemote = false;
+      }, 150);
+      showToast('文件已被外部修改，已自动重载');
+    }
   }
 
   // === Initialization ===
@@ -311,6 +363,7 @@
     // Connect SSE and register handler
     if (window.nasmdSSE) {
       window.nasmdSSE.on('remote_edit', handleRemoteEdit);
+      window.nasmdSSE.on('external_reload', handleExternalReload);
     }
   }
 
@@ -318,6 +371,7 @@
   window.nasmdSync = {
     init: init,
     handleRemoteEdit: handleRemoteEdit,
+    handleExternalReload: handleExternalReload,
     applyPendingUpdates: applyPendingUpdates,
     isApplyingRemote: function () {
       return _applyingRemote;
