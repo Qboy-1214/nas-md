@@ -2619,6 +2619,60 @@ def serve(
     MountHTTPHandler.mount_manager = mgr
     MountHTTPHandler.web_root = web_root
 
+    # Start file watchers for all host mounts (server-local directories)
+    try:
+        from nas_md.webserver.file_watcher import get_watcher
+
+        watcher = get_watcher()
+
+        def _on_external_change(mount_id: str, rel_path: str, content: str):
+            """Called by file_watcher when a file is modified externally."""
+            try:
+                from nas_md.webserver.file_version_store import get_store
+                from nas_md.webserver.sse_handler import sse_broadcast
+
+                file_key = f"{mount_id}:{rel_path}"
+                # Find abs_path
+                m = mgr.find_mount(mount_id)
+                if not m:
+                    return
+                abs_path = mgr._safe_path(m, rel_path)
+                if abs_path is None:
+                    return
+                store = get_store()
+                store.init_file(file_key, abs_path, content)
+                result = store.apply_external_change(file_key, abs_path)
+                if result.get("applied"):
+                    sse_broadcast(
+                        file_key,
+                        exclude_id=None,
+                        event={
+                            "type": "external_reload",
+                            "mountId": mount_id,
+                            "path": rel_path,
+                            "newVersion": result["newVersion"],
+                            "content": result["content"],
+                        },
+                    )
+                    logger.info(
+                        "External change broadcast: %s:%s v%d",
+                        mount_id,
+                        rel_path,
+                        result["newVersion"],
+                    )
+            except Exception as e:
+                logger.error("file_watcher callback error: %s", e)
+
+        for m in mgr.mounts:
+            if m.host or m.id == "builtin-storage":
+                # Only watch server-local directories (host mounts + builtin storage)
+                if m.readonly:
+                    continue  # Skip readonly mounts (e.g., builtin-storage)
+                if os.path.isdir(m.path):
+                    watcher.watch_mount(m.id, m.path, _on_external_change)
+    except Exception as e:
+        logger.warning("Failed to start file watchers: %s", e)
+
     # Include storage dir in search dirs
     all_dirs = list(mount_dirs)
     if storage_dir and os.path.isdir(storage_dir) and storage_dir not in all_dirs:
@@ -2663,7 +2717,8 @@ def serve(
     logger.info("    GET  /api/mounts/{id}/tree?path=/")
     logger.info("    GET  /api/mounts/{id}/tree-recursive?path=/")
     logger.info("    GET  /api/mounts/{id}/file?path=/file.md")
-    logger.info("    PUT  /api/mounts/{id}/file?path=/file.md")
+    logger.info("    PUT  /api/mounts/{id}/file?path=/file.md  (deprecated, use POST /changes)")
+    logger.info("    POST /api/mounts/{id}/changes?path=/file.md  (version-driven)")
     logger.info("    PUT  /api/mounts/{id}/rename?oldPath=/a.md&newPath=/b.md")
     logger.info("    PUT  /api/mounts/{id}/mkdir?path=/newdir")
     logger.info("    DELETE /api/mounts/{id}/file?path=/file.md")
