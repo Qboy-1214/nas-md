@@ -969,17 +969,6 @@ async function loadTree(mountId, path, force = false) {
   if (!force && state.treeData[mountId][path]) return;
   // Local mount: load via File System Access API
   const mount = state.mounts.find((m) => m.id === mountId);
-  console.log(
-    '[loadTree]',
-    mountId,
-    path,
-    'force=',
-    force,
-    'local=',
-    mount?._local,
-    'hasLocalMount=',
-    !!state.localMounts[mountId],
-  );
   if (mount && mount._local && state.localMounts[mountId]) {
     const localMount = state.localMounts[mountId];
     // FSAA mode: read live directory handle
@@ -2850,6 +2839,13 @@ function toggleAutoSave(on) {
 function scheduleAutoSave() {
   if (window._autoSaveTimer) clearTimeout(window._autoSaveTimer);
   window._autoSaveTimer = setTimeout(() => {
+    // If a save is already in progress, reschedule to avoid concurrent saves
+    // with stale expectedMtime (which causes false conflicts)
+    if (_saveInProgress) {
+      window._autoSaveTimer = null;
+      scheduleAutoSave();
+      return;
+    }
     if (state.dirty && state.autoSave && state.currentPath) {
       saveFile({ silent: true });
     }
@@ -2990,6 +2986,21 @@ let _saveInProgress = false;
 let _lastSavedContent = null;
 
 async function saveFile({ silent = false } = {}) {
+  console.log('[saveFile] called:', {
+    silent,
+    currentPath: state.currentPath,
+    currentMountId: state.currentMountId,
+    hasVditor: !!window._vditor,
+    autoSave: state.autoSave,
+    dirty: state.dirty,
+  });
+  // Prevent concurrent saves: if a save is already in progress, skip this call.
+  // For auto-save, scheduleAutoSave already handles rescheduling, but manual
+  // saves (Ctrl+S / button) could still trigger concurrently.
+  if (_saveInProgress) {
+    console.log('[saveFile] skipped: another save in progress');
+    return;
+  }
   _saveInProgress = true;
   try {
     if (!state.currentPath || !state.currentMountId || !window._vditor) return;
@@ -3050,30 +3061,51 @@ async function saveFile({ silent = false } = {}) {
         // Server mount: save with optimistic lock (expected_mtime)
         const key = state.currentMountId + ':' + state.currentPath;
         const expectedMtime = state.fileMtimes[key]?.mtime || null;
-        const resp = await API.putFile(
-          state.currentMountId,
-          state.currentPath,
-          content,
+        console.log('[saveFile] server mount branch:', {
+          key,
           expectedMtime,
-        );
+          fileMtimes: state.fileMtimes[key],
+          contentLen: content.length,
+        });
+        console.log('[saveFile] about to call API.putFile, API exists:', typeof API, typeof API?.putFile);
+        let resp;
+        try {
+          resp = await API.putFile(
+            state.currentMountId,
+            state.currentPath,
+            content,
+            expectedMtime,
+          );
+          console.log('[saveFile] putFile response:', resp);
+        } catch (e) {
+          console.error('[saveFile] putFile threw error:', e);
+          throw e;
+        }
         if (resp && resp.error) {
           throw new Error(resp.error);
         }
         window._originalContent = content;
         markClean();
         clearLocalStorage(state.currentPath);
-        if (!silent) showToast('已保存');
-        else showToast('自动保存完成');
-        // Update mtime from server response
+        // Update mtime from server response BEFORE showing toast,
+        // so conflict toast doesn't get overwritten by save-complete toast
         if (resp && resp.modTime) {
           state.fileMtimes[key] = { mtime: resp.modTime, size: content.length };
         }
-        // Notify if conflict was detected
+        // Show toast: conflict takes priority over save-complete message
         if (resp && resp.conflict) {
           showToast('文件在外部已被修改，已创建冲突副本（.conflict.md）');
+        } else if (!silent) {
+          showToast('已保存');
+        } else {
+          showToast('自动保存完成');
         }
         // Trigger sync after save
         performSync();
+        // Refresh version history panel if visible
+        if (window.nasmdHistory && window.nasmdHistory.isVisible()) {
+          window.nasmdHistory.loadHistory();
+        }
       }
     } catch (e) {
       // Fallback to localStorage on error
@@ -3087,9 +3119,14 @@ async function saveFile({ silent = false } = {}) {
         btn.classList.remove('saving');
         btn.disabled = false;
       }
+      // If content changed during save (still dirty), reschedule auto-save
+      if (state.dirty && state.autoSave && state.currentPath) {
+        scheduleAutoSave();
+      }
     }
-  } catch (_e) {
-    // Outer catch: ensure _saveInProgress is reset even for early returns
+  } finally {
+    // Outer finally: ensure _saveInProgress is reset for ALL paths,
+    // including early returns (no currentPath, readonly, offline, etc.)
     _saveInProgress = false;
   }
 }
@@ -3418,12 +3455,6 @@ async function refreshTree() {
   _refreshTreeBusy = true;
   try {
     const expandedMountIds = state.expandedMounts.filter((id) => !id.includes(':'));
-    console.log(
-      '[refreshTree] expandedMounts=',
-      expandedMountIds,
-      'allMounts=',
-      state.mounts.map((m) => m.id + '(' + (m._local ? 'local' : 'server') + ')'),
-    );
     for (const mountId of expandedMountIds) {
       const expandedDirs = state.expandedMounts
         .filter((k) => k.startsWith(mountId + ':'))
@@ -3489,7 +3520,10 @@ async function pollCurrentFile() {
         '/api/mounts/' +
           encodeURIComponent(state.currentMountId) +
           '/file?path=' +
-          encodeURIComponent(state.currentPath),
+          encodeURIComponent(state.currentPath) +
+          '&_t=' +
+          Date.now(),
+        { cache: 'no-store' },
       );
       if (!resp.ok) return;
       const modTimeHeader = resp.headers.get('X-Mod-Time');
@@ -3516,11 +3550,11 @@ async function pollCurrentFile() {
 
 // === Sidebar auto-refresh ===
 let _sidebarRefreshTimer = null;
-const SIDEBAR_REFRESH_INTERVAL = 1000; // 1 second
+const SIDEBAR_REFRESH_INTERVAL = 5000; // 5 seconds (was 1s, caused excessive refresh spam)
 
 // === File content auto-poll (independent from sidebar refresh) ===
 let _filePollTimer = null;
-const FILE_POLL_INTERVAL = 1000; // 1 second
+const FILE_POLL_INTERVAL = 2000; // 2 seconds (was 1s)
 
 function startFilePoll() {
   if (_filePollTimer) return;
@@ -3587,7 +3621,10 @@ async function refreshFromDisk(silent) {
         '/api/mounts/' +
           encodeURIComponent(state.currentMountId) +
           '/file?path=' +
-          encodeURIComponent(state.currentPath),
+          encodeURIComponent(state.currentPath) +
+          '&_t=' +
+          Date.now(),
+        { cache: 'no-store' },
       );
       if (!resp.ok) {
         if (!silent) showToast('文件读取失败');

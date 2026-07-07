@@ -60,7 +60,11 @@
   }
 
   function loadHistory() {
-    if (!_currentFileKey) return;
+    console.log('[version_history] loadHistory called, _currentFileKey:', _currentFileKey);
+    if (!_currentFileKey) {
+      console.warn('[version_history] no _currentFileKey, aborting');
+      return;
+    }
 
     var listEl = document.getElementById('vh-list');
     if (listEl) {
@@ -68,16 +72,25 @@
         '<div style="padding:40px 20px;text-align:center;color:#999;">加载中...</div>';
     }
 
-    var url = '/api/history?file=' + encodeURIComponent(_currentFileKey) + '&limit=20';
+    var url = '/api/history?file=' + encodeURIComponent(_currentFileKey) + '&limit=20&_t=' + Date.now();
+    console.log('[version_history] fetching:', url);
 
-    fetch(url)
+    fetch(url, { cache: 'no-store' })
       .then(function (res) {
+        console.log('[version_history] response status:', res.status, 'Content-Type:', res.headers.get('Content-Type'));
         return res.json();
       })
       .then(function (data) {
+        console.log('[version_history] response data:', {
+          hasVersions: !!data.versions,
+          versionsCount: data.versions ? data.versions.length : 0,
+          error: data.error,
+          keys: Object.keys(data),
+        });
         renderHistory(data.versions || []);
       })
       .catch(function (err) {
+        console.error('[version_history] load failed:', err);
         if (listEl) {
           listEl.innerHTML =
             '<div style="padding:20px;color:#e74c3c;">加载失败: ' +
@@ -179,9 +192,9 @@
   function viewVersion(versionIdx) {
     if (!_currentFileKey) return;
 
-    var url = '/api/history?file=' + encodeURIComponent(_currentFileKey) + '&version=' + versionIdx;
+    var url = '/api/history?file=' + encodeURIComponent(_currentFileKey) + '&version=' + versionIdx + '&_t=' + Date.now();
 
-    fetch(url)
+    fetch(url, { cache: 'no-store' })
       .then(function (res) {
         return res.json();
       })

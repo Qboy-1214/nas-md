@@ -94,7 +94,10 @@ const API = {
   },
 
   async getFile(mountId, path) {
-    const r = await this.request(`/api/mounts/${mountId}/file?path=${encodeURIComponent(path)}`);
+    const r = await this.request(
+      `/api/mounts/${mountId}/file?path=${encodeURIComponent(path)}&_t=${Date.now()}`,
+      { cache: 'no-store' },
+    );
     if (!r) {
       console.error('getFile: request failed, no response');
       return null;
@@ -114,11 +117,22 @@ const API = {
     if (expectedMtime) {
       url += `&expected_mtime=${expectedMtime}`;
     }
-    const r = await this.request(url, {
-      method: 'PUT',
-      body: content,
+    console.log('[putFile] sending PUT:', {
+      url,
+      contentLen: content.length,
+      expectedMtime,
     });
-    return r ? r.json() : null;
+    try {
+      const r = await this.request(url, {
+        method: 'PUT',
+        body: content,
+      });
+      console.log('[putFile] response status:', r ? r.status : 'null');
+      return r ? r.json() : null;
+    } catch (e) {
+      console.error('[putFile] fetch error:', e);
+      throw e;
+    }
   },
 
   async deleteFile(mountId, path) {

@@ -509,6 +509,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        # Prevent browser caching of dynamic API responses
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self._flush_session_cookie()
         self.end_headers()
         self.wfile.write(body)
@@ -762,6 +766,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     # --- PUT ---
     def do_PUT(self):
+        logger.info("do_PUT called: path=%s", self.path)
         try:
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or ""
@@ -1316,6 +1321,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("X-Mod-Time", str(mtime))
+            # Prevent browser caching so pollCurrentFile always gets fresh mtime/size
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self._flush_session_cookie()
             self.end_headers()
             self.wfile.write(data)
@@ -1324,19 +1333,24 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self._send_error(str(e), 500)
 
     def _handle_write_file(self, mount_id: str, qs: dict):
+        logger.info("PUT _handle_write_file called: mount=%s qs=%s", mount_id, qs)
         if not self.mount_manager:
             return self._send_error("No mounts configured", 404)
         mount = self.mount_manager.find_mount(mount_id)
         if not mount:
+            logger.warning("PUT mount not found: %s", mount_id)
             return self._send_error("Mount not found", 404)
         # Check ownership (only owner can write to their mounts; admin can write to host mounts)
         session_id = self._get_session_id()
         if mount.host:
             if not self._is_admin_request() and not mount.public:
+                logger.warning("PUT access denied (host mount, not admin/public): %s", mount_id)
                 return self._send_error("Mount not found", 404)
         elif not self._owns_mount(mount, session_id):
+            logger.warning("PUT access denied (not owner): mount=%s session=%s", mount_id, session_id)
             return self._send_error("Mount not found", 404)
         if mount.readonly:
+            logger.warning("PUT mount is readonly: %s", mount_id)
             return self._send_error("Mount is read-only", 403)
         rel_path = qs.get("path", [None])[0]
         if not rel_path:
@@ -1350,6 +1364,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         expected_mtime = qs.get("expected_mtime", [None])[0]
         if expected_mtime and os.path.isfile(abs_path):
             actual_mtime = int(os.path.getmtime(abs_path) * 1000)
+            logger.info(
+                "PUT conflict check: expected=%s actual=%s match=%s file=%s",
+                expected_mtime,
+                actual_mtime,
+                actual_mtime == int(expected_mtime),
+                rel_path,
+            )
             if actual_mtime != int(expected_mtime):
                 # Conflict! Create a .conflict.md copy
                 conflict_path = abs_path.rsplit(".", 1)
@@ -1396,8 +1417,34 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
                 old_text = old_content.decode("utf-8", errors="replace")
                 new_text = body.decode("utf-8", errors="replace")
+                logger.info(
+                    "PUT diff check: old_len=%d new_len=%d changed=%s",
+                    len(old_text),
+                    len(new_text),
+                    old_text != new_text,
+                )
                 if old_text != new_text:
                     changes = compute_diff(old_text, new_text)
+                    logger.info(
+                        "PUT compute_diff: %d changes for %s",
+                        len(changes),
+                        rel_path,
+                    )
+                    # Fallback: if content changed but compute_diff returned empty
+                    # (e.g., only trailing whitespace changed), create a synthetic
+                    # replace change so version history is still recorded.
+                    if not changes:
+                        changes = [
+                            {
+                                "type": "replace",
+                                "paraIdx": 0,
+                                "content": new_text,
+                            }
+                        ]
+                        logger.info(
+                            "PUT diff fallback: created synthetic replace for %s",
+                            rel_path,
+                        )
                     if changes:
                         author_name = self.headers.get("X-Client-Name", "Anonymous")
                         author_color = self.headers.get("X-Client-Color", "#3498db")
@@ -2349,6 +2396,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(data)))
+            # Prevent browser caching of static files during development
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self._flush_session_cookie()
             self.end_headers()
             self.wfile.write(data)
