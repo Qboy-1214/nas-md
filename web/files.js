@@ -109,7 +109,8 @@ const API = {
     }
     const content = await r.text();
     const mtime = parseInt(r.headers.get('X-Mod-Time') || '0', 10);
-    return { content, mtime };
+    const version = parseInt(r.headers.get('X-File-Version') || '0', 10);
+    return { content, mtime, version };
   },
 
   async putFile(mountId, path, content, expectedMtime) {
@@ -131,6 +132,40 @@ const API = {
       return r ? r.json() : null;
     } catch (e) {
       console.error('[putFile] fetch error:', e);
+      throw e;
+    }
+  },
+
+  // 提交段落级changes（版本号驱动的协同编辑）
+  // 调用 POST /api/mounts/{id}/changes?path=...
+  // 返回 { applied, merged, newVersion, content } 或 null（失败时）
+  async submitChanges(mountId, path, baseVersion, changes, authorName, authorColor) {
+    const url = `/api/mounts/${mountId}/changes?path=${encodeURIComponent(path)}`;
+    const body = JSON.stringify({
+      baseVersion,
+      changes,
+      authorName: authorName || 'Anonymous',
+      authorColor: authorColor || '#3498db',
+    });
+    console.log('[submitChanges] sending POST:', {
+      url,
+      baseVersion,
+      changesCount: changes.length,
+    });
+    try {
+      const r = await this.request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (!r || !r.ok) {
+        const errText = r ? await r.text().catch(() => '') : '';
+        console.error('[submitChanges] error:', errText);
+        return null;
+      }
+      return r.json();
+    } catch (e) {
+      console.error('[submitChanges] fetch error:', e);
       throw e;
     }
   },
