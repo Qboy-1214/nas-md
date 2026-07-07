@@ -75,3 +75,58 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
                 changes.append({"type": "insert", "paraIdx": i1, "content": new_paras[j]})
 
     return changes
+
+
+def apply_changes(text: str, changes: list) -> str:
+    """将 changes 应用到 text，返回新文本。
+
+    changes 中的 paraIdx 基于**原文本**的段落位置。
+    采用"重建"策略：把原文本切成段落列表，根据changes构建结果。
+    """
+    if not changes:
+        return text
+
+    paragraphs = split_paragraphs(text)
+
+    # 分类 changes
+    replaces = {}  # paraIdx -> new_content
+    deletes = set()  # paraIdx
+    inserts = []  # list of (paraIdx, content)
+
+    for ch in changes:
+        t = ch.get("type")
+        idx = ch.get("paraIdx", 0)
+        if t == "replace":
+            replaces[idx] = ch.get("content", "")
+        elif t == "delete":
+            deletes.add(idx)
+        elif t == "insert":
+            inserts.append((idx, ch.get("content", "")))
+
+    # 按 paraIdx 分组 inserts
+    inserts_by_idx = {}
+    for idx, content in inserts:
+        inserts_by_idx.setdefault(idx, []).append(content)
+
+    result_paras = []
+    n = len(paragraphs)
+    for i in range(n):
+        # 先插入"在此段落之前"的 inserts
+        if i in inserts_by_idx:
+            for content in inserts_by_idx[i]:
+                result_paras.append(content)
+        # 处理原段落
+        if i in deletes:
+            continue
+        if i in replaces:
+            result_paras.append(replaces[i])
+        else:
+            result_paras.append(paragraphs[i])
+
+    # 处理 paraIdx >= n 的 inserts（追加到末尾）
+    for idx in sorted(inserts_by_idx.keys()):
+        if idx >= n:
+            for content in inserts_by_idx[idx]:
+                result_paras.append(content)
+
+    return "\n\n".join(result_paras)
