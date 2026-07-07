@@ -44,6 +44,10 @@ const state = {
   // File modification tracking for conflict detection and external change sync
   // "mountId:path" → { mtime: number, size: number }
   fileMtimes: {},
+  // Version-driven collaboration state (replaces mtime optimistic lock for server mounts)
+  baseVersion: 0,        // version number of the content currently loaded in editor
+  baseContent: '',       // content snapshot at baseVersion (for diff computation)
+  fileVersions: {},      // "mountId:path" -> last known version
 };
 
 // Expose state globally so files.js can access isAdmin
@@ -210,6 +214,12 @@ document.addEventListener('DOMContentLoaded', async () => {
               size: content.length,
             };
           }
+          // Initialize version-driven state
+          if (result && result.version !== undefined) {
+            state.baseVersion = result.version;
+            state.baseContent = content;
+            state.fileVersions[shareMountId + ':' + sharePath] = result.version;
+          }
           setFileInfo(shareMountId, sharePath);
           state.dirty = false;
           startDirtyCheck();
@@ -323,6 +333,12 @@ document.addEventListener('DOMContentLoaded', async () => {
               );
             } else {
               console.log('[restore] server mount: no mtime from API response');
+            }
+            // Initialize version-driven state
+            if (result && result.version !== undefined) {
+              state.baseVersion = result.version;
+              state.baseContent = content;
+              state.fileVersions[mount.id + ':' + lastPath] = result.version;
             }
           }
           setFileInfo(mount.id, lastPath);
@@ -2643,11 +2659,15 @@ async function openFile(path, preferredMountId, searchKeyword) {
       // Read from local File System Access API
       content = await readLocalFile(mount.id, path);
     } else {
-      // Read from server API (returns { content, mtime })
+      // Read from server API (returns { content, mtime, version })
       const result = await API.getFile(mount.id, path);
       if (result !== null) {
         content = result.content;
         state.fileMtimes[mount.id + ':' + path] = { mtime: result.mtime, size: content.length };
+        // Initialize version-driven state
+        state.baseVersion = result.version || 0;
+        state.baseContent = content;
+        state.fileVersions[mount.id + ':' + path] = result.version || 0;
       }
     }
     // Record mtime for local files
@@ -2994,9 +3014,6 @@ async function saveFile({ silent = false } = {}) {
     autoSave: state.autoSave,
     dirty: state.dirty,
   });
-  // Prevent concurrent saves: if a save is already in progress, skip this call.
-  // For auto-save, scheduleAutoSave already handles rescheduling, but manual
-  // saves (Ctrl+S / button) could still trigger concurrently.
   if (_saveInProgress) {
     console.log('[saveFile] skipped: another save in progress');
     return;
@@ -3004,7 +3021,6 @@ async function saveFile({ silent = false } = {}) {
   _saveInProgress = true;
   try {
     if (!state.currentPath || !state.currentMountId || !window._vditor) return;
-    // Check if current mount is readonly
     const mount = state.mounts.find((m) => m.id === state.currentMountId);
     if (mount && mount.readonly) {
       if (!silent) showToast('此文件不允许修改');
@@ -3013,7 +3029,6 @@ async function saveFile({ silent = false } = {}) {
     const content = window._vditor.getValue();
     _lastSavedContent = content;
 
-    // Show saving state on button (only for manual save)
     const btn = $('btn-save');
     if (!silent && btn) {
       btn.classList.add('saving');
@@ -3021,27 +3036,24 @@ async function saveFile({ silent = false } = {}) {
     }
 
     if (!navigator.onLine) {
-      // Offline: save to localStorage
       saveToLocalStorage(state.currentPath, content);
       markClean();
       if (!silent) {
         showToast('已离线保存，恢复连接后自动同步');
-        btn.classList.remove('saving');
-        btn.disabled = false;
       }
       return;
     }
 
     try {
-      // Local mount: save via File System Access API
       if (mount && mount._local && state.localMounts[mount.id]) {
+        // 本地挂载：通过 File System Access API 写入
         const ok = await writeLocalFile(mount.id, state.currentPath, content);
         if (!ok) throw new Error('写入本机文件失败');
         window._originalContent = content;
+        state.baseContent = content;
         markClean();
         clearLocalStorage(state.currentPath);
         if (!silent) showToast('已保存');
-        // Update mtime after local save
         try {
           const handle = await getLocalFileHandle(
             state.localMounts[mount.id].handle,
@@ -3058,57 +3070,64 @@ async function saveFile({ silent = false } = {}) {
           /* ignore */
         }
       } else {
-        // Server mount: save with optimistic lock (expected_mtime)
-        const key = state.currentMountId + ':' + state.currentPath;
-        const expectedMtime = state.fileMtimes[key]?.mtime || null;
-        console.log('[saveFile] server mount branch:', {
-          key,
-          expectedMtime,
-          fileMtimes: state.fileMtimes[key],
-          contentLen: content.length,
+        // 服务器挂载：版本号驱动的段落级合并
+        const fileKey = state.currentMountId + ':' + state.currentPath;
+        const baseContent = state.baseContent || window._originalContent || '';
+        const changes = computeParagraphDiff(baseContent, content);
+
+        if (changes.length === 0) {
+          console.log('[saveFile] no changes to submit');
+          markClean();
+          return;
+        }
+
+        const identity = window.nasmdIdentity ? window.nasmdIdentity.get() : null;
+        console.log('[saveFile] submitChanges:', {
+          fileKey,
+          baseVersion: state.baseVersion,
+          changesCount: changes.length,
         });
-        console.log('[saveFile] about to call API.putFile, API exists:', typeof API, typeof API?.putFile);
-        let resp;
-        try {
-          resp = await API.putFile(
-            state.currentMountId,
-            state.currentPath,
-            content,
-            expectedMtime,
-          );
-          console.log('[saveFile] putFile response:', resp);
-        } catch (e) {
-          console.error('[saveFile] putFile threw error:', e);
-          throw e;
+
+        const resp = await API.submitChanges(
+          state.currentMountId,
+          state.currentPath,
+          state.baseVersion,
+          changes,
+          identity ? identity.name : 'Anonymous',
+          identity ? identity.color : '#3498db',
+        );
+
+        if (!resp || !resp.applied) {
+          console.log('[saveFile] changes not applied', resp);
+          if (resp && resp.error) {
+            throw new Error(resp.error);
+          }
+          return;
         }
-        if (resp && resp.error) {
-          throw new Error(resp.error);
-        }
-        window._originalContent = content;
+
+        // 更新版本号和基线内容
+        state.baseVersion = resp.newVersion;
+        state.baseContent = resp.content;
+        state.fileVersions[fileKey] = resp.newVersion;
+        window._originalContent = resp.content;
+        _lastSavedContent = resp.content;
         markClean();
         clearLocalStorage(state.currentPath);
-        // Update mtime from server response BEFORE showing toast,
-        // so conflict toast doesn't get overwritten by save-complete toast
-        if (resp && resp.modTime) {
-          state.fileMtimes[key] = { mtime: resp.modTime, size: content.length };
-        }
-        // Show toast: conflict takes priority over save-complete message
-        if (resp && resp.conflict) {
-          showToast('文件在外部已被修改，已创建冲突副本（.conflict.md）');
+
+        if (resp.merged) {
+          showToast('已合并保存');
         } else if (!silent) {
           showToast('已保存');
         } else {
           showToast('自动保存完成');
         }
-        // Trigger sync after save
+
         performSync();
-        // Refresh version history panel if visible
         if (window.nasmdHistory && window.nasmdHistory.isVisible()) {
           window.nasmdHistory.loadHistory();
         }
       }
     } catch (e) {
-      // Fallback to localStorage on error
       saveToLocalStorage(state.currentPath, content);
       if (!silent) showToast('保存失败，已缓存到本地');
       else showToast('自动保存失败');
@@ -3119,16 +3138,36 @@ async function saveFile({ silent = false } = {}) {
         btn.classList.remove('saving');
         btn.disabled = false;
       }
-      // If content changed during save (still dirty), reschedule auto-save
       if (state.dirty && state.autoSave && state.currentPath) {
         scheduleAutoSave();
       }
     }
   } finally {
-    // Outer finally: ensure _saveInProgress is reset for ALL paths,
-    // including early returns (no currentPath, readonly, offline, etc.)
     _saveInProgress = false;
   }
+}
+
+// 客户端段落级 diff 计算：对比 baseContent 与当前内容，输出 changes 列表。
+// 采用简单按段落（双换行分隔）逐一对比的策略。
+// 与服务端 paragraph_diff.compute_diff 实现保持语义一致。
+function computeParagraphDiff(oldText, newText) {
+  if (oldText === newText) return [];
+  const oldParas = oldText.split('\n\n');
+  const newParas = newText.split('\n\n');
+  const changes = [];
+  const maxLen = Math.max(oldParas.length, newParas.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < oldParas.length && i < newParas.length) {
+      if (oldParas[i] !== newParas[i]) {
+        changes.push({ type: 'replace', paraIdx: i, content: newParas[i] });
+      }
+    } else if (i < newParas.length) {
+      changes.push({ type: 'insert', paraIdx: i, content: newParas[i] });
+    } else {
+      changes.push({ type: 'delete', paraIdx: i });
+    }
+  }
+  return changes;
 }
 
 function confirmNewFile() {
@@ -3470,107 +3509,12 @@ async function refreshTree() {
   }
 }
 
-/**
- * Poll the current open file for external modifications.
- * Detects external changes by comparing disk content with what we last saved
- * (_lastSavedContent). This avoids false positives when the user edits after
- * a save — the editor content will differ from disk, but that's our own edit,
- * not an external change.
- */
-async function pollCurrentFile() {
-  if (_saveInProgress) {
-    console.log('[poll] skip: save in progress');
-    return;
-  }
-  if (!state.currentPath || !state.currentMountId || !window._vditor) {
-    return;
-  }
-  const mount = state.mounts.find((m) => m.id === state.currentMountId);
-  if (!mount) return;
-
-  try {
-    const key = state.currentMountId + ':' + state.currentPath;
-    const prev = state.fileMtimes[key];
-    if (!prev) return;
-
-    let newMtime = null;
-    let newSize = null;
-    let newContent = null;
-
-    if (mount._local && state.localMounts[state.currentMountId]) {
-      // Local mount: read file and compare with _lastSavedContent
-      const localMount = state.localMounts[state.currentMountId];
-      const handle = await getLocalFileHandle(localMount.handle, state.currentPath);
-      if (!handle) return;
-      const file = await handle.getFile();
-      newMtime = file.lastModified;
-      newSize = file.size;
-      const diskContent = await file.text();
-      if (diskContent === _lastSavedContent) {
-        // Disk matches what we last saved — no external change
-        state.fileMtimes[key] = { mtime: newMtime, size: newSize };
-        return;
-      }
-      // External change detected
-      newContent = diskContent;
-      console.log('[poll] external change detected on local mount');
-    } else {
-      // Server mount: poll API for X-Mod-Time
-      const resp = await fetch(
-        '/api/mounts/' +
-          encodeURIComponent(state.currentMountId) +
-          '/file?path=' +
-          encodeURIComponent(state.currentPath) +
-          '&_t=' +
-          Date.now(),
-        { cache: 'no-store' },
-      );
-      if (!resp.ok) return;
-      const modTimeHeader = resp.headers.get('X-Mod-Time');
-      if (!modTimeHeader) return;
-      newMtime = parseInt(modTimeHeader, 10);
-      const text = await resp.text();
-      newSize = text.length;
-      if (prev.mtime !== newMtime || prev.size !== newSize) {
-        newContent = text;
-      }
-    }
-
-    if (newContent) {
-      window._vditor.setValue(newContent);
-      window._originalContent = newContent;
-      _lastSavedContent = newContent;
-      state.fileMtimes[key] = { mtime: newMtime, size: newSize };
-      console.log('[poll] editor reloaded with external content');
-    }
-  } catch (e) {
-    console.log('[poll] ERROR:', e.message || e);
-  }
-}
-
 // === Sidebar auto-refresh ===
 let _sidebarRefreshTimer = null;
-const SIDEBAR_REFRESH_INTERVAL = 5000; // 5 seconds (was 1s, caused excessive refresh spam)
+const SIDEBAR_REFRESH_INTERVAL = 5000; // 5 seconds
 
-// === File content auto-poll (independent from sidebar refresh) ===
-let _filePollTimer = null;
-const FILE_POLL_INTERVAL = 2000; // 2 seconds (was 1s)
-
-function startFilePoll() {
-  if (_filePollTimer) return;
-  async function tick() {
-    await pollCurrentFile();
-    _filePollTimer = setTimeout(tick, FILE_POLL_INTERVAL);
-  }
-  _filePollTimer = setTimeout(tick, FILE_POLL_INTERVAL);
-}
-
-function stopFilePoll() {
-  if (_filePollTimer) {
-    clearTimeout(_filePollTimer);
-    _filePollTimer = null;
-  }
-}
+// File content external changes are now delivered via SSE (external_reload event)
+// handled in sync_layer.js — no more mtime polling needed.
 
 function startSidebarRefresh() {
   if (_sidebarRefreshTimer) return;
@@ -3587,6 +3531,12 @@ function stopSidebarRefresh() {
     _sidebarRefreshTimer = null;
   }
 }
+
+// Backward-compat stubs: file content polling has been replaced by SSE
+// external_reload events (see sync_layer.js). These no-op functions keep
+// existing call sites working without behavior change.
+function startFilePoll() {}
+function stopFilePoll() {}
 
 // === Refresh from disk ===
 // eslint-disable-next-line no-unused-vars
@@ -3617,31 +3567,26 @@ async function refreshFromDisk(silent) {
       };
     } else {
       // Server mount: read via API
-      const resp = await fetch(
-        '/api/mounts/' +
-          encodeURIComponent(state.currentMountId) +
-          '/file?path=' +
-          encodeURIComponent(state.currentPath) +
-          '&_t=' +
-          Date.now(),
-        { cache: 'no-store' },
-      );
-      if (!resp.ok) {
+      const result = await API.getFile(mount.id, state.currentPath);
+      if (!result) {
         if (!silent) showToast('文件读取失败');
         return;
       }
-      content = await resp.text();
-      const modTime = parseInt(resp.headers.get('X-Mod-Time') || '0', 10);
+      content = result.content;
       state.fileMtimes[mount.id + ':' + state.currentPath] = {
-        mtime: modTime,
+        mtime: result.mtime,
         size: content.length,
       };
+      state.baseVersion = result.version || 0;
+      state.baseContent = content;
+      state.fileVersions[mount.id + ':' + state.currentPath] = result.version || 0;
     }
 
     if (content !== null) {
       window._vditor.setValue(content);
       window._originalContent = content;
       _lastSavedContent = content;
+      state.baseContent = content;
       if (!silent) showToast('已从磁盘重新加载');
     }
   } catch (e) {
