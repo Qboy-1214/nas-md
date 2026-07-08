@@ -625,7 +625,7 @@ class TestSubmitChangesAPI:
             "baseVersion": 0,
             "changes": [{"type": "replace", "paraIdx": 0, "content": "B-wins"}],
         }
-        status, body = _post(
+        _status, body = _post(
             f"{writable_server_url}/api/mounts/writable/changes?path=/merge.md",
             data=payload_b,
         )
@@ -639,7 +639,7 @@ class TestSubmitChangesAPI:
         with open(os.path.join(writable_dir, "empty.md"), "w", encoding="utf-8") as f:
             f.write("content")
         payload = {"baseVersion": 0, "changes": []}
-        status, body = _post(
+        _status, body = _post(
             f"{writable_server_url}/api/mounts/writable/changes?path=/empty.md",
             data=payload,
         )
