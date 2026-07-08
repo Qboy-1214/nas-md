@@ -1369,7 +1369,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 logger.warning("PUT access denied (host mount, not admin/public): %s", mount_id)
                 return self._send_error("Mount not found", 404)
         elif not self._owns_mount(mount, session_id):
-            logger.warning("PUT access denied (not owner): mount=%s session=%s", mount_id, session_id)
+            logger.warning(
+                "PUT access denied (not owner): mount=%s session=%s", mount_id, session_id
+            )
             return self._send_error("Mount not found", 404)
         if mount.readonly:
             logger.warning("PUT mount is readonly: %s", mount_id)
@@ -1515,12 +1517,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         base_version = int(payload.get("baseVersion", 0))
         changes = payload.get("changes", [])
-        author_name = payload.get("authorName") or self.headers.get(
-            "X-Client-Name", "Anonymous"
-        )
-        author_color = payload.get("authorColor") or self.headers.get(
-            "X-Client-Color", "#3498db"
-        )
+        author_name = payload.get("authorName") or self.headers.get("X-Client-Name", "Anonymous")
+        author_color = payload.get("authorColor") or self.headers.get("X-Client-Color", "#3498db")
 
         if not isinstance(changes, list):
             return self._send_error("changes must be a list", 400)

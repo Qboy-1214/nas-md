@@ -5,6 +5,7 @@ Avoids depending on real watchdog observers (which require filesystem events
 and threads). Tests only the mark_expected / is_expected logic and the
 singleton accessor.
 """
+
 import os
 import pytest
 from nas_md.webserver.file_watcher import FileWatcher, get_watcher

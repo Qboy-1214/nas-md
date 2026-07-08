@@ -469,7 +469,9 @@ class TestWriteFileAPI:
         with open(os.path.join(writable_dir, "hello.md"), encoding="utf-8") as f:
             assert f.read() == new_content
 
-    def test_write_file_with_expected_mtime_no_conflict_copy(self, writable_server_url, writable_dir):
+    def test_write_file_with_expected_mtime_no_conflict_copy(
+        self, writable_server_url, writable_dir
+    ):
         """PUT with stale expected_mtime must NOT create a .conflict.md copy.
 
         Regression test: the deprecated PUT wrapper routes through apply_changes

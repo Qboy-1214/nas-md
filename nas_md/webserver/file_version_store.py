@@ -16,6 +16,7 @@ Conflict resolution (base_version mismatch):
 - Merge with any pending changes since base_version (paragraph-level)
 - "Last write wins" for same-paragraph conflicts
 """
+
 from __future__ import annotations
 
 import logging
@@ -55,9 +56,7 @@ class FileVersionStore:
         with self._lock:
             if file_key in self._files:
                 return self._files[file_key].version
-            self._files[file_key] = _FileVersion(
-                version=0, content=content, changes_by_version={}
-            )
+            self._files[file_key] = _FileVersion(version=0, content=content, changes_by_version={})
             return 0
 
     def apply_changes(

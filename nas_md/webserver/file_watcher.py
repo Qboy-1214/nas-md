@@ -8,6 +8,7 @@ connected clients can refresh.
 
 watchdog is an optional dependency — if not available, the watcher is a no-op.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,7 +39,13 @@ except ImportError:
 class _MountWatchHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else object):  # type: ignore[misc]
     """Watchdog event handler for a single mount."""
 
-    def __init__(self, mount_id: str, mount_dir: str, on_change: Callable[[str, str, str], None], watcher: FileWatcher):
+    def __init__(
+        self,
+        mount_id: str,
+        mount_dir: str,
+        on_change: Callable[[str, str, str], None],
+        watcher: FileWatcher,
+    ):
         super().__init__()
         self._mount_id = mount_id
         self._mount_dir = os.path.abspath(mount_dir)
