@@ -34,13 +34,13 @@
     try {
       var stored = localStorage.getItem(STORAGE_KEY);
       if (stored) return JSON.parse(stored);
-    } catch (e) {
+    } catch (_e) {
       // ignore
     }
     var id = generateIdentity();
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(id));
-    } catch (e) {
+    } catch (_e) {
       // ignore quota errors
     }
     return id;

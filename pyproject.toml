@@ -34,7 +34,7 @@ extend-exclude = '''
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-exclude = [".venv", ".git", "__pycache__", ".pytest_cache", ".egg-info", "web", "node_modules"]
+exclude = [".venv", ".git", "__pycache__", ".pytest_cache", ".egg-info", "web", "node_modules", "scripts", "check_versions.py"]
 src = ["nas_md", "tests"]
 
 [tool.ruff.lint]

@@ -34,7 +34,7 @@
         if (this.handlers[data.type]) {
           this.handlers[data.type](data);
         }
-      } catch (e) {
+      } catch (_e) {
         // ignore malformed events
       }
     }.bind(this);
