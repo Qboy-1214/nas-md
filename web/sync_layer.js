@@ -238,10 +238,7 @@
       }
       // If the edit is on the currently open file, bump baseVersion so the
       // client's next save uses the fresh version (no false merge).
-      if (
-        state.currentMountId === data.mountId &&
-        state.currentPath === data.path
-      ) {
+      if (state.currentMountId === data.mountId && state.currentPath === data.path) {
         state.baseVersion = data.newVersion;
       }
     }
@@ -300,7 +297,7 @@
 
     // If user has unsaved edits, don't blow them away — let next save merge.
     if (state.dirty) {
-      showToast('文件已被外部修改，你的未保存编辑将在下次保存时合并', 'info');
+      window.showToast('文件已被外部修改，你的未保存编辑将在下次保存时合并', 'info');
       return;
     }
 
@@ -310,11 +307,11 @@
       window._vditor.setValue(data.content);
       window._originalContent = data.content;
       state.baseContent = data.content;
-      _lastSavedContent = data.content;
+      window._lastSavedContent = data.content;
       setTimeout(function () {
         _applyingRemote = false;
       }, 150);
-      showToast('文件已被外部修改，已自动重载');
+      window.showToast('文件已被外部修改，已自动重载');
     }
   }
 

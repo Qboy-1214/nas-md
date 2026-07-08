@@ -1381,141 +1381,88 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if abs_path is None:
             return self._send_error("Path escapes mount root", 403)
 
-        # Conflict detection: if expected_mtime given and file has been modified
-        conflict = False
-        expected_mtime = qs.get("expected_mtime", [None])[0]
-        if expected_mtime and os.path.isfile(abs_path):
-            actual_mtime = int(os.path.getmtime(abs_path) * 1000)
-            logger.info(
-                "PUT conflict check: expected=%s actual=%s match=%s file=%s",
-                expected_mtime,
-                actual_mtime,
-                actual_mtime == int(expected_mtime),
-                rel_path,
-            )
-            if actual_mtime != int(expected_mtime):
-                # Conflict! Create a .conflict.md copy
-                conflict_path = abs_path.rsplit(".", 1)
-                conflict_path = (
-                    conflict_path[0] + ".conflict." + conflict_path[1]
-                    if len(conflict_path) > 1
-                    else abs_path + ".conflict"
-                )
-                try:
-                    import shutil
-
-                    shutil.copy2(abs_path, conflict_path)
-                    logger.warning(
-                        "Sync conflict detected for %s, created %s",
-                        rel_path,
-                        os.path.basename(conflict_path),
-                    )
-                except OSError:
-                    pass
-                conflict = True
-
+        # DEPRECATED: PUT /file is now a wrapper around apply_changes.
+        # New clients should use POST /changes instead for version-driven
+        # paragraph-level merge. PUT is retained for file creation/import/move
+        # operations that write full content. expected_mtime is ignored —
+        # version-based optimistic lock replaces mtime conflict detection.
         body = self._read_body()
-        # Create parent dirs
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        new_text = body.decode("utf-8", errors="replace")
 
-        # Read old content for diff (before overwriting)
-        old_content = None
+        from nas_md.webserver.file_version_store import get_store
+        from nas_md.webserver.paragraph_diff import compute_diff, apply_changes as apply_diff
+
+        store = get_store()
+        file_key = f"{mount_id}:{rel_path}"
+
+        old_content = ""
         if os.path.isfile(abs_path):
             try:
-                with open(abs_path, "rb") as f:
+                with open(abs_path, encoding="utf-8", errors="replace") as f:
                     old_content = f.read()
             except OSError:
                 pass
 
-        with open(abs_path, "wb") as f:
-            f.write(body)
-        st = os.stat(abs_path)
+        store.init_file(file_key, abs_path, old_content)
 
-        # Broadcast changes to SSE clients (collaborative editing)
-        if old_content is not None:
+        if old_content != new_text:
+            changes = compute_diff(old_content, new_text)
+            if not changes:
+                changes = [{"type": "replace", "paraIdx": 0, "content": new_text}]
+        else:
+            changes = []
+
+        author_name = self.headers.get("X-Client-Name", "Anonymous")
+        author_color = self.headers.get("X-Client-Color", "#3498db")
+
+        # Pre-mark expected write to file_watcher so our own write isn't flagged external
+        try:
+            from nas_md.webserver.file_watcher import get_watcher
+
+            expected_content = apply_diff(old_content, changes)
+            get_watcher().mark_expected(mount_id, rel_path, expected_content)
+        except Exception:
+            pass  # watcher optional
+
+        result = store.apply_changes(
+            file_key=file_key,
+            file_path=abs_path,
+            base_version=store.get_current_version(file_key),
+            changes=changes,
+            author_id=session_id,
+            author_name=author_name,
+            author_color=author_color,
+        )
+
+        if changes and result.get("applied"):
             try:
-                from nas_md.webserver.paragraph_diff import compute_diff
                 from nas_md.webserver.sse_handler import sse_broadcast
 
-                old_text = old_content.decode("utf-8", errors="replace")
-                new_text = body.decode("utf-8", errors="replace")
-                logger.info(
-                    "PUT diff check: old_len=%d new_len=%d changed=%s",
-                    len(old_text),
-                    len(new_text),
-                    old_text != new_text,
+                sse_broadcast(
+                    file_key,
+                    exclude_id=session_id,
+                    event={
+                        "type": "remote_edit",
+                        "authorId": session_id,
+                        "authorName": author_name,
+                        "authorColor": author_color,
+                        "mountId": mount_id,
+                        "path": rel_path,
+                        "changes": changes,
+                        "newVersion": result["newVersion"],
+                    },
                 )
-                if old_text != new_text:
-                    changes = compute_diff(old_text, new_text)
-                    logger.info(
-                        "PUT compute_diff: %d changes for %s",
-                        len(changes),
-                        rel_path,
-                    )
-                    # Fallback: if content changed but compute_diff returned empty
-                    # (e.g., only trailing whitespace changed), create a synthetic
-                    # replace change so version history is still recorded.
-                    if not changes:
-                        changes = [
-                            {
-                                "type": "replace",
-                                "paraIdx": 0,
-                                "content": new_text,
-                            }
-                        ]
-                        logger.info(
-                            "PUT diff fallback: created synthetic replace for %s",
-                            rel_path,
-                        )
-                    if changes:
-                        author_name = self.headers.get("X-Client-Name", "Anonymous")
-                        author_color = self.headers.get("X-Client-Color", "#3498db")
-                        sse_broadcast(
-                            f"{mount_id}:{rel_path}",
-                            exclude_id=session_id,
-                            event={
-                                "type": "remote_edit",
-                                "authorId": session_id,
-                                "authorName": author_name,
-                                "authorColor": author_color,
-                                "mountId": mount_id,
-                                "path": rel_path,
-                                "changes": changes,
-                                "modTime": int(st.st_mtime * 1000),
-                            },
-                        )
-                        # Record version history
-                        try:
-                            from nas_md.webserver.version_history import (
-                                record_version,
-                            )
-
-                            record_version(
-                                file_key=f"{mount_id}:{rel_path}",
-                                author_id=session_id,
-                                author_name=author_name,
-                                author_color=author_color,
-                                changes=changes,
-                                content_snapshot=new_text,
-                                previous_content=old_text,
-                            )
-                            logger.info(
-                                "Version recorded for %s:%s by %s",
-                                mount_id,
-                                rel_path,
-                                author_name,
-                            )
-                        except Exception as e:
-                            logger.warning("Version history record failed: %s", e)
             except Exception as e:
                 logger.warning("SSE broadcast failed: %s", e)
 
+        st = os.stat(abs_path)
         self._send_json(
             {
                 "status": "ok",
                 "modTime": int(st.st_mtime * 1000),
                 "size": st.st_size,
-                "conflict": conflict,
+                "conflict": False,
+                "newVersion": result.get("newVersion", store.get_current_version(file_key)),
             }
         )
         return abs_path

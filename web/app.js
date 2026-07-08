@@ -45,9 +45,9 @@ const state = {
   // "mountId:path" → { mtime: number, size: number }
   fileMtimes: {},
   // Version-driven collaboration state (replaces mtime optimistic lock for server mounts)
-  baseVersion: 0,        // version number of the content currently loaded in editor
-  baseContent: '',       // content snapshot at baseVersion (for diff computation)
-  fileVersions: {},      // "mountId:path" -> last known version
+  baseVersion: 0, // version number of the content currently loaded in editor
+  baseContent: '', // content snapshot at baseVersion (for diff computation)
+  fileVersions: {}, // "mountId:path" -> last known version
 };
 
 // Expose state globally so files.js can access isAdmin
@@ -253,6 +253,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           const result = await API.getFile(mount.id, lastPath);
           content = result ? result.content : null;
           if (result && result.mtime) serverMtime = result.mtime;
+          if (result && result.version !== undefined) {
+            state.baseVersion = result.version;
+            state.baseContent = content;
+            state.fileVersions[mount.id + ':' + lastPath] = result.version;
+          }
         }
         if (content !== null) {
           state.currentPath = lastPath;
@@ -333,12 +338,6 @@ document.addEventListener('DOMContentLoaded', async () => {
               );
             } else {
               console.log('[restore] server mount: no mtime from API response');
-            }
-            // Initialize version-driven state
-            if (result && result.version !== undefined) {
-              state.baseVersion = result.version;
-              state.baseContent = content;
-              state.fileVersions[mount.id + ':' + lastPath] = result.version;
             }
           }
           setFileInfo(mount.id, lastPath);
@@ -2658,6 +2657,10 @@ async function openFile(path, preferredMountId, searchKeyword) {
     if (mount._local && state.localMounts[mount.id]) {
       // Read from local File System Access API
       content = await readLocalFile(mount.id, path);
+      // Initialize version-driven state for local mounts too
+      state.baseVersion = 0;
+      state.baseContent = content || '';
+      state.fileVersions[mount.id + ':' + path] = 0;
     } else {
       // Read from server API (returns { content, mtime, version })
       const result = await API.getFile(mount.id, path);
@@ -3001,9 +3004,6 @@ function toggleBacklinks() {
 
 // === Save-in-progress flag to prevent pollCurrentFile race condition ===
 let _saveInProgress = false;
-// Track the content we last saved to disk, so the poll can distinguish
-// between our own save and an external modification.
-let _lastSavedContent = null;
 
 async function saveFile({ silent = false } = {}) {
   console.log('[saveFile] called:', {
@@ -3019,6 +3019,8 @@ async function saveFile({ silent = false } = {}) {
     return;
   }
   _saveInProgress = true;
+  const btn = $('btn-save');
+  let content;
   try {
     if (!state.currentPath || !state.currentMountId || !window._vditor) return;
     const mount = state.mounts.find((m) => m.id === state.currentMountId);
@@ -3026,10 +3028,8 @@ async function saveFile({ silent = false } = {}) {
       if (!silent) showToast('此文件不允许修改');
       return;
     }
-    const content = window._vditor.getValue();
-    _lastSavedContent = content;
+    content = window._vditor.getValue();
 
-    const btn = $('btn-save');
     if (!silent && btn) {
       btn.classList.add('saving');
       btn.disabled = true;
@@ -3047,12 +3047,38 @@ async function saveFile({ silent = false } = {}) {
     try {
       if (mount && mount._local && state.localMounts[mount.id]) {
         // 本地挂载：通过 File System Access API 写入
+        const baseContent = state.baseContent || window._originalContent || '';
+        const changes = computeParagraphDiff(baseContent, content);
+
+        if (changes.length === 0) {
+          console.log('[saveFile] local mount: no changes to save');
+          markClean();
+          return;
+        }
+
         const ok = await writeLocalFile(mount.id, state.currentPath, content);
         if (!ok) throw new Error('写入本机文件失败');
         window._originalContent = content;
         state.baseContent = content;
+        state.baseVersion += 1;
         markClean();
         clearLocalStorage(state.currentPath);
+
+        // Record version history for local mounts via server API
+        const identity = window.nasmdIdentity ? window.nasmdIdentity.get() : null;
+        try {
+          await API.submitChanges(
+            state.currentMountId,
+            state.currentPath,
+            state.baseVersion - 1,
+            changes,
+            identity ? identity.name : 'LocalUser',
+            identity ? identity.color : '#9b59b6',
+          );
+        } catch (e) {
+          console.warn('[saveFile] local mount version history recording failed:', e);
+        }
+
         if (!silent) showToast('已保存');
         try {
           const handle = await getLocalFileHandle(
@@ -3110,7 +3136,6 @@ async function saveFile({ silent = false } = {}) {
         state.baseContent = resp.content;
         state.fileVersions[fileKey] = resp.newVersion;
         window._originalContent = resp.content;
-        _lastSavedContent = resp.content;
         markClean();
         clearLocalStorage(state.currentPath);
 
@@ -3132,41 +3157,114 @@ async function saveFile({ silent = false } = {}) {
       if (!silent) showToast('保存失败，已缓存到本地');
       else showToast('自动保存失败');
       console.error(e);
-    } finally {
-      _saveInProgress = false;
-      if (!silent && btn) {
-        btn.classList.remove('saving');
-        btn.disabled = false;
-      }
-      if (state.dirty && state.autoSave && state.currentPath) {
-        scheduleAutoSave();
-      }
     }
   } finally {
     _saveInProgress = false;
+    if (!silent && btn) {
+      btn.classList.remove('saving');
+      btn.disabled = false;
+    }
+    if (state.dirty && state.autoSave && state.currentPath) {
+      scheduleAutoSave();
+    }
   }
 }
 
 // 客户端段落级 diff 计算：对比 baseContent 与当前内容，输出 changes 列表。
-// 采用简单按段落（双换行分隔）逐一对比的策略。
-// 与服务端 paragraph_diff.compute_diff 实现保持语义一致。
+// 使用 LCS（最长公共子序列）算法，与服务端 paragraph_diff.compute_diff 完全一致。
+// 朴素按索引对齐会导致插入段落后所有后续段落被误判为修改，LCS 能正确识别真正的变更位置。
 function computeParagraphDiff(oldText, newText) {
   if (oldText === newText) return [];
-  const oldParas = oldText.split('\n\n');
-  const newParas = newText.split('\n\n');
-  const changes = [];
-  const maxLen = Math.max(oldParas.length, newParas.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < oldParas.length && i < newParas.length) {
-      if (oldParas[i] !== newParas[i]) {
-        changes.push({ type: 'replace', paraIdx: i, content: newParas[i] });
+
+  // Split into paragraphs, matching server-side split_paragraphs
+  const splitParas = (text) => {
+    const paras = text.split('\n\n');
+    while (paras.length && paras[paras.length - 1].trim() === '') paras.pop();
+    return paras;
+  };
+
+  const oldParas = splitParas(oldText);
+  const newParas = splitParas(newText);
+
+  if (JSON.stringify(oldParas) === JSON.stringify(newParas)) return [];
+
+  const m = oldParas.length;
+  const n = newParas.length;
+
+  // LCS DP table
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldParas[i - 1] === newParas[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
       }
-    } else if (i < newParas.length) {
-      changes.push({ type: 'insert', paraIdx: i, content: newParas[i] });
-    } else {
-      changes.push({ type: 'delete', paraIdx: i });
     }
   }
+
+  // Backtrack to get opcodes (like Python's SequenceMatcher.get_opcodes)
+  const ops = [];
+  let i = m,
+    j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldParas[i - 1] === newParas[j - 1]) {
+      ops.push({ tag: 'equal', i1: i - 1, i2: i, j1: j - 1, j2: j });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      ops.push({ tag: 'insert', i1: i, i2: i, j1: j - 1, j2: j });
+      j--;
+    } else {
+      ops.push({ tag: 'delete', i1: i - 1, i2: i, j1: j, j2: j });
+      i--;
+    }
+  }
+  ops.reverse();
+
+  // Merge consecutive same-tag ops into blocks
+  const opcodes = [];
+  for (const op of ops) {
+    const last = opcodes[opcodes.length - 1];
+    if (last && last.tag === op.tag && last.i2 === op.i1 && last.j2 === op.j1) {
+      last.i2 = op.i2;
+      last.j2 = op.j2;
+    } else {
+      opcodes.push({ tag: op.tag, i1: op.i1, i2: op.i2, j1: op.j1, j2: op.j2 });
+    }
+  }
+
+  // Convert opcodes to changes (matching server-side compute_diff format)
+  const changes = [];
+  for (const op of opcodes) {
+    if (op.tag === 'replace') {
+      const oldLen = op.i2 - op.i1;
+      const newLen = op.j2 - op.j1;
+      const paired = Math.min(oldLen, newLen);
+      for (let k = 0; k < paired; k++) {
+        changes.push({ type: 'replace', paraIdx: op.i1 + k, content: newParas[op.j1 + k] });
+      }
+      if (oldLen > newLen) {
+        for (let k = paired; k < oldLen; k++) {
+          changes.push({ type: 'delete', paraIdx: op.i1 + k });
+        }
+      } else if (newLen > oldLen) {
+        for (let k = paired; k < newLen; k++) {
+          changes.push({ type: 'insert', paraIdx: op.i2, content: newParas[op.j1 + k] });
+        }
+      }
+    } else if (op.tag === 'delete') {
+      for (let k = op.i1; k < op.i2; k++) {
+        changes.push({ type: 'delete', paraIdx: k });
+      }
+    } else if (op.tag === 'insert') {
+      for (let k = op.j1; k < op.j2; k++) {
+        changes.push({ type: 'insert', paraIdx: op.i1, content: newParas[k] });
+      }
+    }
+    // 'equal' produces no changes
+  }
+
   return changes;
 }
 
@@ -3585,7 +3683,6 @@ async function refreshFromDisk(silent) {
     if (content !== null) {
       window._vditor.setValue(content);
       window._originalContent = content;
-      _lastSavedContent = content;
       state.baseContent = content;
       if (!silent) showToast('已从磁盘重新加载');
     }

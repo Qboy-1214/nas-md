@@ -111,11 +111,7 @@ class FileVersionStore:
                 for v in range(base_version + 1, fv.version + 1):
                     prev = fv.changes_by_version.get(v, [])
                     accumulated_changes = merge_changes(accumulated_changes, prev)
-                merged_changes_list = merge_changes(accumulated_changes, changes)
-                # Apply merged changes against the *base* content if we have it,
-                # otherwise apply against current content (best effort)
-                # Simpler & safer: apply incoming changes against current content.
-                # The merge above guarantees non-conflicting paragraphs win.
+                # merged_changes_list = merge_changes(accumulated_changes, changes)
                 new_content = apply_diff(fv.content, changes)
                 changes_to_apply = changes  # for history record
 

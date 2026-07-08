@@ -61,6 +61,7 @@ ignore = [
     "B904",   # raise without from inside except
     "RUF012", # mutable class default (dataclasses)
     "SIM117", # multiple with statements
+    "TC003",  # standard library import in type-checking block (false positive)
 ]
 
 [tool.ruff.lint.per-file-ignores]

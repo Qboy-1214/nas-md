@@ -72,12 +72,18 @@
         '<div style="padding:40px 20px;text-align:center;color:#999;">加载中...</div>';
     }
 
-    var url = '/api/history?file=' + encodeURIComponent(_currentFileKey) + '&limit=20&_t=' + Date.now();
+    var url =
+      '/api/history?file=' + encodeURIComponent(_currentFileKey) + '&limit=20&_t=' + Date.now();
     console.log('[version_history] fetching:', url);
 
     fetch(url, { cache: 'no-store' })
       .then(function (res) {
-        console.log('[version_history] response status:', res.status, 'Content-Type:', res.headers.get('Content-Type'));
+        console.log(
+          '[version_history] response status:',
+          res.status,
+          'Content-Type:',
+          res.headers.get('Content-Type'),
+        );
         return res.json();
       })
       .then(function (data) {
@@ -192,7 +198,13 @@
   function viewVersion(versionIdx) {
     if (!_currentFileKey) return;
 
-    var url = '/api/history?file=' + encodeURIComponent(_currentFileKey) + '&version=' + versionIdx + '&_t=' + Date.now();
+    var url =
+      '/api/history?file=' +
+      encodeURIComponent(_currentFileKey) +
+      '&version=' +
+      versionIdx +
+      '&_t=' +
+      Date.now();
 
     fetch(url, { cache: 'no-store' })
       .then(function (res) {

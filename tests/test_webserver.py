@@ -469,6 +469,30 @@ class TestWriteFileAPI:
         with open(os.path.join(writable_dir, "hello.md"), encoding="utf-8") as f:
             assert f.read() == new_content
 
+    def test_write_file_with_expected_mtime_no_conflict_copy(self, writable_server_url, writable_dir):
+        """PUT with stale expected_mtime must NOT create a .conflict.md copy.
+
+        Regression test: the deprecated PUT wrapper routes through apply_changes
+        and should never produce conflict files anymore.
+        """
+        # Seed a file
+        with open(os.path.join(writable_dir, "stale.md"), "w", encoding="utf-8") as f:
+            f.write("v1")
+        # Overwrite via PUT with a deliberately stale expected_mtime
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/stale.md&expected_mtime=1",
+            data=b"v2",
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data.get("conflict") is False
+        # No .conflict.md file should exist
+        assert not os.path.exists(os.path.join(writable_dir, "stale.conflict.md"))
+        assert not os.path.exists(os.path.join(writable_dir, "stale.conflict"))
+        # New content written
+        with open(os.path.join(writable_dir, "stale.md"), encoding="utf-8") as f:
+            assert f.read() == "v2"
+
     def test_write_file_readonly_mount(self, writable_server_url):
         """PUT to a readonly mount should return 403 or connection error."""
         try:
@@ -509,6 +533,158 @@ class TestWriteFileAPI:
         )
         assert status == 200
         assert os.path.isfile(os.path.join(writable_dir, "deep", "nested", "file.md"))
+
+
+class TestSubmitChangesAPI:
+    """Integration tests for POST /api/mounts/{id}/changes — version-driven paragraph merge."""
+
+    def test_submit_changes_creates_file(self, writable_server_url, writable_dir):
+        """POST /changes on a non-existing path should create the file."""
+        payload = {
+            "baseVersion": 0,
+            "changes": [{"type": "insert", "paraIdx": 0, "content": "new para"}],
+            "authorName": "tester",
+            "authorColor": "#ff0000",
+        }
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/created.md",
+            data=payload,
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data["applied"] is True
+        assert data["newVersion"] == 1
+        assert "new para" in data["content"]
+        with open(os.path.join(writable_dir, "created.md"), encoding="utf-8") as f:
+            assert f.read() == "new para"
+
+    def test_submit_changes_replace_paragraph(self, writable_server_url, writable_dir):
+        """POST /changes with replace should update the specified paragraph."""
+        # Seed file with 3 paragraphs
+        seed = "para one\n\npara two\n\npara three"
+        with open(os.path.join(writable_dir, "replace.md"), "w", encoding="utf-8") as f:
+            f.write(seed)
+        payload = {
+            "baseVersion": 0,
+            "changes": [{"type": "replace", "paraIdx": 1, "content": "CHANGED"}],
+            "authorName": "tester",
+        }
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/replace.md",
+            data=payload,
+        )
+        assert status == 200
+        data = json.loads(body)
+        assert data["applied"] is True
+        assert data["newVersion"] == 1
+        assert data["content"] == "para one\n\nCHANGED\n\npara three"
+
+    def test_submit_changes_version_increments(self, writable_server_url, writable_dir):
+        """Consecutive POST /changes should increment version monotonically."""
+        with open(os.path.join(writable_dir, "incr.md"), "w", encoding="utf-8") as f:
+            f.write("a")
+        # First edit
+        payload1 = {
+            "baseVersion": 0,
+            "changes": [{"type": "replace", "paraIdx": 0, "content": "b"}],
+        }
+        s1, b1 = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/incr.md",
+            data=payload1,
+        )
+        d1 = json.loads(b1)
+        assert d1["newVersion"] == 1
+        # Second edit based on new version
+        payload2 = {
+            "baseVersion": 1,
+            "changes": [{"type": "replace", "paraIdx": 0, "content": "c"}],
+        }
+        s2, b2 = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/incr.md",
+            data=payload2,
+        )
+        d2 = json.loads(b2)
+        assert d2["newVersion"] == 2
+        assert d2["content"] == "c"
+
+    def test_submit_changes_stale_base_merges(self, writable_server_url, writable_dir):
+        """Stale baseVersion should still apply (merged=True) via last-write-wins."""
+        with open(os.path.join(writable_dir, "merge.md"), "w", encoding="utf-8") as f:
+            f.write("orig")
+        # Client A saves at baseVersion 0
+        payload_a = {
+            "baseVersion": 0,
+            "changes": [{"type": "replace", "paraIdx": 0, "content": "A-wins"}],
+        }
+        _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/merge.md",
+            data=payload_a,
+        )
+        # Client B also at baseVersion 0 (stale) — should merge, last-write-wins
+        payload_b = {
+            "baseVersion": 0,
+            "changes": [{"type": "replace", "paraIdx": 0, "content": "B-wins"}],
+        }
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/merge.md",
+            data=payload_b,
+        )
+        data = json.loads(body)
+        assert data["applied"] is True
+        assert data["merged"] is True
+        assert data["content"] == "B-wins"
+
+    def test_submit_changes_empty_changes_not_applied(self, writable_server_url, writable_dir):
+        """Empty changes list should return applied=False."""
+        with open(os.path.join(writable_dir, "empty.md"), "w", encoding="utf-8") as f:
+            f.write("content")
+        payload = {"baseVersion": 0, "changes": []}
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/empty.md",
+            data=payload,
+        )
+        data = json.loads(body)
+        assert data["applied"] is False
+
+    def test_submit_changes_readonly_mount_rejected(self, writable_server_url):
+        """POST /changes on a readonly mount should return 403."""
+        payload = {"baseVersion": 0, "changes": [{"type": "insert", "paraIdx": 0, "content": "x"}]}
+        status, _body = _post(
+            f"{writable_server_url}/api/mounts/readonly/changes?path=/x.md",
+            data=payload,
+        )
+        assert status == 403
+
+    def test_submit_changes_records_version_history(self, writable_server_url, writable_dir):
+        """POST /changes should record an entry in version_history."""
+        # Reset store + history for a clean file
+        from nas_md.webserver.file_version_store import get_store
+        from nas_md.webserver import version_history
+
+        store = get_store()
+        store._files.clear()
+        version_history._histories.clear()
+
+        with open(os.path.join(writable_dir, "history.md"), "w", encoding="utf-8") as f:
+            f.write("start")
+        payload = {
+            "baseVersion": 0,
+            "changes": [{"type": "replace", "paraIdx": 0, "content": "after-edit"}],
+            "authorName": "history-tester",
+            "authorColor": "#00ff00",
+        }
+        _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/history.md",
+            data=payload,
+        )
+        # Check version history recorded
+        file_key = "writable:/history.md"
+        hist = version_history._histories.get(file_key)
+        assert hist is not None
+        assert len(hist.versions) >= 1
+        last = hist.versions[-1]
+        assert last.author_name == "history-tester"
+        assert last.content_snapshot == "after-edit"
 
 
 class TestRenameAPI:

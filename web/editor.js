@@ -570,6 +570,10 @@ function initEditor(content, mode, readonly) {
       window._originalContent = _vditor.getValue();
       window._lastSavedContent = _vditor.getValue();
       _originalContent = _vditor.getValue();
+      // Also sync state.baseContent so diff computation uses the same baseline
+      if (window.state && window.state.currentPath) {
+        window.state.baseContent = _vditor.getValue();
+      }
       // Hide Vditor's preview toolbar (Desktop/Tablet/Mobile buttons)
       const style = document.createElement('style');
       style.textContent = '.vditor-preview__action { display: none !important; }';

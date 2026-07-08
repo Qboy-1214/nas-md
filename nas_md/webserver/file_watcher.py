@@ -13,7 +13,14 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Callable
+
+try:
+    from typing import TYPE_CHECKING
+except ImportError:
+    TYPE_CHECKING = False
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +38,7 @@ except ImportError:
 class _MountWatchHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else object):  # type: ignore[misc]
     """Watchdog event handler for a single mount."""
 
-    def __init__(self, mount_id: str, mount_dir: str, on_change: Callable[[str, str, str], None], watcher: "FileWatcher"):
+    def __init__(self, mount_id: str, mount_dir: str, on_change: Callable[[str, str, str], None], watcher: FileWatcher):
         super().__init__()
         self._mount_id = mount_id
         self._mount_dir = os.path.abspath(mount_dir)
