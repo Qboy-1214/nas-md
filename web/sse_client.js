@@ -4,8 +4,6 @@
 (function () {
   'use strict';
 
-  var _client = null;
-
   function SSEClient() {
     this.es = null;
     this.identity = window.nasmdIdentity

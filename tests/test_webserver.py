@@ -588,7 +588,7 @@ class TestSubmitChangesAPI:
             "baseVersion": 0,
             "changes": [{"type": "replace", "paraIdx": 0, "content": "b"}],
         }
-        s1, b1 = _post(
+        _s1, b1 = _post(
             f"{writable_server_url}/api/mounts/writable/changes?path=/incr.md",
             data=payload1,
         )
@@ -599,7 +599,7 @@ class TestSubmitChangesAPI:
             "baseVersion": 1,
             "changes": [{"type": "replace", "paraIdx": 0, "content": "c"}],
         }
-        s2, b2 = _post(
+        _s2, b2 = _post(
             f"{writable_server_url}/api/mounts/writable/changes?path=/incr.md",
             data=payload2,
         )

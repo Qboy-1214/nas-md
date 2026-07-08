@@ -1,11 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('文件轮询检测外部修改', () => {
-  test('服务器挂载：轮询机制正常运行不报错', async ({ page }) => {
+test.describe('文件版本号驱动协同编辑', () => {
+  test('服务器挂载：版本号机制正常运行不报错', async ({ page }) => {
     await page.goto('/admin');
     await page.waitForSelector('.mount-name', { timeout: 10000 });
 
-    // Find a writable mount
     const mountInfo = await page.evaluate(() => {
       const m = state.mounts.find((m) => !m.id.startsWith('builtin') && !m.readonly);
       if (!m) return null;
@@ -16,7 +15,6 @@ test.describe('文件轮询检测外部修改', () => {
       return;
     }
 
-    // Expand mount and open first file
     const mountEl = page.locator('.mount-name', { hasText: mountInfo.name });
     await mountEl.click();
     await page.waitForTimeout(2000);
@@ -29,21 +27,22 @@ test.describe('文件轮询检测外部修改', () => {
     await fileEl.click();
     await page.waitForTimeout(2000);
 
-    // Verify editor is visible
     await expect(page.locator('#vditor')).toBeVisible();
 
-    // Call pollCurrentFile directly — should not throw
     const errors = [];
     page.on('pageerror', (err) => errors.push(err.message));
-    await page.evaluate(() => pollCurrentFile());
+
+    // Verify baseVersion is initialized
+    const baseVersion = await page.evaluate(() => {
+      return state.baseVersion;
+    });
+    expect(baseVersion).toBeGreaterThanOrEqual(0);
+
     await page.waitForTimeout(500);
+    expect(errors.filter((e) => e.includes('poll') || e.includes('version'))).toHaveLength(0);
 
-    // No JS errors from polling
-    expect(errors.filter((e) => e.includes('poll'))).toHaveLength(0);
-
-    // Wait for a full poll cycle (5s) — no crashes
     await page.waitForTimeout(6000);
-    expect(errors.filter((e) => e.includes('poll'))).toHaveLength(0);
+    expect(errors.filter((e) => e.includes('poll') || e.includes('version'))).toHaveLength(0);
   });
 
   test('服务器挂载：文件内容未变化时编辑器不刷新', async ({ page }) => {
