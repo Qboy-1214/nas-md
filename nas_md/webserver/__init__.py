@@ -1741,7 +1741,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         author_color = qs.get("color", ["#3498db"])[0]
 
         # Verify session/cookie
-        self._get_session_id()
+        session_id = self._get_session_id()
 
         # Send SSE headers
         self.send_response(200)
@@ -1753,7 +1753,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
         # Register SSE connection
-        conn = register_sse_client(self, file_key, author_name, author_color)
+        conn = register_sse_client(self, file_key, author_name, author_color, session_id)
 
         # Send initial connected event
         conn.send_event({"type": "connected", "clientId": conn.client_id})

@@ -21,10 +21,12 @@ class SSEConnectionHandler:
     Stored in the global _sse_clients dict, keyed by "mountId:path".
     """
 
-    def __init__(self, handler):
-        """handler: the MountHTTPHandler instance managing this SSE connection."""
+    def __init__(self, handler, session_id: str):
+        """handler: the MountHTTPHandler instance managing this SSE connection.
+        session_id: the session ID of the client, used for broadcast exclusion."""
         global _client_counter
         self.handler = handler
+        self.session_id = session_id
         with _lock:
             _client_counter += 1
             self.client_id = f"client-{_client_counter}"
@@ -73,10 +75,10 @@ class SSEConnectionHandler:
 
 
 def register_sse_client(
-    handler, file_key: str, author_name: str, author_color: str
+    handler, file_key: str, author_name: str, author_color: str, session_id: str
 ) -> SSEConnectionHandler:
     """Create and register a new SSE connection."""
-    conn = SSEConnectionHandler(handler)
+    conn = SSEConnectionHandler(handler, session_id)
     conn.attach(file_key, author_name, author_color)
     return conn
 
@@ -85,7 +87,7 @@ def sse_broadcast(file_key: str, exclude_id: str, event: dict):
     """Broadcast an event to all clients watching a file, except the sender.
 
     file_key: "mountId:path"
-    exclude_id: client_id of the sender (not broadcast to self)
+    exclude_id: session_id of the sender (not broadcast to self)
     event: dict to send as JSON
     """
     with _lock:
@@ -93,7 +95,7 @@ def sse_broadcast(file_key: str, exclude_id: str, event: dict):
 
     dead = []
     for client in clients:
-        if client.client_id == exclude_id:
+        if client.session_id == exclude_id:
             continue
         if not client.send_event(event):
             dead.append(client)
