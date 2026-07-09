@@ -1252,10 +1252,12 @@ function renderEntries(entries, mountId, _parentPath) {
         html += `<span class="tree-icon">${chevron}</span>`;
         html += `<span class="tree-folder" title="${e.name}">${e.name}</span>`;
         html += `</span>`;
-        if (canWrite && isDirExpanded) {
+        if (canWrite) {
           html += `<span class="dir-actions">`;
           html += `<button class="mount-create-btn" onclick="event.stopPropagation();createItem('${mountId}','${fullPath}','file')" title="新建文件"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>`;
           html += `<button class="mount-create-btn" onclick="event.stopPropagation();createItem('${mountId}','${fullPath}','folder')" title="新建文件夹"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>`;
+          html += `<button class="mount-create-btn" onclick="event.stopPropagation();renameFolder('${mountId}','${fullPath}')" title="重命名"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/><path d="M15 5H6"/></svg></button>`;
+          html += `<button class="mount-create-btn dir-delete-btn" onclick="event.stopPropagation();deleteFolder('${mountId}','${fullPath}')" title="删除"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`;
           html += `</span>`;
         }
         html += `</div>`;
@@ -2543,6 +2545,185 @@ async function createItem(mountId, dirPath, kind) {
     console.error('Create item failed:', e);
     showToast('创建失败');
   }
+}
+
+async function renameFolder(mountId, dirPath) {
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount || mount.readonly) {
+    showToast('该目录不可写');
+    return;
+  }
+  if (dirPath === '/') {
+    showToast('不能重命名根目录');
+    return;
+  }
+
+  const oldName = dirPath.substring(dirPath.lastIndexOf('/') + 1);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <div class="modal-title">重命名文件夹</div>
+      <div class="modal-body">
+        <input type="text" id="rename-folder-input" class="rename-input" value="${oldName}" />
+      </div>
+      <div class="modal-actions">
+        <button class="modal-cancel" onclick="this.closest('.modal-overlay').remove()">取消</button>
+        <button class="modal-confirm" id="rename-folder-confirm">确定</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const input = document.getElementById('rename-folder-input');
+  input.select();
+  input.focus();
+
+  const doRename = async () => {
+    const newName = input.value.trim();
+    overlay.remove();
+    if (!newName || newName === oldName) return;
+    if (newName.includes('/') || newName.includes('\\')) {
+      showToast('名称不能包含 / 或 \\');
+      return;
+    }
+
+    const parentPath = dirPath.substring(0, dirPath.lastIndexOf('/')) || '/';
+    const newPath = parentPath === '/' ? '/' + newName : parentPath + '/' + newName;
+
+    try {
+      if (mount._local && state.localMounts[mountId]) {
+        if (!(await ensureWritePermission(mountId))) return;
+        const localHandle = state.localMounts[mountId].handle;
+        const parentHandle = await getLocalDirHandle(localHandle, parentPath);
+        if (!parentHandle) {
+          showToast('目录不存在');
+          return;
+        }
+        const dirHandle = await getLocalDirHandle(localHandle, dirPath);
+        await dirHandle.move(parentHandle, newName);
+        showToast('已重命名');
+        await loadLocalTree(mountId);
+      } else {
+        const result = await API.rename(mountId, dirPath, newPath);
+        if (!result || result.error) {
+          showToast(result?.error || '重命名失败');
+          return;
+        }
+        showToast('已重命名');
+        delete state.treeData[mountId];
+        await loadTree(mountId, '/');
+      }
+      renderSidebar();
+    } catch (e) {
+      console.error('Rename folder failed:', e);
+      showToast('重命名失败');
+    }
+  };
+
+  document.getElementById('rename-folder-confirm').onclick = doRename;
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') doRename();
+    if (e.key === 'Escape') overlay.remove();
+  };
+  overlay.onclick = (e) => {
+    if (e.target === overlay) overlay.remove();
+  };
+}
+
+async function deleteFolder(mountId, dirPath) {
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount || mount.readonly) {
+    showToast('该目录不可写');
+    return;
+  }
+  if (dirPath === '/') {
+    showToast('不能删除根目录');
+    return;
+  }
+
+  const folderName = dirPath.substring(dirPath.lastIndexOf('/') + 1);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <div class="modal-title">确认删除</div>
+      <div class="modal-body">
+        <p>确定要删除文件夹「${folderName}」吗？此操作不可撤销，文件夹内的所有文件也将被删除。</p>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-cancel" onclick="this.closest('.modal-overlay').remove()">取消</button>
+        <button class="modal-confirm modal-danger" id="delete-folder-confirm">删除</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const doDelete = async () => {
+    overlay.remove();
+    try {
+      if (mount._local && state.localMounts[mountId]) {
+        if (!(await ensureWritePermission(mountId))) return;
+        const localHandle = state.localMounts[mountId].handle;
+        const parentPath = dirPath.substring(0, dirPath.lastIndexOf('/')) || '/';
+        const parentHandle = await getLocalDirHandle(localHandle, parentPath);
+        if (!parentHandle) {
+          showToast('目录不存在');
+          return;
+        }
+        await parentHandle.removeEntry(folderName, { recursive: true });
+        showToast('已删除');
+        await loadLocalTree(mountId);
+      } else {
+        const result = await API.deleteFile(mountId, dirPath);
+        if (!result || result.error) {
+          showToast(result?.error || '删除失败');
+          return;
+        }
+        showToast('已删除');
+        delete state.treeData[mountId];
+        await loadTree(mountId, '/');
+      }
+
+      if (state.currentPath?.startsWith(dirPath + '/')) {
+        state.currentPath = null;
+        state.currentMountId = null;
+        localStorage.removeItem('nasmd_last_path');
+        localStorage.removeItem('nasmd_last_mount');
+        $('breadcrumb').textContent = '';
+        const renameBtn = $('rename-top-btn');
+        const deleteBtn = $('delete-top-btn');
+        const downloadBtn = $('download-top-btn');
+        const exportPdfBtn = $('export-pdf-top-btn');
+        const shareBtn = $('share-top-btn');
+        const historyBtn = $('history-top-btn');
+        const editorModes = $('editor-modes');
+        const saveGroup = $('save-group');
+        if (renameBtn) renameBtn.style.display = 'none';
+        if (deleteBtn) deleteBtn.style.display = 'none';
+        if (downloadBtn) downloadBtn.style.display = 'none';
+        if (exportPdfBtn) exportPdfBtn.style.display = 'none';
+        if (shareBtn) shareBtn.style.display = 'none';
+        if (historyBtn) historyBtn.style.display = 'none';
+        if (editorModes) editorModes.style.display = 'none';
+        if (saveGroup) saveGroup.style.display = 'none';
+        if (window._vditor) window._vditor.destroy();
+        navigateHome();
+      }
+
+      renderSidebar();
+    } catch (e) {
+      console.error('Delete folder failed:', e);
+      showToast('删除失败');
+    }
+  };
+
+  document.getElementById('delete-folder-confirm').onclick = doDelete;
+  overlay.onclick = (e) => {
+    if (e.target === overlay) overlay.remove();
+  };
 }
 
 /**
