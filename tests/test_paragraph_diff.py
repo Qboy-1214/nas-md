@@ -1,6 +1,11 @@
 # tests/test_paragraph_diff.py
 import pytest
-from nas_md.webserver.paragraph_diff import split_paragraphs, compute_diff, apply_changes, merge_changes
+from nas_md.webserver.paragraph_diff import (
+    split_paragraphs,
+    compute_diff,
+    apply_changes,
+    merge_changes,
+)
 
 
 def test_split_paragraphs_basic():
