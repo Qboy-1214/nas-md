@@ -23,17 +23,59 @@
     return arr[Math.floor(Math.random() * arr.length)];
   }
 
+  function parseUserAgent() {
+    var ua = navigator.userAgent;
+    var os = 'Unknown OS';
+    var browser = 'Unknown Browser';
+
+    if (ua.includes('Windows')) {
+      os = 'Windows';
+    } else if (ua.includes('Mac OS')) {
+      os = 'macOS';
+    } else if (ua.includes('Linux') && !ua.includes('Android')) {
+      os = 'Linux';
+    } else if (ua.includes('Android')) {
+      os = 'Android';
+    } else if (ua.includes('iPhone') || ua.includes('iPad') || ua.includes('iOS')) {
+      os = 'iOS';
+    }
+
+    if (ua.includes('Edg/')) {
+      browser = 'Edge';
+    } else if (ua.includes('Chrome/') && !ua.includes('Edg/')) {
+      browser = 'Chrome';
+    } else if (ua.includes('Safari/') && !ua.includes('Chrome/')) {
+      browser = 'Safari';
+    } else if (ua.includes('Firefox/')) {
+      browser = 'Firefox';
+    } else if (ua.includes('Opera') || ua.includes('OPR/')) {
+      browser = 'Opera';
+    }
+
+    return { os: os, browser: browser };
+  }
+
   function generateIdentity() {
     var name = pick(ADJECTIVES) + pick(ANIMALS) + Math.floor(Math.random() * 100);
     var color = pick(COLORS);
     var id = crypto.randomUUID();
-    return { id: id, name: name, color: color };
+    var clientInfo = parseUserAgent();
+    return { id: id, name: name, color: color, os: clientInfo.os, browser: clientInfo.browser };
   }
 
   function getIdentity() {
     try {
       var stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) return JSON.parse(stored);
+      if (stored) {
+        var parsed = JSON.parse(stored);
+        if (!parsed.os || !parsed.browser) {
+          var clientInfo = parseUserAgent();
+          parsed.os = clientInfo.os;
+          parsed.browser = clientInfo.browser;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+        }
+        return parsed;
+      }
     } catch (_e) {
       // ignore
     }

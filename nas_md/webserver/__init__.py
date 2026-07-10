@@ -1519,6 +1519,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         changes = payload.get("changes", [])
         author_name = payload.get("authorName") or self.headers.get("X-Client-Name", "Anonymous")
         author_color = payload.get("authorColor") or self.headers.get("X-Client-Color", "#3498db")
+        client_os = payload.get("os", "Unknown OS")
+        client_browser = payload.get("browser", "Unknown Browser")
+        client_ip = self.client_address[0] if hasattr(self, "client_address") else "unknown"
+        user_agent = self.headers.get("User-Agent", "")
 
         if not isinstance(changes, list):
             return self._send_error("changes must be a list", 400)
@@ -1554,6 +1558,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             author_id=session_id,
             author_name=author_name,
             author_color=author_color,
+            client_ip=client_ip,
+            client_os=client_os,
+            client_browser=client_browser,
+            user_agent=user_agent,
         )
 
         # Broadcast to other clients via SSE

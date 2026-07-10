@@ -159,6 +159,18 @@
           '</div>';
       }
 
+      var clientInfo = '';
+      if (v.clientIp || v.clientOs || v.clientBrowser) {
+        var parts = [];
+        if (v.clientIp) parts.push(v.clientIp);
+        if (v.clientOs) parts.push(v.clientOs);
+        if (v.clientBrowser) parts.push(v.clientBrowser);
+        clientInfo =
+          '<div style="font-size:11px;color:#7f8c8d;margin-top:2px;">' +
+          escapeHtml(parts.join(' · ')) +
+          '</div>';
+      }
+
       html +=
         '<div class="vh-item" data-version="' +
         i +
@@ -176,6 +188,7 @@
         timeStr +
         '</span>' +
         '</div>' +
+        clientInfo +
         changeSummary +
         '<div style="font-size:11px;color:#aaa;margin-top:4px;">' +
         v.contentLength +

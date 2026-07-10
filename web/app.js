@@ -3263,6 +3263,7 @@ async function saveFile({ silent = false } = {}) {
             changes,
             identity ? identity.name : 'LocalUser',
             identity ? identity.color : '#9b59b6',
+            identity ? { os: identity.os, browser: identity.browser } : null,
           );
         } catch (e) {
           console.warn('[saveFile] local mount version history recording failed:', e);
@@ -3310,6 +3311,7 @@ async function saveFile({ silent = false } = {}) {
           changes,
           identity ? identity.name : 'Anonymous',
           identity ? identity.color : '#3498db',
+          identity ? { os: identity.os, browser: identity.browser } : null,
         );
 
         if (!resp || !resp.applied) {

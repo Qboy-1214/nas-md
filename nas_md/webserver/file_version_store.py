@@ -68,6 +68,10 @@ class FileVersionStore:
         author_id: str,
         author_name: str,
         author_color: str,
+        client_ip: str = "",
+        client_os: str = "",
+        client_browser: str = "",
+        user_agent: str = "",
     ) -> dict:
         """Apply changes with version-based optimistic locking.
 
@@ -148,6 +152,10 @@ class FileVersionStore:
                 content_snapshot=new_content,
                 previous_content=previous_content,
                 version=fv.version,
+                client_ip=client_ip,
+                client_os=client_os,
+                client_browser=client_browser,
+                user_agent=user_agent,
             )
 
             return {
@@ -252,6 +260,10 @@ class FileVersionStore:
         content_snapshot: str,
         previous_content: str | None,
         version: int,
+        client_ip: str = "",
+        client_os: str = "",
+        client_browser: str = "",
+        user_agent: str = "",
     ):
         """Record an entry in version_history (best effort, never raises)."""
         try:
@@ -266,6 +278,10 @@ class FileVersionStore:
                 content_snapshot=content_snapshot,
                 previous_content=previous_content,
                 version=version,
+                client_ip=client_ip,
+                client_os=client_os,
+                client_browser=client_browser,
+                user_agent=user_agent,
             )
         except Exception as e:
             logger.warning("Failed to record version history for %s: %s", file_key, e)

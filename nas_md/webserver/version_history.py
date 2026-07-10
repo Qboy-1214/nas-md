@@ -31,6 +31,10 @@ class VersionEntry:
     author_color: str
     changes: list  # list of diff change dicts
     content_snapshot: str  # full content after this edit
+    client_ip: str = ""
+    client_os: str = ""
+    client_browser: str = ""
+    user_agent: str = ""
 
 
 @dataclass
@@ -47,6 +51,10 @@ class FileHistory:
         changes: list,
         content_snapshot: str,
         version: int = 0,
+        client_ip: str = "",
+        client_os: str = "",
+        client_browser: str = "",
+        user_agent: str = "",
     ) -> VersionEntry:
         entry = VersionEntry(
             version=version,
@@ -56,6 +64,10 @@ class FileHistory:
             author_color=author_color,
             changes=changes,
             content_snapshot=content_snapshot,
+            client_ip=client_ip,
+            client_os=client_os,
+            client_browser=client_browser,
+            user_agent=user_agent,
         )
         self.versions.append(entry)
         return entry
@@ -86,6 +98,10 @@ class FileHistory:
                     "author_color": v.author_color,
                     "changes": v.changes,
                     "content_snapshot": v.content_snapshot,
+                    "client_ip": v.client_ip,
+                    "client_os": v.client_os,
+                    "client_browser": v.client_browser,
+                    "user_agent": v.user_agent,
                 }
                 for v in self.versions
             ]
@@ -104,6 +120,10 @@ class FileHistory:
                 author_color=v["author_color"],
                 changes=v["changes"],
                 content_snapshot=v["content_snapshot"],
+                client_ip=v.get("client_ip", ""),
+                client_os=v.get("client_os", ""),
+                client_browser=v.get("client_browser", ""),
+                user_agent=v.get("user_agent", ""),
             )
             fh.versions.append(entry)
         return fh
@@ -162,6 +182,10 @@ def record_version(
     content_snapshot: str,
     previous_content: str | None = None,
     version: int = 0,
+    client_ip: str = "",
+    client_os: str = "",
+    client_browser: str = "",
+    user_agent: str = "",
 ) -> VersionEntry:
     """Record a new version for a file.
 
@@ -194,6 +218,10 @@ def record_version(
             changes,
             content_snapshot,
             version=version,
+            client_ip=client_ip,
+            client_os=client_os,
+            client_browser=client_browser,
+            user_agent=user_agent,
         )
         # Persist to disk
         _persist(file_key, _histories[file_key])
@@ -221,6 +249,9 @@ def get_history(file_key: str, limit: int = 20) -> list:
                 "authorColor": v.author_color,
                 "changes": v.changes,
                 "contentLength": len(v.content_snapshot),
+                "clientIp": v.client_ip,
+                "clientOs": v.client_os,
+                "clientBrowser": v.client_browser,
             }
             for v in hist.list(limit)
         ]
@@ -268,4 +299,7 @@ def get_version_with_previous(file_key: str, index: int) -> dict | None:
             "timestamp": v.timestamp,
             "authorName": v.author_name,
             "authorColor": v.author_color,
+            "clientIp": v.client_ip,
+            "clientOs": v.client_os,
+            "clientBrowser": v.client_browser,
         }
