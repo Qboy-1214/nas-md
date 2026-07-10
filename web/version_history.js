@@ -449,15 +449,22 @@
     });
     document.getElementById('vh-restore').addEventListener('click', function () {
       if (window._vditor && confirm('确定要恢复到这个版本吗？当前内容将被覆盖。')) {
+        // Keep state.baseContent as-is (current server content) so saveFile
+        // computes diff: currentContent -> restoredContent correctly.
+        // Do NOT update state.baseContent to versionContent, otherwise diff
+        // would be empty and save would be skipped.
         window._vditor.setValue(versionContent);
-        window._originalContent = versionContent;
-        // Trigger save
-        if (window.saveContent) {
-          window.saveContent();
-        } else if (window.debouncedSave) {
-          window.debouncedSave();
+        // Update markDirty to reflect the change
+        if (window.markDirty) {
+          window.markDirty();
         }
         modal.style.display = 'none';
+        // Use setTimeout to let Vditor finish rendering before save
+        setTimeout(function () {
+          if (typeof window.saveFile === 'function') {
+            window.saveFile();
+          }
+        }, 200);
       }
     });
 

@@ -3027,6 +3027,8 @@ function onEditorInput() {
   }
 }
 window.onEditorInput = onEditorInput;
+window.saveFile = saveFile;
+window.markDirty = markDirty;
 
 // === Auto-save ===
 state.autoSave = localStorage.getItem('nasmd_autosave') !== '0';

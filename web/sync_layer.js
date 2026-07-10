@@ -230,33 +230,32 @@
     // Update collaborator presence
     updateCollaborator(author);
 
-    // Update version state (replaces mtime tracking)
-    if (data.newVersion && window.state && data.mountId && data.path) {
-      var versionKey = data.mountId + ':' + data.path;
-      if (state.fileVersions) {
-        state.fileVersions[versionKey] = data.newVersion;
-      }
-      // If the edit is on the currently open file, bump baseVersion so the
-      // client's next save uses the fresh version (no false merge).
-      if (state.currentMountId === data.mountId && state.currentPath === data.path) {
-        state.baseVersion = data.newVersion;
-      }
-    }
-
     // Check if this is the currently open file
     var isCurrentFile = state.currentMountId === data.mountId && state.currentPath === data.path;
 
     if (isCurrentFile && window._vditor) {
-      // Before applying changes, check if client's version matches server's version
-      // If versions don't match, fetch the full content instead of applying incremental changes
-      // Even a version gap of 1 can cause issues if document structure differs
+      // Check version gap BEFORE updating baseVersion.
+      // If client's version is not exactly one behind server's new version,
+      // the incremental changes can't be safely applied (paragraph indices
+      // may have shifted). Fetch full content instead.
       var myVersion = state.baseVersion || 0;
       var serverVersion = data.newVersion || 0;
-      if (myVersion !== serverVersion) {
-        // Version mismatch, fetch full content to ensure consistency
+      if (myVersion !== serverVersion - 1) {
+        // Version gap too large or client ahead of server: fetch full content
+        state.baseVersion = serverVersion;
+        var versionKey0 = data.mountId + ':' + data.path;
+        if (state.fileVersions) state.fileVersions[versionKey0] = serverVersion;
         fetchFullContent(data.mountId, data.path, serverVersion);
         return;
       }
+      // Version matches: safe to apply incremental changes
+      state.baseVersion = serverVersion;
+      var versionKey1 = data.mountId + ':' + data.path;
+      if (state.fileVersions) state.fileVersions[versionKey1] = serverVersion;
+    } else if (data.newVersion && window.state && data.mountId && data.path) {
+      // Non-current file: just track the version
+      var versionKey2 = data.mountId + ':' + data.path;
+      if (state.fileVersions) state.fileVersions[versionKey2] = data.newVersion;
     }
 
     for (var i = 0; i < data.changes.length; i++) {
