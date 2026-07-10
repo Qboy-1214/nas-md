@@ -3202,6 +3202,14 @@ async function saveFile({ silent = false } = {}) {
   _saveInProgress = true;
   const btn = $('btn-save');
   let content;
+
+  setTimeout(() => {
+    if (_saveInProgress) {
+      console.error('[saveFile] timeout detected, resetting _saveInProgress');
+      _saveInProgress = false;
+    }
+  }, 15000);
+
   try {
     if (!state.currentPath || !state.currentMountId || !window._vditor) return;
     const mount = state.mounts.find((m) => m.id === state.currentMountId);
