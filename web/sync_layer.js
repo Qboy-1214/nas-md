@@ -249,10 +249,11 @@
     if (isCurrentFile && window._vditor) {
       // Before applying changes, check if client's version matches server's version
       // If versions don't match, fetch the full content instead of applying incremental changes
+      // Even a version gap of 1 can cause issues if document structure differs
       var myVersion = state.baseVersion || 0;
       var serverVersion = data.newVersion || 0;
-      if (myVersion < serverVersion - 1) {
-        // Version gap is too large, fetch full content to ensure consistency
+      if (myVersion !== serverVersion) {
+        // Version mismatch, fetch full content to ensure consistency
         fetchFullContent(data.mountId, data.path, serverVersion);
         return;
       }
