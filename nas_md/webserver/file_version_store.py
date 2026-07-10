@@ -110,9 +110,10 @@ class FileVersionStore:
                 for v in range(base_version + 1, fv.version + 1):
                     prev = fv.changes_by_version.get(v, [])
                     accumulated_changes = merge_changes(accumulated_changes, prev)
-                # merged_changes_list = merge_changes(accumulated_changes, changes)
-                new_content = apply_diff(fv.content, changes)
-                changes_to_apply = changes  # for history record
+                # Merge accumulated changes with incoming changes
+                merged_changes = merge_changes(accumulated_changes, changes)
+                new_content = apply_diff(fv.content, merged_changes)
+                changes_to_apply = merged_changes  # for history record
 
             # Write to disk
             try:
@@ -154,6 +155,7 @@ class FileVersionStore:
                 "merged": merged,
                 "newVersion": fv.version,
                 "content": new_content,
+                "appliedChanges": changes_to_apply,
             }
 
     def apply_external_change(self, file_key: str, file_path: str) -> dict:

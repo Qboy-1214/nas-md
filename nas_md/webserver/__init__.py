@@ -1450,7 +1450,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         "authorColor": author_color,
                         "mountId": mount_id,
                         "path": rel_path,
-                        "changes": changes,
+                        "changes": result.get("appliedChanges", changes),
                         "newVersion": result["newVersion"],
                     },
                 )
@@ -1571,7 +1571,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                         "authorColor": author_color,
                         "mountId": mount_id,
                         "path": rel_path,
-                        "changes": changes,
+                        "changes": result.get("appliedChanges", changes),
                         "newVersion": result["newVersion"],
                     },
                 )
