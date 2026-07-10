@@ -1,6 +1,6 @@
 # tests/test_paragraph_diff.py
 import pytest
-from nas_md.webserver.paragraph_diff import split_paragraphs, compute_diff
+from nas_md.webserver.paragraph_diff import split_paragraphs, compute_diff, apply_changes, merge_changes
 
 
 def test_split_paragraphs_basic():
@@ -56,9 +56,6 @@ def test_compute_diff_multiple_changes():
     assert len(changes) >= 2
 
 
-from nas_md.webserver.paragraph_diff import apply_changes
-
-
 def test_apply_changes_replace():
     """apply_changes 应将 replace change 应用到文本。"""
     text = "para one\n\npara two\n\npara three"
@@ -110,9 +107,6 @@ def test_apply_changes_para_idx_out_of_range():
     ]
     result = apply_changes(text, changes)
     assert result == "para one\n\nappended"
-
-
-from nas_md.webserver.paragraph_diff import merge_changes
 
 
 def test_merge_changes_no_overlap():
