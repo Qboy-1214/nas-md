@@ -243,6 +243,21 @@
       }
     }
 
+    // Check if this is the currently open file
+    var isCurrentFile = state.currentMountId === data.mountId && state.currentPath === data.path;
+
+    if (isCurrentFile && window._vditor) {
+      // Before applying changes, check if client's version matches server's version
+      // If versions don't match, fetch the full content instead of applying incremental changes
+      var myVersion = state.baseVersion || 0;
+      var serverVersion = data.newVersion || 0;
+      if (myVersion < serverVersion - 1) {
+        // Version gap is too large, fetch full content to ensure consistency
+        fetchFullContent(data.mountId, data.path, serverVersion);
+        return;
+      }
+    }
+
     for (var i = 0; i < data.changes.length; i++) {
       var change = data.changes[i];
       var isProtected = isActivelyEditing() && change.paraIdx === _cursorParaIdx;
@@ -275,6 +290,34 @@
         window._originalContent = merged;
       }
     }, 300);
+  }
+
+  function fetchFullContent(mountId, path, _expectedVersion) {
+    if (!API || !window._vditor) return;
+    API.getFile(mountId, path)
+      .then(function (result) {
+        if (!result || !result.content) return;
+        _applyingRemote = true;
+        window._vditor.setValue(result.content);
+        window._originalContent = result.content;
+        if (window.state) {
+          state.baseContent = result.content;
+          if (result.version !== undefined) {
+            state.baseVersion = result.version;
+            var key = mountId + ':' + path;
+            if (state.fileVersions) {
+              state.fileVersions[key] = result.version;
+            }
+          }
+        }
+        setTimeout(function () {
+          _applyingRemote = false;
+        }, 150);
+        showCollabNotification({ name: 'System', color: '#3498db' }, 'replace', 0);
+      })
+      .catch(function (_e) {
+        console.error('Failed to fetch full content for sync:', _e);
+      });
   }
 
   // Handle external file modification (delivered by file_watcher via SSE)
