@@ -13,6 +13,10 @@
 - **全文搜索** —— 基于 SQLite FTS5，毫秒级检索
 - **知识图谱** —— D3.js 可视化笔记链接关系
 - **数据看板** —— 笔记数、任务完成率、标签统计
+- **版本历史** —— 段落级 diff 记录每次编辑，可预览和恢复历史版本
+- **协同编辑** —— 多人同时编辑同一文件，SSE 实时推送，段落级合并避免冲突
+- **远程文件代理** —— 通过深链 URL 打开局域网其他服务中的 MD 文件，编辑后回写原服务
+- **文件夹管理** —— 侧边栏支持新建子文件夹、重命名和删除文件夹
 - **暗色模式** —— 亮色/暗色主题一键切换
 - **自动保存** —— 默认开启，编辑即保存
 - **零依赖启动** —— Python 标准库 + 原生 JS，无框架，无构建
@@ -155,6 +159,52 @@ environment:
 
 在欢迎页的输入框中输入服务器上的目录路径，点击「挂载」。
 
+### 方式四：远程文件代理（深链跳转）
+
+通过深链 URL 打开局域网其他服务中存储的 MD 文件，nas-md 作为编辑器代理，编辑后回写原服务。类似 Nextcloud 调用 OnlyOffice 的模式。
+
+**使用场景**：你有一个独立的服务存储 MD 文件（含版本管理），但不想重复开发编辑器。通过 nas-md 代理编辑，文件不存储在 nas-md 中。
+
+**URL 格式**：
+
+```
+https://nas-md-host/#remote=<base64url编码的JSON>
+```
+
+JSON 内容：
+
+```json
+{
+  "src": "https://remote-host:port",
+  "path": "/docs/readme.md",
+  "key": "your-api-key"
+}
+```
+
+**生成深链 URL 的示例代码**（在远程服务中执行）：
+
+```javascript
+const params = { src: 'https://10.10.77.91:9000', path: '/docs/readme.md', key: 'my-secret-key' };
+const encoded = btoa(JSON.stringify(params)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const url = `https://nas-md-host/#remote=${encoded}`;
+// 跳转到 nas-md 编辑器
+window.open(url, '_blank');
+```
+
+**远程服务需要实现的 API**：
+
+| 方法 | 接口 | 说明 |
+|------|------|------|
+| `GET` | `/api/files?path=<path>` | 返回文件原始内容，Header `X-API-Key` 认证 |
+| `PUT` | `/api/files?path=<path>` | 接收文件内容并保存，Header `X-API-Key` 认证 |
+
+**安全说明**：
+
+- API Key 通过 URL fragment（`#` 后）传递，浏览器不会将其发送到 HTTP 请求中
+- nas-md 后端代理时通过 HTTP header 将 Key 转发给远程服务
+- nas-md 不存储、不记录 API Key
+- 远程模式不支持协同编辑和版本历史（由远程服务负责版本管理）
+
 ## API 接口
 
 | 方法 | 接口 | 说明 |
@@ -165,6 +215,10 @@ environment:
 | `GET` | `/api/mounts/{id}/tree?path=/` | 列出目录内容 |
 | `GET` | `/api/mounts/{id}/file?path=/file.md` | 读取文件 |
 | `PUT` | `/api/mounts/{id}/file?path=/file.md` | 写入文件 |
+| `POST` | `/api/mounts/{id}/changes?path=/file.md` | 提交段落级 diff 变更（协同编辑） |
+| `GET` | `/api/mounts/{id}/version-history?path=/file.md` | 获取文件版本历史 |
+| `GET` | `/api/remote/file?src=&path=` | 代理读取远程服务器文件 |
+| `PUT` | `/api/remote/file?src=&path=` | 代理写入远程服务器文件 |
 | `GET` | `/api/search?q=关键词` | 全文搜索 |
 | `GET` | `/api/graph` | 知识图谱数据 |
 | `GET` | `/api/stats` | 统计信息 |
@@ -203,6 +257,9 @@ nas-md/
 │   ├── app.js            # 主应用逻辑
 │   ├── files.js          # 文件浏览器 + API
 │   ├── editor.js         # Vditor 编辑器封装
+│   ├── sync_layer.js     # 协同编辑同步层（SSE + 段落 diff）
+│   ├── version_history.js # 版本历史面板
+│   ├── identity.js       # 匿名身份生成与管理
 │   ├── app.css           # 样式 + 主题
 │   └── lib/              # 第三方库（vendored）
 ├── storage/              # 内置存储（含 欢迎.md）

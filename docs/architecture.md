@@ -140,6 +140,10 @@ class Cmd:
 
 **多用户隔离**：基于 Cookie 自动会话实现免登录多用户隔离。首次访问自动分配 UUID session ID（`nasmd_sid` Cookie，1 年有效期），后续请求浏览器自动携带。每个用户的挂载点完全隔离——普通用户只能看到内置存储和自己添加的挂载点，Admin 额外可见宿主机挂载点（`MOUNT_DIRS` 配置），任何用户都看不到其他用户的挂载点。`MountEntry` 新增 `owner` 字段标识创建者，`mounts.json` 按用户分组存储（`{"_host": [...], "uuid-xxx": [...]}`），升级时自动迁移旧格式。搜索、统计、结构化查询结果均按用户可见性过滤。卸载挂载点时自动清理前端访问日志中对应条目。
 
+**版本驱动协同编辑**：用整数版本号替代 mtime 作为乐观锁，所有修改通过 `POST /api/mounts/{id}/changes` 提交段落级 diff。`FileVersionStore` 维护 `file_key -> {version, content}` 映射，提供线程安全的版本管理和段落级合并。同段落冲突采用"后写覆盖"策略。通过 SSE（Server-Sent Events）实时推送远程编辑和外部修改事件给其他客户端。`watchdog` 库监听服务器本地挂载的文件外部修改（如 VSCode 直接编辑），自动递增版本号并广播 `external_reload` 事件。版本历史以 JSON 文件持久化，记录每次编辑的作者、时间戳、段落 diff 和客户端信息（IP、操作系统、浏览器）。
+
+**远程文件代理**：通过 `GET/PUT /api/remote/file` 接口代理读写局域网其他服务中的 MD 文件。远程服务通过深链 URL `#remote=<base64url>` 传递服务器地址、文件路径和 API Key。nas-md 后端使用 `urllib.request` 转发请求，API Key 通过 `X-Remote-Key` / `X-API-Key` header 传递。远程模式不经过 FileVersionStore，不记录版本历史，不支持协同编辑——版本管理由远程服务负责。
+
 **Ctrl+C 处理**：Windows 上 `serve_forever()` 内部的 `select()` 会阻塞信号，设置 `server.timeout = 0.5` 让 `select()` 定期超时，使 `KeyboardInterrupt` 能被及时处理。
 
 **认证模型**：
@@ -318,8 +322,11 @@ links          — 链接索引（target, display_text, line_number）
 web/
 ├── index.html              # 入口页（SPA 外壳）
 ├── app.js                  # 应用主逻辑（状态管理、页面路由、DOM 操作）
-├── files.js                # 文件浏览 + API 封装
+├── files.js                # 文件浏览 + API 封装（含远程文件代理）
 ├── editor.js               # Vditor 编辑器封装
+├── sync_layer.js           # 协同编辑同步层（SSE 连接、段落 diff 应用）
+├── version_history.js      # 版本历史面板（预览、恢复）
+├── identity.js             # 匿名身份生成与管理（形容词+动物+数字）
 ├── app.css                 # 应用样式（设计令牌 + 布局 + 组件 + 主题）
 └── lib/
     ├── vditor/             # Vditor Markdown 编辑器（vendored）
@@ -347,6 +354,10 @@ const state = {
   recentFiles: [],          // 最近访问文件
   accessLog: {},            // 访问日志 { "mountId:path": timestamp }，localStorage 持久化
   showSettings: false,      // 是否显示设置页
+  baseVersion: 0,           // 当前加载内容的版本号（协同编辑乐观锁）
+  baseContent: '',          // baseVersion 对应的内容快照（用于 diff 计算）
+  fileVersions: {},         // "mountId:path" -> 最后已知版本号
+  remoteFile: null,         // 远程代理模式: { src, path, key }，非 null 时启用
 };
 ```
 
@@ -420,6 +431,9 @@ CSS 中 `.modal-overlay` 默认 `display: none`，通过添加 `.active` 类切�
 - `renderSidebar()` — 侧边栏渲染（文件树递归）
 - `loadMounts()` / `openDirectory()` / `toggleMountPublic()` — 挂载点管理
 - `openFile(path)` / `saveFile()` / `confirmNewFile()` — 文件操作
+- `openRemoteFile(src, path, key)` — 远程文件代理模式：加载远程文件到编辑器
+- `_parseShareHash()` / `_parseRemoteHash()` — URL hash 解析（共享链接 / 远程深链）
+- `renameFolder()` / `deleteFolder()` — 文件夹重命名和删除（含二次确认）
 - `showLogin()` / `login()` / `logout()` — 认证
 - `navigateHome()` / `showSettings()` — 导航
 - `doSearch()` — 搜索（实时搜索，输入即出结果）
@@ -432,6 +446,9 @@ CSS 中 `.modal-overlay` 默认 `display: none`，通过添加 `.active` 类切�
 - `API.getTree(mountId, path)` — 递归目录树（tree-recursive API）
 - `API.findMountPath(dirName)` — 后端搜索目录完整路径
 - `API.getFile()` / `API.putFile()` / `API.deleteFile()` — 文件 CRUD
+- `API.submitChanges(mountId, path, baseVersion, changes, ...)` — 提交段落级 diff（协同编辑）
+- `API.getVersionHistory(mountId, path)` — 获取版本历史
+- `API.getRemoteFile(src, path, apiKey)` / `API.putRemoteFile(src, path, content, apiKey)` — 远程文件代理读写
 - `API.rename()` / `API.mkdir()` — 文件操作
 - `API.search(query)` — 全文搜索
 - 辅助函数：`loadMounts()` / `loadTree()` / `findMountForPath()` / `_treeHasPath()`

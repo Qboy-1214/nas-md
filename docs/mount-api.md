@@ -434,6 +434,231 @@ DELETE /api/mounts/{id}/file?path=/file.md
 
 ---
 
+### 提交段落级变更（协同编辑）
+
+```
+POST /api/mounts/{id}/changes?path=/file.md
+```
+
+提交段落级 diff 变更，用于协同编辑。基于版本号乐观锁：客户端提交 `baseVersion`，服务器检查是否匹配当前版本，匹配则直接应用，不匹配则尝试段落级合并。
+
+**参数：**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `path` | 是 | 文件的相对路径 |
+
+**请求头：**
+
+| Header | 说明 |
+|--------|------|
+| `X-Client-Id` | 客户端 session ID（自动生成） |
+| `X-Author-Name` | 作者显示名称（如 "CalmWolf60"） |
+| `X-Author-Color` | 作者颜色（十六进制，如 "#3498db"） |
+
+**请求体：**
+
+```json
+{
+  "baseVersion": 5,
+  "changes": [
+    { "type": "replace", "index": 2, "content": "新段落内容" },
+    { "type": "insert", "index": 5, "content": "插入的新段落" },
+    { "type": "delete", "index": 7 }
+  ],
+  "authorName": "CalmWolf60",
+  "authorColor": "#3498db",
+  "os": "Windows 10",
+  "browser": "Chrome"
+}
+```
+
+**变更类型：**
+
+| type | 说明 |
+|------|------|
+| `replace` | 替换指定索引的段落内容 |
+| `insert` | 在指定索引前插入新段落 |
+| `delete` | 删除指定索引的段落 |
+
+**响应 200（直接应用）：**
+
+```json
+{
+  "status": "ok",
+  "newVersion": 6,
+  "applied": true,
+  "merged": false,
+  "content": "合并后的完整文件内容"
+}
+```
+
+**响应 200（段落合并）：**
+
+```json
+{
+  "status": "ok",
+  "newVersion": 7,
+  "applied": true,
+  "merged": true,
+  "content": "合并后的完整文件内容"
+}
+```
+
+**响应 409（版本冲突，需客户端重新加载）：**
+
+```json
+{
+  "status": "conflict",
+  "currentVersion": 10,
+  "content": "服务器当前完整内容"
+}
+```
+
+---
+
+### 获取版本历史
+
+```
+GET /api/mounts/{id}/version-history?path=/file.md
+```
+
+返回文件的编辑历史记录，包含每次编辑的作者、时间戳、段落 diff 和客户端信息。
+
+**参数：**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `path` | 是 | 文件的相对路径 |
+
+**响应 200：**
+
+```json
+{
+  "versions": [
+    {
+      "version": 1,
+      "timestamp": 1782317046.0,
+      "author_id": "session-uuid",
+      "author_name": "CalmWolf60",
+      "author_color": "#3498db",
+      "changes": [
+        { "type": "replace", "index": 0, "content": "新内容" }
+      ],
+      "content_snapshot": "文件完整内容快照",
+      "client_ip": "10.10.77.91",
+      "client_os": "Windows 10",
+      "client_browser": "Chrome",
+      "user_agent": "Mozilla/5.0..."
+    }
+  ],
+  "current_version": 5
+}
+```
+
+---
+
+## 远程文件代理 API
+
+远程文件代理允许 nas-md 作为编辑器代理，读写局域网其他服务中的 MD 文件。文件不存储在 nas-md 中，所有修改直接回写远程服务。
+
+### 代理读取远程文件
+
+```
+GET /api/remote/file?src=<远程服务URL>&path=<文件路径>
+```
+
+从远程服务器代理读取文件内容。
+
+**参数：**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `src` | 是 | 远程服务基础 URL（如 `https://10.10.77.91:9000`） |
+| `path` | 是 | 远程文件路径（如 `/docs/readme.md`） |
+
+**请求头：**
+
+| Header | 说明 |
+|--------|------|
+| `X-Remote-Key` | 远程服务的 API Key，用于认证 |
+
+**响应 200：**
+
+```json
+{
+  "content": "# 文件标题\n\n文件内容...",
+  "status": "ok"
+}
+```
+
+**响应 502：** 远程服务器错误（不可达、认证失败等）。
+
+### 代理写入远程文件
+
+```
+PUT /api/remote/file?src=<远程服务URL>&path=<文件路径>
+```
+
+将文件内容代理写入远程服务器。
+
+**参数：**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `src` | 是 | 远程服务基础 URL |
+| `path` | 是 | 远程文件路径 |
+
+**请求头：**
+
+| Header | 说明 |
+|--------|------|
+| `X-Remote-Key` | 远程服务的 API Key |
+| `Content-Type` | `text/markdown; charset=utf-8` |
+
+**请求体：** 文件原始内容（text）。
+
+**响应 200：**
+
+```json
+{
+  "status": "ok"
+}
+```
+
+**响应 502：** 远程服务器错误。
+
+### 远程服务需实现的 API
+
+远程服务需要提供以下两个接口供 nas-md 代理调用：
+
+| 方法 | 接口 | 说明 |
+|------|------|------|
+| `GET` | `/api/files?path=<path>` | 返回文件原始内容，通过 `X-API-Key` header 认证 |
+| `PUT` | `/api/files?path=<path>` | 接收文件内容并保存，通过 `X-API-Key` header 认证 |
+
+### 深链 URL 格式
+
+前端通过 URL fragment 传递远程文件参数：
+
+```
+https://nas-md-host/#remote=<base64url编码的JSON>
+```
+
+JSON 内容：
+
+```json
+{
+  "src": "https://remote-host:port",
+  "path": "/docs/readme.md",
+  "key": "your-api-key"
+}
+```
+
+API Key 在 URL fragment 中传递，浏览器不会将其发送到 HTTP 请求中，nas-md 也不存储或记录 API Key。
+
+---
+
 ## 搜索与查询 API
 
 ### 全文搜索
@@ -700,15 +925,14 @@ GET /api/sync/status?mount={mountId}
 }
 ```
 
-### 冲突检测
+### 冲突检测与版本管理
 
-写入文件时，可通过 `expected_mtime` 参数检测冲突：
+协同编辑场景下，冲突检测基于**版本号**而非 mtime：
 
-```
-PUT /api/mounts/{id}/file?path=xxx.md&expected_mtime=1749000000000
-```
+1. **写入文件时**（`PUT /api/mounts/{id}/file`）：可通过 `expected_mtime` 参数做基础冲突检测，不匹配时创建 `.conflict.md` 副本（向后兼容）
+2. **协同编辑时**（`POST /api/mounts/{id}/changes`）：基于 `baseVersion` 版本号乐观锁，不匹配时尝试段落级合并，同段落冲突采用"后写覆盖"策略，不再创建 `.conflict.md`
 
-如果文件已被修改（mtime 不匹配），服务端会创建 `.conflict.md` 副本后写入新内容。
+推荐使用 `POST /changes` 进行协同编辑，避免 mtime 竞态条件。
 
 ---
 
