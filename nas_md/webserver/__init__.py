@@ -19,7 +19,8 @@ import uuid
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from http.cookies import SimpleCookie
 from io import BytesIO
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
 
 logger = logging.getLogger("webserver")
 
@@ -758,6 +759,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_file(mount_id, qs)
                 return
 
+            # /api/remote/file — proxy read from remote server
+            if path == "/api/remote/file":
+                self._handle_remote_file(qs)
+                return
+
             self.send_error(404, "Not found")
         except Exception:
             logger.error("GET handler error: %s", traceback.format_exc())
@@ -799,6 +805,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             if "/api/mounts/" in path and path.endswith("/mkdir"):
                 mount_id = path.split("/api/mounts/")[1].split("/mkdir")[0]
                 self._handle_mkdir(mount_id, qs)
+                return
+
+            # /api/remote/file — proxy write to remote server
+            if path == "/api/remote/file":
+                self._handle_remote_write(qs)
                 return
 
             self.send_error(405, "Method not allowed")
@@ -1468,6 +1479,98 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             }
         )
         return abs_path
+
+    def _handle_remote_file(self, qs: dict):
+        """GET /api/remote/file?src=<baseURL>&path=<path> — proxy read from remote server.
+
+        Reads file content from a remote server via HTTP, using X-Remote-Key
+        header for API key authentication. The remote server should respond
+        with raw file content (text).
+        """
+        src = qs.get("src", [None])[0]
+        rel_path = qs.get("path", [None])[0]
+        if not src or not rel_path:
+            return self._send_error("Missing src or path parameter", 400)
+
+        # Validate src is http/https URL
+        try:
+            parsed_src = urlparse(src)
+            if parsed_src.scheme not in ("http", "https"):
+                return self._send_error("Invalid src protocol", 400)
+        except Exception:
+            return self._send_error("Invalid src URL", 400)
+
+        api_key = self.headers.get("X-Remote-Key", "")
+        remote_url = f"{src.rstrip('/')}/api/files?path={quote(rel_path, safe='/')}"
+
+        try:
+            req = Request(remote_url)
+            req.add_header("X-API-Key", api_key)
+            with urlopen(req, timeout=10) as resp:
+                status = resp.status
+                data = resp.read()
+        except Exception as e:
+            logger.warning("Remote file read failed: %s (src=%s, path=%s)", e, src, rel_path)
+            return self._send_error(f"Remote server error: {e}", 502)
+
+        if status != 200:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        # Return content as JSON for consistency with frontend API
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError:
+            content = data.decode("utf-8", errors="replace")
+
+        self._send_json({"content": content, "status": "ok"})
+
+    def _handle_remote_write(self, qs: dict):
+        """PUT /api/remote/file?src=<baseURL>&path=<path> — proxy write to remote server.
+
+        Forwards file content to a remote server via HTTP PUT, using
+        X-Remote-Key header for API key authentication.
+        """
+        src = qs.get("src", [None])[0]
+        rel_path = qs.get("path", [None])[0]
+        if not src or not rel_path:
+            return self._send_error("Missing src or path parameter", 400)
+
+        try:
+            parsed_src = urlparse(src)
+            if parsed_src.scheme not in ("http", "https"):
+                return self._send_error("Invalid src protocol", 400)
+        except Exception:
+            return self._send_error("Invalid src URL", 400)
+
+        api_key = self.headers.get("X-Remote-Key", "")
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        remote_url = f"{src.rstrip('/')}/api/files?path={quote(rel_path, safe='/')}"
+
+        try:
+            req = Request(remote_url, data=body, method="PUT")
+            req.add_header("X-API-Key", api_key)
+            req.add_header("Content-Type", "text/markdown; charset=utf-8")
+            with urlopen(req, timeout=10) as resp:
+                status = resp.status
+                resp_data = resp.read()
+        except Exception as e:
+            logger.warning("Remote file write failed: %s (src=%s, path=%s)", e, src, rel_path)
+            return self._send_error(f"Remote server error: {e}", 502)
+
+        if status != 200:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(resp_data)
+            return
+
+        self._send_json({"status": "ok"})
 
     def _handle_submit_changes(self, mount_id: str, qs: dict):
         """Handle POST /api/mounts/{id}/changes — version-based paragraph merge.

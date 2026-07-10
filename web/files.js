@@ -179,6 +179,47 @@ const API = {
     return r ? r.json() : null;
   },
 
+  // 远程文件代理：读取远程服务器上的文件
+  async getRemoteFile(src, path, apiKey) {
+    const url = `/api/remote/file?src=${encodeURIComponent(src)}&path=${encodeURIComponent(path)}`;
+    try {
+      const r = await this.request(url, {
+        headers: { 'X-Remote-Key': apiKey || '' },
+        cache: 'no-store',
+      });
+      if (!r || !r.ok) {
+        const errText = r ? await r.text().catch(() => '') : '';
+        console.error('[getRemoteFile] error:', r ? r.status : 'null', errText);
+        return null;
+      }
+      return r.json();
+    } catch (e) {
+      console.error('[getRemoteFile] fetch error:', e);
+      return null;
+    }
+  },
+
+  // 远程文件代理：写入文件到远程服务器
+  async putRemoteFile(src, path, content, apiKey) {
+    const url = `/api/remote/file?src=${encodeURIComponent(src)}&path=${encodeURIComponent(path)}`;
+    try {
+      const r = await this.request(url, {
+        method: 'PUT',
+        headers: { 'X-Remote-Key': apiKey || '' },
+        body: content,
+      });
+      if (!r || !r.ok) {
+        const errText = r ? await r.text().catch(() => '') : '';
+        console.error('[putRemoteFile] error:', r ? r.status : 'null', errText);
+        return null;
+      }
+      return r.json();
+    } catch (e) {
+      console.error('[putRemoteFile] fetch error:', e);
+      return null;
+    }
+  },
+
   async rename(mountId, oldPath, newPath) {
     const r = await this.request(
       `/api/mounts/${mountId}/rename?oldPath=${encodeURIComponent(oldPath)}&newPath=${encodeURIComponent(newPath)}`,

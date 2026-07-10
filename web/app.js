@@ -20,6 +20,23 @@ function _parseShareHash() {
   return { mountId: raw.substring(0, slashIdx), path: raw.substring(slashIdx) };
 }
 
+function _parseRemoteHash() {
+  const hash = window.location.hash;
+  if (!hash || !hash.startsWith('#remote=')) return null;
+  const encoded = hash.substring(8);
+  try {
+    // base64url decode -> JSON
+    const b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    const json = window.atob(b64);
+    const params = JSON.parse(json);
+    if (!params.src || !params.path) return null;
+    return { src: params.src, path: params.path, key: params.key || '' };
+  } catch (e) {
+    console.warn('[remote] Failed to parse remote hash:', e);
+    return null;
+  }
+}
+
 // === 状态 ===
 const state = {
   mounts: [],
@@ -48,6 +65,7 @@ const state = {
   baseVersion: 0, // version number of the content currently loaded in editor
   baseContent: '', // content snapshot at baseVersion (for diff computation)
   fileVersions: {}, // "mountId:path" -> last known version
+  remoteFile: null, // { src, path, key } when in remote proxy mode
 };
 
 // Expose state globally so files.js can access isAdmin
@@ -162,6 +180,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     /* IndexedDB not available, skip */
   }
   await loadRecentFiles();
+
+  // Check URL hash for remote file: #remote=<base64url json>
+  const remoteParams = _parseRemoteHash();
+  if (remoteParams) {
+    await openRemoteFile(remoteParams.src, remoteParams.path, remoteParams.key);
+    return;
+  }
 
   // Check URL hash for shared file link: #file=mountId:/path/to/file.md
   const hashFile = _parseShareHash();
@@ -2807,6 +2832,58 @@ function _treeHasPath(entry, path) {
   return false;
 }
 
+async function openRemoteFile(src, path, key) {
+  console.log('[remote] Opening remote file:', { src, path });
+  state.remoteFile = { src, path, key };
+  state.currentPath = path;
+  state.currentMountId = null;
+
+  let content;
+  const result = await API.getRemoteFile(src, path, key);
+  if (result && result.status === 'ok') {
+    content = result.content || '';
+  } else {
+    showToast('远程文件加载失败');
+    content = '# 加载失败\n\n无法从远程服务器获取文件内容。';
+  }
+
+  // UI: hide sidebar and file-management buttons, keep editor + save
+  const sidebar = $('sidebar');
+  if (sidebar) sidebar.style.display = 'none';
+  const renameBtn = $('rename-top-btn');
+  if (renameBtn) renameBtn.style.display = 'none';
+  const deleteBtn = $('delete-top-btn');
+  if (deleteBtn) deleteBtn.style.display = 'none';
+  const shareBtn = $('share-top-btn');
+  if (shareBtn) shareBtn.style.display = 'none';
+  const historyBtn = $('history-top-btn');
+  if (historyBtn) historyBtn.style.display = 'none';
+  // Keep save, download, dark mode toggle visible
+  $('save-group').style.display = '';
+  $('editor-modes').style.display = path.endsWith('.md') ? '' : 'none';
+
+  // Breadcrumb shows remote source info
+  let remoteName = src;
+  try {
+    const u = new URL(src);
+    remoteName = u.hostname;
+  } catch (_e) {
+    /* keep raw src */
+  }
+  $('breadcrumb').textContent = remoteName + ' ' + path;
+
+  showPage('editor');
+  if (window._vditor) window._vditor.destroy();
+  initEditor(content, state.editorMode, false);
+  window._originalContent = content;
+
+  state.dirty = false;
+  // Clear hash so refresh doesn't re-trigger
+  history.replaceState(null, '', window.location.pathname);
+
+  console.log('[remote] Remote file loaded successfully');
+}
+
 async function openFile(path, preferredMountId, searchKeyword) {
   // Save current cursor/scroll position before switching files
   saveCursorScrollToStorage();
@@ -3213,6 +3290,26 @@ async function saveFile({ silent = false } = {}) {
   }, 15000);
 
   try {
+    // Remote proxy mode: direct PUT to remote server, skip version/diff logic
+    if (state.remoteFile && window._vditor) {
+      content = window._vditor.getValue();
+      const resp = await API.putRemoteFile(
+        state.remoteFile.src,
+        state.remoteFile.path,
+        content,
+        state.remoteFile.key,
+      );
+      if (resp && resp.status === 'ok') {
+        markClean();
+        if (!silent) showToast('已保存');
+        else showToast('自动保存完成');
+      } else {
+        if (!silent) showToast('保存失败');
+        else showToast('自动保存失败');
+      }
+      return;
+    }
+
     if (!state.currentPath || !state.currentMountId || !window._vditor) return;
     const mount = state.mounts.find((m) => m.id === state.currentMountId);
     if (mount && mount.readonly) {
