@@ -7,6 +7,38 @@ let _currentMountId = null;
 let _currentRelPath = null;
 let _originalContent = '';
 let _editorMode = 'ir';
+// Blob URLs created for local-mount images, revoked when switching files to avoid leaks
+let _localImageBlobUrls = [];
+
+/**
+ * Whether the currently open file lives in a local (File System Access API) mount.
+ * Local mounts don't exist server-side, so their images can't be served via the
+ * /api/mounts/{id}/file endpoint and must be read into blob URLs instead.
+ */
+function _isLocalMount() {
+  const mount = window.state?.mounts?.find((m) => m.id === _currentMountId);
+  return !!(mount && mount._local && window.state?.localMounts?.[_currentMountId]);
+}
+
+/**
+ * Resolve a markdown image src (relative or absolute) against the current file's
+ * directory into a normalized mount-relative path starting with '/'.
+ */
+function _resolveImagePath(src, dir) {
+  let resolved;
+  if (src.startsWith('/')) {
+    resolved = src;
+  } else {
+    resolved = dir + src;
+  }
+  const parts = resolved.split('/');
+  const normalized = [];
+  for (const p of parts) {
+    if (p === '..') normalized.pop();
+    else if (p !== '.' && p !== '') normalized.push(p);
+  }
+  return '/' + normalized.join('/');
+}
 
 /**
  * Generate a heading ID from text, matching common markdown anchor conventions.
@@ -177,77 +209,89 @@ function _scrollToAnchor(targetId, vditorEl) {
  */
 function rewriteImageSrc(html) {
   if (!_currentMountId) return html;
+  // For local mounts the /api/mounts/{id}/file path would 404 (local mounts only
+  // exist in the browser). Leave relative src untouched here; rewriteEditorImages()
+  // replaces them in the DOM with blob URLs after rendering.
+  if (_isLocalMount()) return html;
   // Get the directory of the current file
   const dir = _currentRelPath
     ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1)
     : '/';
   return html.replace(/(<img\s+[^>]*src=")([^"]+)("[^>]*>)/g, (match, prefix, src, suffix) => {
-    // Skip absolute URLs, data URIs, and already-rewritten API paths
+    // Skip absolute URLs, data URIs, blob URLs, and already-rewritten API paths
     if (
       src.startsWith('http://') ||
       src.startsWith('https://') ||
       src.startsWith('data:') ||
+      src.startsWith('blob:') ||
       src.startsWith('/api/')
     ) {
       return match;
     }
-    // Resolve relative path against current file's directory
-    let resolved;
-    if (src.startsWith('/')) {
-      resolved = src;
-    } else {
-      resolved = dir + src;
-    }
-    // Normalize: remove ./ and ../
-    const parts = resolved.split('/');
-    const normalized = [];
-    for (const p of parts) {
-      if (p === '..') {
-        normalized.pop();
-      } else if (p !== '.' && p !== '') {
-        normalized.push(p);
-      }
-    }
-    const apiPath = '/api/mounts/' + _currentMountId + '/file?path=/' + normalized.join('/');
+    const fullPath = _resolveImagePath(src, dir);
+    const apiPath = '/api/mounts/' + _currentMountId + '/file?path=' + encodeURIComponent(fullPath);
     return prefix + apiPath + suffix;
   });
 }
 
-// Also rewrite images in the editor area (IR/WYSIWYG) after rendering
-function rewriteEditorImages() {
+// Also rewrite images in the editor area (IR/WYSIWYG) after rendering.
+// For server mounts: rewrite to /api/mounts/{id}/file path.
+// For local mounts: read the image file via File System Access API → blob URL.
+async function rewriteEditorImages() {
   if (!_currentMountId || !_vditor) return;
   const dir = _currentRelPath
     ? _currentRelPath.substring(0, _currentRelPath.lastIndexOf('/') + 1)
     : '/';
+  const isLocal = _isLocalMount();
   const vditorEl = document.getElementById('vditor');
   if (!vditorEl) return;
   // Target IR, WYSIWYG, and preview areas
   const areas = vditorEl.querySelectorAll('.vditor-ir, .vditor-wysiwyg, .vditor-preview');
+  const tasks = [];
   areas.forEach((area) => {
     area.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src') || '';
+      // Skip absolute URLs, data URIs, API paths, and already-loaded blob URLs
       if (
         src.startsWith('http://') ||
         src.startsWith('https://') ||
         src.startsWith('data:') ||
-        src.startsWith('/api/')
+        src.startsWith('/api/') ||
+        src.startsWith('blob:')
       )
         return;
-      let resolved;
-      if (src.startsWith('/')) {
-        resolved = src;
+      const fullPath = _resolveImagePath(src, dir);
+      if (isLocal) {
+        // Avoid re-reading the same image while a previous load is in flight
+        if (img.dataset.localImgLoading === '1') return;
+        img.dataset.localImgLoading = '1';
+        tasks.push(_loadLocalImage(img, fullPath));
       } else {
-        resolved = dir + src;
+        img.src = '/api/mounts/' + _currentMountId + '/file?path=' + encodeURIComponent(fullPath);
       }
-      const parts = resolved.split('/');
-      const normalized = [];
-      for (const p of parts) {
-        if (p === '..') normalized.pop();
-        else if (p !== '.' && p !== '') normalized.push(p);
-      }
-      img.src = '/api/mounts/' + _currentMountId + '/file?path=/' + normalized.join('/');
     });
   });
+  if (tasks.length > 0) await Promise.all(tasks);
+}
+
+// Read a local-mount image file and set the <img> src to a blob URL.
+async function _loadLocalImage(img, fullPath) {
+  try {
+    const handle = await getLocalFileHandle(
+      window.state.localMounts[_currentMountId].handle,
+      fullPath,
+    );
+    if (handle) {
+      const file = await handle.getFile();
+      const blobUrl = URL.createObjectURL(file);
+      _localImageBlobUrls.push(blobUrl);
+      img.src = blobUrl;
+    }
+  } catch (_e) {
+    /* image not found locally; leave src as-is (broken) */
+  } finally {
+    img.dataset.localImgLoading = '';
+  }
 }
 
 // Adjust mermaid node rect heights to fit expanded content
@@ -1014,4 +1058,9 @@ function getCurrentFileInfo() {
 function setFileInfo(mountId, relPath) {
   _currentMountId = mountId;
   _currentRelPath = relPath;
+  // Revoke blob URLs created for the previously open file to free memory
+  for (const url of _localImageBlobUrls) {
+    URL.revokeObjectURL(url);
+  }
+  _localImageBlobUrls = [];
 }

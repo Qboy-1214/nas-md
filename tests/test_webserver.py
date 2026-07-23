@@ -536,6 +536,32 @@ class TestWriteFileAPI:
         assert status == 200
         assert os.path.isfile(os.path.join(writable_dir, "deep", "nested", "file.md"))
 
+    def test_write_binary_file_preserves_bytes(self, writable_server_url, writable_dir):
+        """PUT a binary (non-md) file must preserve raw bytes without UTF-8 corruption.
+
+        Regression test: images copied local→server were corrupted because the
+        PUT handler decoded the body as UTF-8 text and re-encoded it. Non-md
+        files must be written as raw bytes.
+        """
+        import urllib.request
+
+        # PNG signature + arbitrary bytes incl. invalid UTF-8 sequences
+        payload = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/img/pic.png",
+            data=payload,
+        )
+        assert status == 200
+        # Disk file must match exactly (no UTF-8 replacement corruption)
+        with open(os.path.join(writable_dir, "img", "pic.png"), "rb") as f:
+            assert f.read() == payload
+        # GET must return the same raw bytes
+        with urllib.request.urlopen(
+            f"{writable_server_url}/api/mounts/writable/file?path=/img/pic.png",
+            timeout=5,
+        ) as resp:
+            assert resp.read() == payload
+
 
 class TestSubmitChangesAPI:
     """Integration tests for POST /api/mounts/{id}/changes — version-driven paragraph merge."""

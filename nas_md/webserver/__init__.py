@@ -1400,6 +1400,28 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         # operations that write full content. expected_mtime is ignored —
         # version-based optimistic lock replaces mtime conflict detection.
         body = self._read_body()
+
+        # Non-markdown files (images, attachments, etc.) are written as raw bytes.
+        # The version-driven paragraph diff only applies to text; decoding binary
+        # content as UTF-8 would corrupt it (e.g. images copied local→server).
+        # The file watcher only tracks .md files, so no mark_expected is needed.
+        if not rel_path.lower().endswith((".md", ".markdown")):
+            parent = os.path.dirname(abs_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(abs_path, "wb") as f:
+                f.write(body)
+            st = os.stat(abs_path)
+            self._send_json(
+                {
+                    "status": "ok",
+                    "modTime": int(st.st_mtime * 1000),
+                    "size": st.st_size,
+                    "conflict": False,
+                }
+            )
+            return abs_path
+
         new_text = body.decode("utf-8", errors="replace")
 
         from nas_md.webserver.file_version_store import get_store

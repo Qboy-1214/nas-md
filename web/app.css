@@ -350,6 +350,22 @@ a:hover {
   margin-bottom: var(--s-xxs);
 }
 
+/* Section divider + header separating local mounts from server/host mounts */
+.mount-section-divider {
+  height: 1px;
+  background: var(--c-border);
+  margin: var(--s-sm) var(--s-md);
+}
+
+.mount-section-header {
+  padding: var(--s-xs) var(--s-md) var(--s-xxs);
+  font-size: var(--f-caption);
+  font-weight: var(--fw-semibold);
+  color: var(--c-muted);
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
 .mount-name-row {
   display: flex;
   align-items: center;

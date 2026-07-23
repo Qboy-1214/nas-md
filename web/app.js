@@ -1131,6 +1131,53 @@ async function removeMount(mountId) {
   }
 }
 
+// Render a single mount point as an HTML string (used by renderSidebar).
+// Extracted so renderSidebar can group host/server mounts separately from local mounts.
+function _renderMountHtml(mount) {
+  const isExpanded = state.expandedMounts.includes(mount.id);
+  const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
+  const canWrite = !mount.readonly && !mount.id.startsWith('builtin');
+  const isHostMount = !!mount.host;
+
+  let html = `<div class="mount-group">`;
+  html += `<div class="mount-name-row" ${canWrite ? `data-drop-mount="${mount.id}" data-drop-path="/"` : ''}>`;
+  html += `<div class="mount-name" onclick="toggleMount('${mount.id}')">`;
+  html += `<span class="mount-icon">${chevron}</span>`;
+  html += `<span>${mount.name}</span>`;
+  if (mount._needsPerm) {
+    html += `<span style="color:var(--c-muted);font-size:var(--f-body-xs);margin-left:4px">（点击授权）</span>`;
+  }
+  html += `</div>`;
+  // Action buttons (right side)
+  html += `<span class="mount-actions">`;
+  if (canWrite && isExpanded) {
+    html += `<button class="mount-create-btn" onclick="createItem('${mount.id}','/','file')" title="新建文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>`;
+    html += `<button class="mount-create-btn" onclick="createItem('${mount.id}','/','folder')" title="新建文件夹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>`;
+  }
+  if (!isHostMount) {
+    html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+  }
+  html += `</span>`;
+  html += `</div>`;
+
+  if (isExpanded) {
+    // Root directory as drop target
+    const dropAttr = canWrite ? `data-drop-mount="${mount.id}" data-drop-path="/"` : '';
+    html += `<div ${dropAttr}>`;
+    const treeData = state.treeData[mount.id]?.['/'];
+    if (treeData) {
+      html += renderEntries(treeData.children || [], mount.id, '/');
+    } else {
+      html += '<div class="tree-loading">加载中...</div>';
+      loadTree(mount.id, '/').then(() => renderSidebar());
+    }
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
 function renderSidebar() {
   const tree = $('file-tree');
   tree.innerHTML = '';
@@ -1165,51 +1212,22 @@ function renderSidebar() {
     }
   }
 
-  // Regular mount points
+  // Regular mount points — group host/server mounts above, local mounts below
+  // under a "本机目录" header with a divider, so locally mounted dirs are unified.
   const regularMounts = state.mounts.filter((m) => m.id !== 'builtin-storage');
-  for (const mount of regularMounts) {
-    const isExpanded = state.expandedMounts.includes(mount.id);
-    const chevron = `<svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:rotate(${isExpanded ? 90 : 0}deg);transition:transform 0.15s"><polyline points="9 18 15 12 9 6"/></svg>`;
-    const canWrite = !mount.readonly && !mount.id.startsWith('builtin');
-    const isHostMount = !!mount.host;
+  const serverMounts = regularMounts.filter((m) => !m._local);
+  const localMounts = regularMounts.filter((m) => m._local);
 
-    let html = `<div class="mount-group">`;
-    html += `<div class="mount-name-row" ${canWrite ? `data-drop-mount="${mount.id}" data-drop-path="/"` : ''}>`;
-    html += `<div class="mount-name" onclick="toggleMount('${mount.id}')">`;
-    html += `<span class="mount-icon">${chevron}</span>`;
-    html += `<span>${mount.name}</span>`;
-    if (mount._needsPerm) {
-      html += `<span style="color:var(--c-muted);font-size:var(--f-body-xs);margin-left:4px">（点击授权）</span>`;
-    }
-    html += `</div>`;
-    // Action buttons (right side)
-    html += `<span class="mount-actions">`;
-    if (canWrite && isExpanded) {
-      html += `<button class="mount-create-btn" onclick="createItem('${mount.id}','/','file')" title="新建文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></button>`;
-      html += `<button class="mount-create-btn" onclick="createItem('${mount.id}','/','folder')" title="新建文件夹"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg></button>`;
-    }
-    if (!isHostMount) {
-      html += `<button class="mount-remove-btn" onclick="removeMount('${mount.id}')" title="卸载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
-    }
-    html += `</span>`;
-    html += `</div>`;
+  for (const mount of serverMounts) {
+    tree.innerHTML += _renderMountHtml(mount);
+  }
 
-    if (isExpanded) {
-      // Root directory as drop target
-      const dropAttr = canWrite ? `data-drop-mount="${mount.id}" data-drop-path="/"` : '';
-      html += `<div ${dropAttr}>`;
-      const treeData = state.treeData[mount.id]?.['/'];
-      if (treeData) {
-        html += renderEntries(treeData.children || [], mount.id, '/');
-      } else {
-        html += '<div class="tree-loading">加载中...</div>';
-        loadTree(mount.id, '/').then(() => renderSidebar());
-      }
-      html += `</div>`;
+  if (localMounts.length > 0) {
+    tree.innerHTML += '<div class="mount-section-divider"></div>';
+    tree.innerHTML += '<div class="mount-section-header">本机目录</div>';
+    for (const mount of localMounts) {
+      tree.innerHTML += _renderMountHtml(mount);
     }
-
-    html += `</div>`;
-    tree.innerHTML += html;
   }
 
   if (regularMounts.length === 0 && !builtinEntries) {
@@ -3153,6 +3171,9 @@ async function openFile(path, preferredMountId, searchKeyword) {
     showPage('editor');
 
     if (window._vditor) window._vditor.destroy();
+    // Set mount context BEFORE initEditor so image rewriting (which runs during
+    // Vditor's render/after callbacks) knows whether this is a local mount.
+    setFileInfo(mount.id, path);
     // Check for offline draft
     const draft = loadFromLocalStorage(path);
     const finalContent = draft ? draft.content : content;
@@ -3166,7 +3187,6 @@ async function openFile(path, preferredMountId, searchKeyword) {
     }
     // Note: window._originalContent is set by Vditor's after() callback
     // to match Vditor's normalized content (e.g. trailing newline handling)
-    setFileInfo(mount.id, path);
     state.dirty = false;
     startDirtyCheck();
     renderSidebar();
