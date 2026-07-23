@@ -1580,6 +1580,7 @@ function setupDragDrop() {
     // Save drag data to local vars before any await — dragend may clear _dragData
     const srcMountId = _dragData.mountId;
     const srcPath = _dragData.path;
+    const srcIsDir = _dragData.isDir;
 
     // Don't allow dropping on self or into own subtree
     if (srcMountId === destMountId) {
@@ -1608,9 +1609,9 @@ function setupDragDrop() {
         if (srcIsLocal && destIsLocal) {
           await crossMountLocal(srcMountId, srcPath, destMountId, destPath, choice);
         } else if (srcIsLocal && !destIsLocal) {
-          await localToServer(srcMountId, srcPath, destMountId, destPath, choice);
+          await localToServer(srcMountId, srcPath, destMountId, destPath, choice, srcIsDir);
         } else if (!srcIsLocal && destIsLocal) {
-          await serverToLocal(srcMountId, srcPath, destMountId, destPath, choice);
+          await serverToLocal(srcMountId, srcPath, destMountId, destPath, choice, srcIsDir);
         } else {
           await crossMountServer(srcMountId, srcPath, destMountId, destPath, choice);
         }
@@ -1922,57 +1923,26 @@ async function crossMountLocal(srcMountId, srcPath, destMountId, destDir, action
 }
 
 // Cross-machine: local → server
-async function localToServer(srcMountId, srcPath, destMountId, destDir, action) {
+async function localToServer(srcMountId, srcPath, destMountId, destDir, action, isDir) {
   const srcLocalMount = state.localMounts[srcMountId];
   if (!srcLocalMount) return;
 
-  // Only support single MD file
-  if (!srcPath.toLowerCase().endsWith('.md')) {
-    showToast('跨机器操作仅支持 MD 文件');
-    return;
-  }
-
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // Read file content from local
-      const content = await readLocalFile(srcMountId, srcPath);
-      if (content === null) {
-        showToast('读取本机文件失败');
-        return;
-      }
-
-      const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
-      // Check if destination file already exists on server
-      let destFileName = fileName;
-      const existingResult = await API.getFile(
-        destMountId,
-        destDir === '/' ? '/' + fileName : destDir + '/' + fileName,
-      );
-      if (existingResult !== null) {
-        const suggested = suggestRename(fileName);
-        const choice = await showDuplicateDialog(suggested);
-        if (choice === 'cancel') return;
-        if (choice === 'rename') {
-          destFileName = suggested;
-        }
-        // overwrite: just write to same path, will replace content
-      }
-      const destFilePath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
-
-      // Write to server
-      const result = await API.putFile(destMountId, destFilePath, content);
-      if (!result || result.status === 'error') {
-        showToast(result?.error || '写入服务器文件失败');
-        return;
+      if (isDir) {
+        await localDirToServer(srcMountId, srcPath, destMountId, destDir);
+      } else {
+        await localFileToServer(srcMountId, srcPath, destMountId, destDir);
       }
 
       // If move, delete source
       if (action === 'move') {
         if (!(await ensureWritePermission(srcMountId))) return;
         const srcParentPath = srcPath.substring(0, srcPath.lastIndexOf('/')) || '/';
+        const srcName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
         const srcParentHandle = await getLocalDirHandle(srcLocalMount.handle, srcParentPath);
         if (srcParentHandle) {
-          await srcParentHandle.removeEntry(fileName);
+          await srcParentHandle.removeEntry(srcName, { recursive: isDir });
         }
       }
 
@@ -1993,50 +1963,95 @@ async function localToServer(srcMountId, srcPath, destMountId, destDir, action) 
   }
 }
 
+// Helper: copy a single local file to server (supports binary)
+async function localFileToServer(srcMountId, srcPath, destMountId, destDir) {
+  const srcLocalMount = state.localMounts[srcMountId];
+  const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+
+  // Get local File object
+  const fileHandle = await getLocalFileHandle(srcLocalMount.handle, srcPath);
+  if (!fileHandle) throw new Error('无法读取本机文件');
+  const file = await fileHandle.getFile();
+  const arrayBuffer = await file.arrayBuffer();
+
+  // Determine destination file name (handle duplicates)
+  let destFileName = fileName;
+  const destFilePath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
+  const existing = await API.getFile(destMountId, destFilePath);
+  if (existing !== null) {
+    const suggested = suggestRename(fileName);
+    const choice = await showDuplicateDialog(suggested);
+    if (choice === 'cancel') throw new Error('用户取消');
+    if (choice === 'rename') destFileName = suggested;
+    // overwrite: just write to same path
+  }
+
+  const finalDestPath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
+  const headers = {};
+  if (state.isAdmin) headers['X-Admin'] = '1';
+  const resp = await fetch(
+    `${_apiBase}/api/mounts/${destMountId}/file?path=${encodeURIComponent(finalDestPath)}`,
+    { method: 'PUT', headers, body: arrayBuffer },
+  );
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || '写入服务器文件失败');
+  }
+}
+
+// Helper: recursively copy a local directory to server
+async function localDirToServer(srcMountId, srcPath, destMountId, destDir) {
+  const srcLocalMount = state.localMounts[srcMountId];
+  const dirName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+
+  // Handle duplicate directory name at destination
+  let destDirName = dirName;
+  const destDirPath = destDir === '/' ? '/' + destDirName : destDir + '/' + destDirName;
+  // Check if destination dir already exists by trying to list it.
+  // Note: getTree returns an error JSON (no isDir field) for non-existent paths,
+  // so we check isDir === true to confirm the directory truly exists.
+  const existingTree = await API.getTree(destMountId, destDirPath);
+  if (existingTree && existingTree.isDir === true) {
+    const suggested = suggestRename(dirName);
+    const choice = await showDuplicateDialog(suggested);
+    if (choice === 'cancel') throw new Error('用户取消');
+    if (choice === 'rename') destDirName = suggested;
+    // overwrite: reuse existing directory, files will be overwritten
+  }
+
+  const finalDestDir = destDir === '/' ? '/' + destDirName : destDir + '/' + destDirName;
+  // Create destination directory on server
+  await API.mkdir(destMountId, finalDestDir);
+
+  // Get source directory handle
+  const srcDirHandle = await getLocalDirHandle(srcLocalMount.handle, srcPath);
+  if (!srcDirHandle) throw new Error('源目录不存在');
+
+  // Iterate over entries and recursively copy
+  for await (const entry of srcDirHandle.values()) {
+    const entryPath = srcPath + '/' + entry.name;
+    if (entry.kind === 'file') {
+      await localFileToServer(srcMountId, entryPath, destMountId, finalDestDir);
+    } else {
+      await localDirToServer(srcMountId, entryPath, destMountId, finalDestDir);
+    }
+  }
+}
+
 // Cross-machine: server → local
-async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) {
+async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action, isDir) {
   const destLocalMount = state.localMounts[destMountId];
   if (!destLocalMount) return;
 
-  // Only support single MD file
-  if (!srcPath.toLowerCase().endsWith('.md')) {
-    showToast('跨机器操作仅支持 MD 文件');
-    return;
-  }
-
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      // Read file content from server
-      const result = await API.getFile(srcMountId, srcPath);
-      if (result === null) {
-        showToast('读取服务器文件失败');
-        return;
-      }
-      const content = result.content;
-      const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
-
-      // Check if destination file already exists locally
-      const destDirHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
-      let destFileName = fileName;
-      if (destDirHandle && (await localEntryExists(destDirHandle, fileName, false))) {
-        const suggested = suggestRename(fileName);
-        const choice = await showDuplicateDialog(suggested);
-        if (choice === 'cancel') return;
-        if (choice === 'rename') {
-          destFileName = suggested;
-        }
-        // overwrite: writeLocalFile will replace content
+      if (isDir) {
+        await serverDirToLocal(srcMountId, srcPath, destMountId, destDir);
+      } else {
+        await serverFileToLocal(srcMountId, srcPath, destMountId, destDir);
       }
 
-      // Write to local
-      const destFilePath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
-      const ok = await writeLocalFile(destMountId, destFilePath, content);
-      if (!ok) {
-        showToast('写入本机文件失败');
-        return;
-      }
-
-      // If move, delete source from server
+      // If move, delete source from server (deleteFile supports recursive dir removal)
       if (action === 'move') {
         await API.deleteFile(srcMountId, srcPath);
       }
@@ -2052,9 +2067,135 @@ async function serverToLocal(srcMountId, srcPath, destMountId, destDir, action) 
         continue; // retry with fresh handles
       }
       console.error('Server to local operation failed:', e);
-      showToast('操作失败');
+      showToast(e.message || '操作失败');
       return;
     }
+  }
+}
+
+// Helper: fetch a single server file as ArrayBuffer (supports binary files like images)
+async function fetchServerFileBytes(mountId, path) {
+  const headers = {};
+  if (state.isAdmin) headers['X-Admin'] = '1';
+  if (window.nasmdIdentity) {
+    const identity = window.nasmdIdentity.get();
+    if (identity) {
+      headers['X-Client-Id'] = identity.id;
+      headers['X-Client-Name'] = identity.name;
+      headers['X-Client-Color'] = identity.color;
+    }
+  }
+  const url = `${_apiBase}/api/mounts/${mountId}/file?path=${encodeURIComponent(path)}&_t=${Date.now()}`;
+  const resp = await fetch(url, { headers, cache: 'no-store' });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(errText || `读取服务器文件失败 (HTTP ${resp.status})`);
+  }
+  return await resp.arrayBuffer();
+}
+
+// Helper: write ArrayBuffer to a local file, creating parent directories as needed
+async function writeLocalFileBytes(mountId, path, arrayBuffer) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount) throw new Error('本机挂载不存在');
+  if (!(await ensureWritePermission(mountId))) throw new Error('权限不足');
+  const parts = path.split('/').filter(Boolean);
+  let current = localMount.handle;
+  // Navigate/create parent directories
+  for (let i = 0; i < parts.length - 1; i++) {
+    current = await current.getDirectoryHandle(parts[i], { create: true });
+  }
+  const fileName = parts[parts.length - 1];
+  const fileHandle = await current.getFileHandle(fileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(arrayBuffer);
+  await writable.close();
+}
+
+// Helper: ensure a local directory exists (create if needed), returns dir handle
+async function ensureLocalDir(mountId, path) {
+  const localMount = state.localMounts[mountId];
+  if (!localMount) throw new Error('本机挂载不存在');
+  if (!path || path === '/') return localMount.handle;
+  const parts = path.split('/').filter(Boolean);
+  let current = localMount.handle;
+  for (const part of parts) {
+    current = await current.getDirectoryHandle(part, { create: true });
+  }
+  return current;
+}
+
+// Helper: copy a single server file to local (supports binary)
+async function serverFileToLocal(srcMountId, srcPath, destMountId, destDir) {
+  const fileName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+  const destLocalMount = state.localMounts[destMountId];
+
+  // Fetch file bytes from server (binary-safe)
+  const arrayBuffer = await fetchServerFileBytes(srcMountId, srcPath);
+
+  // Check if destination file already exists locally
+  const destDirHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
+  if (!destDirHandle) throw new Error('目标目录不存在');
+
+  let destFileName = fileName;
+  if (await localEntryExists(destDirHandle, fileName, false)) {
+    const suggested = suggestRename(fileName);
+    const choice = await showDuplicateDialog(suggested);
+    if (choice === 'cancel') throw new Error('用户取消');
+    if (choice === 'rename') destFileName = suggested;
+    // overwrite: writeLocalFileBytes will replace content
+  }
+
+  const destFilePath = destDir === '/' ? '/' + destFileName : destDir + '/' + destFileName;
+  await writeLocalFileBytes(destMountId, destFilePath, arrayBuffer);
+}
+
+// Helper: recursively copy a server directory to local
+async function serverDirToLocal(srcMountId, srcPath, destMountId, destDir) {
+  const dirName = srcPath.substring(srcPath.lastIndexOf('/') + 1);
+  const destLocalMount = state.localMounts[destMountId];
+
+  // Handle duplicate directory name at destination (local side, reliable check)
+  let destDirName = dirName;
+  const destParentHandle = await getLocalDirHandle(destLocalMount.handle, destDir);
+  if (!destParentHandle) throw new Error('目标目录不存在');
+  if (await localEntryExists(destParentHandle, destDirName, true)) {
+    const suggested = suggestRename(dirName);
+    const choice = await showDuplicateDialog(suggested);
+    if (choice === 'cancel') throw new Error('用户取消');
+    if (choice === 'rename') destDirName = suggested;
+    // overwrite: reuse existing directory, files will be overwritten
+  }
+
+  // Get recursive tree from server
+  const tree = await API.getTree(srcMountId, srcPath);
+  if (!tree || tree.isDir !== true) {
+    throw new Error('读取服务器目录失败');
+  }
+
+  // Copy tree into destDir with the (possibly renamed) dir name.
+  // Override the root node's name so the walker creates the right local dir.
+  const rootNode = { ...tree, name: destDirName };
+  await _serverTreeToLocal(srcMountId, rootNode, destMountId, destDir);
+}
+
+// Recursive walker: copy a server tree node into a local parent directory.
+// - For a dir node: ensure the local dir exists, then recurse into children.
+// - For a file node: fetch bytes from server and write locally.
+async function _serverTreeToLocal(srcMountId, node, destMountId, parentDir) {
+  if (node.isDir) {
+    const dirPath = parentDir === '/' ? '/' + node.name : parentDir + '/' + node.name;
+    await ensureLocalDir(destMountId, dirPath);
+    if (node.children) {
+      for (const child of node.children) {
+        await _serverTreeToLocal(srcMountId, child, destMountId, dirPath);
+      }
+    }
+  } else {
+    // File: fetch bytes (binary-safe) and write to local parent dir
+    const arrayBuffer = await fetchServerFileBytes(srcMountId, node.path);
+    const filePath = parentDir === '/' ? '/' + node.name : parentDir + '/' + node.name;
+    await writeLocalFileBytes(destMountId, filePath, arrayBuffer);
   }
 }
 
