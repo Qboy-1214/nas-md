@@ -3367,17 +3367,11 @@ function initMobileLayout() {
   } else {
     body.classList.remove('mobile');
   }
-  // Show/hide more menu button based on screen size
-  const moreBtn = document.getElementById('topbar-more');
-  if (moreBtn) {
-    moreBtn.style.display = isSmallMobile() ? 'flex' : 'none';
-  }
 }
 
 // 初始化并监听 resize
 window.addEventListener('load', initMobileLayout);
 window.addEventListener('resize', initMobileLayout);
-initMobileLayout();
 
 // === 侧边栏拖拽调整宽度 ===
 (function initSidebarResizer() {

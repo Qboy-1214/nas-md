@@ -1834,35 +1834,6 @@ a:hover {
     border-radius: 0;
     margin: 0;
   }
-
-  /* More menu */
-  .more-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    background: var(--c-bg);
-    border: 1px solid var(--c-border);
-    border-radius: var(--r-md);
-    box-shadow: var(--shadow-md);
-    min-width: 160px;
-    z-index: 100;
-  }
-
-  .more-menu button {
-    display: block;
-    width: 100%;
-    padding: 10px 16px;
-    text-align: left;
-    background: none;
-    border: none;
-    font-size: 14px;
-    color: var(--c-text);
-    cursor: pointer;
-  }
-
-  .more-menu button:hover {
-    background: var(--c-bg-hover);
-  }
 }
 
 /* Sidebar close button (hidden on desktop) */
@@ -1888,6 +1859,16 @@ a:hover {
 /* More menu wrapper */
 .topbar-more-wrapper {
   position: relative;
+}
+
+.topbar-more-wrapper #topbar-more {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  .topbar-more-wrapper #topbar-more {
+    display: flex;
+  }
 }
 
 .topbar-more-wrapper .more-menu {
