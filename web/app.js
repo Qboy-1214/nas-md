@@ -3320,6 +3320,65 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
 }
 
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+}
+
+// 点击 sidebar overlay 关闭（移动端）
+document.addEventListener('click', (e) => {
+  const sidebar = document.getElementById('sidebar');
+  const menuToggle = document.getElementById('menu-toggle');
+  if (sidebar.classList.contains('open') &&
+      !sidebar.contains(e.target) &&
+      menuToggle && !menuToggle.contains(e.target)) {
+    closeSidebar();
+  }
+});
+
+// === 更多菜单 ===
+function toggleMoreMenu() {
+  const menu = document.getElementById('more-menu');
+  if (menu) menu.classList.toggle('open');
+}
+
+// 点击外部关闭 more menu
+document.addEventListener('click', (e) => {
+  const moreWrapper = document.querySelector('.topbar-more-wrapper');
+  const moreMenu = document.getElementById('more-menu');
+  if (moreMenu && moreMenu.classList.contains('open') &&
+      moreWrapper && !moreWrapper.contains(e.target)) {
+    moreMenu.classList.remove('open');
+  }
+});
+
+// === 移动端检测与初始化 ===
+function isMobile() {
+  return window.innerWidth < 768;
+}
+
+function isSmallMobile() {
+  return window.innerWidth < 480;
+}
+
+function initMobileLayout() {
+  const body = document.body;
+  if (isMobile()) {
+    body.classList.add('mobile');
+  } else {
+    body.classList.remove('mobile');
+  }
+  // Show/hide more menu button based on screen size
+  const moreBtn = document.getElementById('topbar-more');
+  if (moreBtn) {
+    moreBtn.style.display = isSmallMobile() ? 'flex' : 'none';
+  }
+}
+
+// 初始化并监听 resize
+window.addEventListener('load', initMobileLayout);
+window.addEventListener('resize', initMobileLayout);
+initMobileLayout();
+
 // === 侧边栏拖拽调整宽度 ===
 (function initSidebarResizer() {
   const sidebar = document.getElementById('sidebar');
@@ -4445,3 +4504,47 @@ document.addEventListener('keydown', (e) => {
     hideNewFile();
   }
 });
+
+// === 移动端: 搜索框交互 + 编辑器键盘处理 ===
+(function initMobileSearch() {
+  const searchBox = document.querySelector('.search-box');
+  if (!searchBox) return;
+
+  // 编辑器焦点时滚动到可见区域
+  const editorEl = document.querySelector('.vditor');
+  if (editorEl) {
+    editorEl.addEventListener('focus', () => {
+      setTimeout(() => {
+        editorEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 300);
+    });
+
+    // iOS 键盘打开时重新定位
+    window.addEventListener('resize', () => {
+      if (document.activeElement === editorEl || editorEl.classList.contains('vditor--focus')) {
+        setTimeout(() => {
+          editorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+      }
+    });
+  }
+})();
+
+// === Vditor toolbar 移动端横向滚动 ===
+(function initMobileToolbar() {
+  const toolbar = document.querySelector('.vditor-toolbar');
+  if (!toolbar) return;
+
+  // 检测是否为触摸设备
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  if (!isTouchDevice) return;
+
+  // 添加横向滚动指示器
+  toolbar.classList.add('vditor-toolbar-mobile');
+
+  // 监听滚动事件，显示/隐藏渐变遮罩
+  toolbar.addEventListener('scroll', () => {
+    const isScrolled = toolbar.scrollLeft > 5;
+    toolbar.classList.toggle('scrolled', isScrolled);
+  }, { passive: true });
+})();

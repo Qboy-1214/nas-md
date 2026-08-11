@@ -1774,6 +1774,156 @@ a:hover {
   }
 }
 
+/* Small Mobile: < 480px */
+@media (max-width: 480px) {
+  :root {
+    --sidebar-w: 240px;
+  }
+
+  /* Sidebar close button */
+  .sidebar-close {
+    display: flex;
+  }
+
+  /* Topbar: hide secondary buttons */
+  #download-top-btn,
+  #btn-refresh,
+  #export-pdf-top-btn {
+    display: none;
+  }
+
+  /* Editor toolbar: horizontal scroll */
+  .vditor-toolbar {
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .vditor-toolbar__item {
+    flex-shrink: 0;
+  }
+
+  /* Editor: full height on mobile */
+  .vditor {
+    height: calc(100vh - 48px - 44px) !important;
+  }
+
+  /* Search: sticky at top */
+  .search-box {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  /* File tree items: larger touch target */
+  .tree-item {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  /* Search results: card layout */
+  .search-result-item {
+    padding: 12px;
+  }
+
+  /* Modal: full screen */
+  .modal {
+    width: 100vw;
+    max-width: 100vw;
+    min-height: 100vh;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  /* More menu */
+  .more-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: var(--c-bg);
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-md);
+    min-width: 160px;
+    z-index: 100;
+  }
+
+  .more-menu button {
+    display: block;
+    width: 100%;
+    padding: 10px 16px;
+    text-align: left;
+    background: none;
+    border: none;
+    font-size: 14px;
+    color: var(--c-text);
+    cursor: pointer;
+  }
+
+  .more-menu button:hover {
+    background: var(--c-bg-hover);
+  }
+}
+
+/* Sidebar close button (hidden on desktop) */
+.sidebar-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  color: var(--c-steel);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-close:hover {
+  background: var(--c-bg-hover);
+  color: var(--c-ink);
+}
+
+/* More menu wrapper */
+.topbar-more-wrapper {
+  position: relative;
+}
+
+.topbar-more-wrapper .more-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  min-width: 160px;
+  z-index: 100;
+}
+
+.topbar-more-wrapper .more-menu.open {
+  display: block;
+}
+
+.topbar-more-wrapper .more-menu button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 10px 16px;
+  text-align: left;
+  background: none;
+  border: none;
+  font-size: 14px;
+  color: var(--c-text);
+  cursor: pointer;
+}
+
+.topbar-more-wrapper .more-menu button:hover {
+  background: var(--c-bg-hover);
+}
+
 /* Menu toggle (hidden on desktop) */
 .menu-toggle {
   display: none;
@@ -2574,4 +2724,26 @@ a:hover {
 
 .mme-toolbar[data-mme-theme='dark'] .mme-sep {
   background: #45475a;
+}
+
+/* === Mobile: Vditor toolbar scrolling indicator === */
+.vditor-toolbar-mobile {
+  position: relative;
+}
+
+.vditor-toolbar-mobile::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 30px;
+  background: linear-gradient(to right, transparent, var(--c-bg, #ffffff));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.vditor-toolbar-mobile.scrolled::after {
+  opacity: 1;
 }
