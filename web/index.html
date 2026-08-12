@@ -236,7 +236,7 @@
                 <circle cx="5" cy="12" r="1" />
               </svg>
             </button>
-            <div class="more-menu" id="more-menu" style="display: none">
+            <div class="more-menu" id="more-menu">
               <button onclick="downloadCurrentFile()" id="more-download">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 8px;">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -432,6 +432,26 @@
       <script src="files.js"></script>
       <script src="editor.js"></script>
       <script src="app.js"></script>
+    </div>
+
+    <!-- 文件操作长按菜单（移动端底部 sheet） -->
+    <div id="file-context-menu" class="file-context-menu">
+      <button onclick="openFileContextAction('rename')">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        重命名
+      </button>
+      <button onclick="openFileContextAction('delete')" style="color:var(--c-danger)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        删除
+      </button>
+      <button onclick="openFileContextAction('share')">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        分享链接
+      </button>
+      <button onclick="openFileContextAction('download')">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        下载
+      </button>
     </div>
   </body>
 </html>

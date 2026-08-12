@@ -13,10 +13,15 @@
   function createPanel() {
     if (_panel) return _panel;
 
+    // 移动端全宽面板
+    const isMobile = window.innerWidth < 768;
+    const panelWidth = isMobile ? '100vw' : '400px';
+    const panelRight = isMobile ? '-100vw' : '-420px';
+
     _panel = document.createElement('div');
     _panel.id = 'version-history-panel';
     _panel.style.cssText =
-      'position:fixed;top:0;right:-420px;width:400px;height:100vh;background:#fff;' +
+      'position:fixed;top:0;right:' + panelRight + ';width:' + panelWidth + ';height:100vh;background:var(--c-bg);' +
       'box-shadow:-2px 0 12px rgba(0,0,0,0.15);z-index:10000;transition:right 0.3s;' +
       'display:flex;flex-direction:column;font-family:system-ui,sans-serif;';
 
@@ -51,12 +56,13 @@
 
   function hide() {
     if (_panel) {
-      _panel.style.right = '-420px';
+      const isMobile = window.innerWidth < 768;
+      _panel.style.right = isMobile ? '-100vw' : '-420px';
     }
   }
 
   function isVisible() {
-    return _panel && _panel.style.right === '0';
+    return _panel && (_panel.style.right === '0' || _panel.style.right === '0px');
   }
 
   function loadHistory() {
@@ -337,6 +343,19 @@
     return html;
   }
 
+  // Mobile: single-column diff
+  function renderDiffMobile(diff) {
+    var html = '';
+    for (var i = 0; i < diff.length; i++) {
+      var d = diff[i];
+      var cls = d.type === 'insert' ? 'diff-mobile add' : d.type === 'delete' ? 'diff-mobile del' : 'diff-mobile ctx';
+      var sign = d.type === 'insert' ? '+' : d.type === 'delete' ? '-' : ' ';
+      var text = d.newLine !== null ? d.newLine : (d.oldLine || '');
+      html += '<div class="' + cls + '">' + sign + ' ' + escapeHtml(text) + '</div>';
+    }
+    return html || '<div style="padding:20px;color:#999;text-align:center;">无差异</div>';
+  }
+
   function showVersionPreview(versionContent, versionIdx, previousContent, versionMeta) {
     // Create or update preview modal
     var modal = document.getElementById('vh-preview-modal');
@@ -357,7 +376,12 @@
 
     if (hasPrev) {
       diff = computeLineDiff(previousContent, versionContent);
-      diffHTML = renderDiffHTML(diff);
+      // Mobile: single-column diff
+      if (window.innerWidth < 768) {
+        diffHTML = renderDiffMobile(diff);
+      } else {
+        diffHTML = renderDiffHTML(diff);
+      }
       for (var i = 0; i < diff.length; i++) {
         if (diff[i].type === 'insert') insertCount++;
         if (diff[i].type === 'delete') deleteCount++;

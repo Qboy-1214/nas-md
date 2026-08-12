@@ -4542,3 +4542,117 @@ document.addEventListener('keydown', (e) => {
     toolbar.classList.toggle('scrolled', isScrolled);
   }, { passive: true });
 })();
+
+// === Phase 2: 文件树触控优化 ===
+(function initFileTreeTouch() {
+  const tree = document.getElementById('file-tree');
+  if (!tree) return;
+
+  let pressTimer = null;
+  let longPressTriggered = false;
+
+  tree.addEventListener('touchstart', (e) => {
+    const item = e.target.closest('.tree-item');
+    if (!item) return;
+    longPressTriggered = false;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      longPressTriggered = true;
+      const touch = e.touches[0];
+      showFileContextMenu(item, touch.clientX, touch.clientY);
+    }, 500);
+  }, { passive: true });
+
+  tree.addEventListener('touchend', (e) => {
+    clearTimeout(pressTimer);
+    if (longPressTriggered) {
+      e.preventDefault();
+      longPressTriggered = false;
+    }
+  }, { passive: false });
+
+  tree.addEventListener('touchmove', () => {
+    clearTimeout(pressTimer);
+  }, { passive: true });
+
+  let swipeStartX = 0, swipeStartY = 0, swipeItem = null;
+
+  tree.addEventListener('touchstart', (e) => {
+    const folder = e.target.closest('.tree-item.folder');
+    if (!folder || !folder.querySelector('.tree-children')) return;
+    swipeStartX = e.touches[0].clientX;
+    swipeStartY = e.touches[0].clientY;
+    swipeItem = folder;
+  }, { passive: true });
+
+  tree.addEventListener('touchend', (e) => {
+    if (!swipeItem) return;
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const deltaX = endX - swipeStartX;
+    const deltaY = Math.abs(endY - swipeStartY);
+    if (Math.abs(deltaX) > 50 && deltaY < 30) {
+      const isExpanded = swipeItem.classList.contains('expanded');
+      const mountId = swipeItem.dataset.mountId;
+      const fpath = swipeItem.dataset.path;
+      if (mountId && fpath) {
+        if (deltaX > 0 && !isExpanded) toggleDir(mountId, fpath);
+        else if (deltaX < 0 && isExpanded) toggleDir(mountId, fpath);
+      }
+    }
+    swipeItem = null;
+  }, { passive: true });
+})();
+
+// === 文件操作长按菜单 ===
+let _contextMenuTarget = null;
+
+function showFileContextMenu(item, x, y) {
+  const menu = document.getElementById('file-context-menu');
+  if (!menu) return;
+  const mountId = item.dataset.mountId || '';
+  const fpath = item.dataset.path || item.querySelector('span[title]')?.getAttribute('title') || '';
+  _contextMenuTarget = { mountId, path: fpath };
+  if (window.innerWidth < 768) {
+    menu.style.top = 'auto'; menu.style.bottom = '0';
+    menu.style.left = '0'; menu.style.right = '0';
+  } else {
+    menu.style.top = y + 'px'; menu.style.left = x + 'px';
+  }
+  menu.style.display = 'block';
+  setTimeout(() => { document.addEventListener('click', hideFileContextMenu, { once: true }); }, 0);
+}
+
+function hideFileContextMenu() {
+  const menu = document.getElementById('file-context-menu');
+  if (menu) menu.style.display = 'none';
+  _contextMenuTarget = null;
+}
+
+function openFileContextAction(action) {
+  const target = _contextMenuTarget;
+  if (!target) return;
+  hideFileContextMenu();
+  switch (action) {
+    case 'rename': if (target.path) showRenameModal(target.path, target.mountId); break;
+    case 'delete': if (target.path) deleteFile(target.path, target.mountId); break;
+    case 'share': if (target.path) shareFile(target.path, target.mountId); break;
+    case 'download': if (target.path) downloadFile(target.path, target.mountId); break;
+  }
+}
+
+// === 搜索框滚动阴影 ===
+(function initSearchSticky() {
+  const searchBox = document.querySelector('.search-box');
+  if (!searchBox) return;
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      requestAnimationFrame(() => {
+        searchBox.classList.toggle('search-sticky', window.scrollY > 100);
+        ticking = false;
+      });
+      ticking = true;
+    }
+  }, { passive: true });
+})();
