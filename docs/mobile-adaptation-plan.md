@@ -130,20 +130,37 @@
 
 ### Phase 3: PWA 增强（长期）
 
-#### 3.1 离线支持
-- 当前已是 PWA，但需要增强：
-  - Service Worker 缓存策略优化
-  - 离线编辑队列（编辑后网络恢复时同步）
-  - IndexedDB 作为离线存储备选
+> 详细计划见 `docs/mobile-adaptation-phase3.md`
 
-#### 3.2 移动推送
-- 考虑接入 Telegram Bot 推送通知
-- 协同编辑时的实时通知（已有 SSE，需要移动端 toast）
+#### 3.1 Web App Manifest ✅ 待实施
+- 新增 `manifest.json`（图标、主题色、display mode）
+- `index.html` 添加 PWA meta tags（theme-color、apple-mobile-web-app）
+- 支持添加到主屏幕/桌面
 
-#### 3.3 手势导航
-- 底部 Tab Bar 替代侧边栏（参考 Notion Mobile）
-- 左右滑动手势切换文件
-- 双击返回上一级
+#### 3.2 Service Worker 基础版 ✅ 待实施
+- `sw.js`: cache-first 静态资源 + network-first API 请求
+- 离线时页面可正常加载
+- 自动清理旧缓存
+
+#### 3.3 离线编辑队列 ✅ 待实施
+- `offline_queue.js`: IndexedDB 存储离线编辑
+- 网络恢复后自动重放待同步编辑
+- 与现有 `saveFile` 集成
+
+#### 3.4 网络状态指示器 ✅ 待实施
+- 顶部栏显示在线/离线状态
+- 移动端仅显示彩色圆点
+- 网络变化时实时更新
+
+#### 3.5 底部 Tab Bar（可选）✅ 待实施
+- 移动端 4 个 Tab：文件 / 搜索 / 图谱 / 统计
+- 替代侧边栏作为主要导航
+- 桌面端隐藏
+
+#### 3.6 SSE 移动端 Toast（可选）✅ 待实施
+- 协同编辑通知改为居中 toast
+- 3 秒自动消失
+- 底部 Tab Bar 上方显示
 
 ---
 
