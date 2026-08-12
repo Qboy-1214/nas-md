@@ -3538,10 +3538,30 @@ async function saveFile({ silent = false } = {}) {
     }
 
     if (!navigator.onLine) {
-      saveToLocalStorage(state.currentPath, content);
+      // === 3.3 Offline Queue: use IndexedDB instead of localStorage ===
+      try {
+        if (window.nasmdOfflineQueue) {
+          await window.nasmdOfflineQueue.queueEdit(
+            state.currentMountId,
+            state.currentPath,
+            content,
+            state.baseVersion,
+          );
+        } else {
+          // Fallback to localStorage
+          saveToLocalStorage(state.currentPath, content);
+        }
+      } catch (_e) {
+        saveToLocalStorage(state.currentPath, content);
+      }
       markClean();
       if (!silent) {
-        showToast('已离线保存，恢复连接后自动同步');
+        (async () => {
+          const count = window.nasmdOfflineQueue
+            ? await window.nasmdOfflineQueue.getPendingCount()
+            : 0;
+          showToast(count > 0 ? `已保存（队列中 ${count} 条待同步）` : '已离线保存');
+        })();
       }
       return;
     }
@@ -4234,6 +4254,40 @@ window.addEventListener('offline', () => {
   state.syncStatus = 'offline';
   updateSyncIndicator();
 });
+
+// === 3.4 Network Status Indicator ===
+(function initNetworkStatus() {
+  const el = document.getElementById('network-status');
+  if (!el) return;
+  const dot = el.querySelector('.network-dot');
+  const label = el.querySelector('.network-label');
+
+  function updateStatus() {
+    const isOnline = navigator.onLine;
+    el.classList.toggle('offline', !isOnline);
+    el.classList.remove('syncing');
+    if (label) label.textContent = isOnline ? '在线' : '离线';
+  }
+
+  updateStatus();
+  window.addEventListener('online', updateStatus);
+  window.addEventListener('offline', updateStatus);
+})();
+
+// === 3.2 Service Worker Registration ===
+(function initServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((reg) => {
+        console.log('[SW] Registered:', reg.scope);
+        state.swRegistered = true;
+      })
+      .catch((err) => {
+        console.warn('[SW] Registration failed:', err.message);
+      });
+  });
+})();
 async function doSearch() {
   const query = $('search-input').value.trim();
   const resultsEl = $('search-results');

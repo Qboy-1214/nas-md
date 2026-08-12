@@ -791,6 +791,54 @@ a:hover {
   flex-shrink: 0;
 }
 
+/* === 3.4 Network Status Indicator === */
+.network-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  color: var(--c-text-muted);
+  transition: all 0.2s;
+  cursor: default;
+  user-select: none;
+}
+
+.network-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-success);
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.network-status.offline .network-dot {
+  background: var(--c-danger);
+}
+
+.network-status.syncing .network-dot {
+  background: var(--c-warning);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Mobile: hide label, show only dot */
+@media (max-width: 767px) {
+  .network-label {
+    display: none;
+  }
+
+  .network-status {
+    padding: 4px 6px;
+  }
+}
+
 /* Editor Mode — Segmented Tab */
 .editor-modes {
   display: flex;
