@@ -4544,7 +4544,7 @@ document.addEventListener('keydown', (e) => {
 })();
 
 // === Phase 2: 文件树触控优化 ===
-(function initFileTreeTouch() {
+function initFileTreeTouch() {
   const tree = document.getElementById('file-tree');
   if (!tree) return;
 
@@ -4642,7 +4642,7 @@ function openFileContextAction(action) {
 }
 
 // === 搜索框滚动阴影 ===
-(function initSearchSticky() {
+function initSearchSticky() {
   const searchBox = document.querySelector('.search-box');
   if (!searchBox) return;
   let ticking = false;

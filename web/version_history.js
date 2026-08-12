@@ -344,7 +344,7 @@
   }
 
   // Mobile: single-column diff
-  function renderDiffMobile(diff) {
+  window.renderDiffMobile = function(diff) {
     var html = '';
     for (var i = 0; i < diff.length; i++) {
       var d = diff[i];
