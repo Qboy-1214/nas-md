@@ -132,32 +132,36 @@
 
 > 详细计划见 `docs/mobile-adaptation-phase3.md`
 
-#### 3.1 Web App Manifest ✅ 待实施
-- 新增 `manifest.json`（图标、主题色、display mode）
-- `index.html` 添加 PWA meta tags（theme-color、apple-mobile-web-app）
-- 支持添加到主屏幕/桌面
+#### 3.1 Web App Manifest ✅ 已完成
+- `web/manifest.json`（4 图标变体：192/512 + maskable）
+- `web/icons/` SVG favicon + PNG 图标
+- `index.html` PWA meta tags（theme-color、apple-mobile-web-app、manifest link）
+- 支持添加到主屏幕，standalone 模式
 
-#### 3.2 Service Worker 基础版 ✅ 待实施
-- `sw.js`: cache-first 静态资源 + network-first API 请求
-- 离线时页面可正常加载
-- 自动清理旧缓存
+#### 3.2 Service Worker 基础版 ✅ 已完成
+- `web/sw.js`: cache-first 静态资源 + network-first API
+- 离线时返回友好 fallback 页面
+- 后台 stale-while-revalidate 自动更新缓存
+- `app.js` 自动注册（检查 navigator.serviceWorker 支持）
 
-#### 3.3 离线编辑队列 ✅ 待实施
-- `offline_queue.js`: IndexedDB 存储离线编辑
-- 网络恢复后自动重放待同步编辑
-- 与现有 `saveFile` 集成
+#### 3.3 离线编辑队列 ✅ 已完成
+- `web/offline_queue.js`: IndexedDB pending-edits 存储
+- `saveFile()` 集成：离线自动入队，在线正常同步
+- 网络恢复后自动重放 + toast 提示
+- IndexedDB 不可用时降级到 localStorage
 
-#### 3.4 网络状态指示器 ✅ 待实施
-- 顶部栏显示在线/离线状态
-- 移动端仅显示彩色圆点
-- 网络变化时实时更新
+#### 3.4 网络状态指示器 ✅ 已完成
+- 顶部栏在线/离线圆点 + 文字标签
+- 移动端仅显示彩色圆点（label 隐藏）
+- 脉冲动画表示同步中
+- 与现有 online/offline 事件联动
 
-#### 3.5 底部 Tab Bar（可选）✅ 待实施
+#### 3.5 底部 Tab Bar（可选）⏳ 待实施
 - 移动端 4 个 Tab：文件 / 搜索 / 图谱 / 统计
 - 替代侧边栏作为主要导航
 - 桌面端隐藏
 
-#### 3.6 SSE 移动端 Toast（可选）✅ 待实施
+#### 3.6 SSE 移动端 Toast（可选）⏳ 待实施
 - 协同编辑通知改为居中 toast
 - 3 秒自动消失
 - 底部 Tab Bar 上方显示
