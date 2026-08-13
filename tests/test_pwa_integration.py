@@ -1,42 +1,137 @@
 """
 Phase 3 PWA Integration Tests
 Tests that the server correctly serves PWA files with proper content-types.
-Skipped if server is not running (requires `python -m nas_md.cli web` on port 8080).
+
+Auto-starts a test server on a free port if none is running, then tears it down.
+Usage: python -m pytest tests/test_pwa_integration.py -v
 """
+import os
+import signal
+import subprocess
+import time
+from pathlib import Path
 import pytest
 import httpx
 
 
 # ================================================================
-# Helper: get server URL from environment or default
+# Server lifecycle
 # ================================================================
 
-def _get_server_url():
-    import os
-    return os.environ.get('NASMD_SERVER_URL', 'http://127.0.0.1:8080')
+_PORT = None
+_PROC = None
+_BASE_URL = None
 
 
-def _server_available():
-    """Check if server is running"""
+def _find_free_port():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+
+def _server_alive(url, timeout=2.0):
     try:
-        with httpx.Client(timeout=2.0) as c:
-            r = c.get(_get_server_url(), follow_redirects=True)
-            return r.status_code in (200, 301, 302, 401, 403)
+        r = httpx.get(url, timeout=timeout, follow_redirects=True)
+        return r.status_code in (200, 301, 302, 401, 403)
     except Exception:
         return False
 
 
-# Skip all tests in this file if server is not running
-pytestmark = pytest.mark.skipif(
-    not _server_available(),
-    reason="Server not running at 127.0.0.1:8080 — start with `python -m nas_md.cli web`"
-)
+def _start_server(port):
+    """Start nas-md web server on given port. Returns True if ready."""
+    global _PROC, _PORT, _BASE_URL
+    _PORT = port
+    _BASE_URL = f'http://127.0.0.1:{port}'
+
+    project_root = Path(__file__).resolve().parent.parent
+    web_root = project_root / 'web'
+    storage_dir = project_root / 'tests' / 'storage-test-integration'
+    mount_dirs = project_root / 'tests' / 'e2e' / 'test-mount'
+    storage_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env['WEB_PORT'] = str(port)
+    env['WEB_HOST'] = '127.0.0.1'
+    env['WEB_ROOT'] = str(web_root)
+    env['STORAGE_DIR'] = str(storage_dir)
+    env['MOUNT_DIRS'] = str(mount_dirs)
+    env['PYTHONIOENCODING'] = 'utf-8'
+
+    _PROC = subprocess.Popen(
+        ['python', '-m', 'nas_md.cli', 'web'],
+        cwd=str(project_root),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Wait up to 20s for server to be ready
+    for i in range(40):
+        time.sleep(0.5)
+        if _server_alive(_BASE_URL):
+            return True
+        if _PROC.poll() is not None:
+            break
+
+    # Server didn't start — kill and report
+    if _PROC and _PROC.poll() is None:
+        _PROC.kill()
+    return False
 
 
-@pytest.fixture(scope='module')
-def client():
-    """HTTP client for integration tests against running server"""
-    with httpx.Client(base_url=_get_server_url(), follow_redirects=True, timeout=5.0) as c:
+def _stop_server():
+    global _PROC
+    if _PROC and _PROC.poll() is None:
+        try:
+            _PROC.terminate()
+            _PROC.wait(timeout=5)
+        except Exception:
+            try:
+                _PROC.kill()
+            except Exception:
+                pass
+    _PROC = None
+    _PORT = None
+    _BASE_URL = None
+
+
+# ================================================================
+# Session-scoped fixture: manages server lifecycle
+# ================================================================
+
+@pytest.fixture(scope='session', autouse=True)
+def pwa_test_server():
+    """Auto-start a test server if none is available on the default port."""
+    global _PORT, _BASE_URL
+
+    # Check if server already running on common ports
+    for candidate_port in (8080, 8081, 8082):
+        url = f'http://127.0.0.1:{candidate_port}'
+        if _server_alive(url):
+            _PORT = candidate_port
+            _BASE_URL = url
+            yield
+            return
+
+    # No server found — start one on a free port
+    port = _find_free_port()
+    if not _start_server(port):
+        pytest.skip('Could not start test server')
+        return
+
+    yield
+
+    _stop_server()
+
+
+# ================================================================
+# HTTP client
+# ================================================================
+
+@pytest.fixture(scope='session')
+def client(pwa_test_server):
+    with httpx.Client(base_url=_BASE_URL, follow_redirects=True, timeout=10.0) as c:
         yield c
 
 
@@ -102,18 +197,17 @@ class TestIconEndpoints:
         r = client.get(f'/{filename}')
         assert r.status_code == 200, f"{filename} returned {r.status_code}"
 
-    @pytest.mark.parametrize("filename,expected_ct", [
+    @pytest.mark.parametrize("path,expected_ct", [
         ('icons/icon-192.png', 'image/png'),
         ('icons/icon-512.png', 'image/png'),
         ('icons/icon-maskable-192.png', 'image/png'),
         ('icons/icon-maskable-512.png', 'image/png'),
         ('icons/icon.svg', 'image/svg+xml'),
     ])
-    def test_icon_content_type(self, client, filename, expected_ct):
-        path, exp = filename
+    def test_icon_content_type(self, client, path, expected_ct):
         r = client.get(f'/{path}')
         ct = r.headers.get('content-type', '')
-        assert exp in ct.lower(), f"{path} content-type should contain '{exp}', got: {ct}"
+        assert expected_ct in ct.lower(), f"{path} content-type should contain '{expected_ct}', got: {ct}"
 
     def test_icon_not_empty(self, client):
         r = client.get('/icons/icon-192.png')
@@ -144,12 +238,11 @@ class TestMainPagePwa:
 
 
 # ================================================================
-# Error handling: missing PWA files return 404 gracefully
+# Error handling
 # ================================================================
 
 class TestPwaErrorHandling:
     def test_missing_sw_returns_404(self, client):
-        """If sw.js is moved, should return 404 not crash"""
         r = client.get('/sw.js')
         assert r.status_code in (200, 404), f"sw.js should be 200 or 404, got {r.status_code}"
 
@@ -159,20 +252,15 @@ class TestPwaErrorHandling:
 
 
 # ================================================================
-# Cross-origin / security
+# Security headers
 # ================================================================
 
 class TestPWASecurity:
     def test_manifest_no_x_frame_options_conflict(self, client):
-        """manifest.json should not have X-Frame-Options that would block embeds"""
         r = client.get('/manifest.json')
-        xfo = r.headers.get('x-frame-options', '')
-        # manifest is a JSON file, not rendered in iframe — this is informational
         assert r.status_code == 200
 
-    def test_sw_no_x_content_type_options_nosniff(self, client):
-        """SW should be served without nosniff that could block registration"""
+    def test_sw_no_nosniff_block(self, client):
         r = client.get('/sw.js')
         if r.status_code == 200:
-            # Some nosniff is fine; we just want to verify it serves
-            pass
+            pass  # served successfully
