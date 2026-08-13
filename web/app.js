@@ -3364,8 +3364,20 @@ function initMobileLayout() {
   const body = document.body;
   if (isMobile()) {
     body.classList.add('mobile');
+    // Show tab bar on mobile
+    const tabBar = document.getElementById('mobile-tab-bar');
+    if (tabBar) tabBar.style.display = 'flex';
+    // Add padding-bottom to main content for tab bar
+    const main = document.querySelector('.main');
+    if (main) main.style.paddingBottom = '64px';
   } else {
     body.classList.remove('mobile');
+    // Hide tab bar on desktop
+    const tabBar = document.getElementById('mobile-tab-bar');
+    if (tabBar) tabBar.style.display = 'none';
+    // Remove padding from main on desktop
+    const main = document.querySelector('.main');
+    if (main) main.style.paddingBottom = '';
   }
 }
 
@@ -4255,7 +4267,28 @@ window.addEventListener('offline', () => {
   updateSyncIndicator();
 });
 
-// === 3.4 Network Status Indicator ===
+// === Phase 3.5: Mobile Tab Bar ===
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(function (btn) {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  switch (tab) {
+    case 'files':
+      document.getElementById('sidebar').classList.add('open');
+      break;
+    case 'search':
+      document.getElementById('search-input') && document.getElementById('search-input').focus();
+      break;
+    case 'graph':
+      window.open('/graph-viewer.html', '_blank');
+      break;
+    case 'stats':
+      window.location.href = '/admin#stats';
+      break;
+  }
+}
+
+// === Phase 3.4: Network Status Indicator ===
 (function initNetworkStatus() {
   const el = document.getElementById('network-status');
   if (!el) return;
@@ -4710,3 +4743,7 @@ function initSearchSticky() {
     }
   }, { passive: true });
 })();
+
+// === Expose Phase 3.5 functions globally for onclick handlers ===
+window.switchTab = switchTab;
+window.toggleSidebar = toggleSidebar;

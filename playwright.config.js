@@ -13,6 +13,8 @@ export default defineConfig({
     baseURL: process.env.BASE_URL || 'http://127.0.0.1:8080',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Disable browser cache for JS files to ensure fresh versions
+    bypassCSP: true,
   },
   projects: [
     {

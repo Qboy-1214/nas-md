@@ -48,21 +48,17 @@
   // === Floating notification (outside editor DOM) ===
 
   function showCollabNotification(author, changeType, paraIdx) {
-    var container = document.getElementById('collab-notifications');
-    if (!container) {
-      container = document.createElement('div');
-      container.id = 'collab-notifications';
-      container.style.cssText =
-        'position:fixed;top:60px;right:20px;z-index:9999;pointer-events:none;display:flex;flex-direction:column;gap:6px;';
-      document.body.appendChild(container);
+    // Remove old toast if present
+    var old = document.querySelector('.collab-toast');
+    if (old) {
+      old.classList.remove('show');
+      setTimeout(function () { if (old.parentNode) old.parentNode.removeChild(old); }, 300);
     }
 
-    var notif = document.createElement('div');
-    notif.style.cssText =
-      'background:' +
-      (author.color || '#3498db') +
-      ';color:white;padding:6px 14px;border-radius:16px;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,0.2);opacity:0;transition:opacity 0.3s;display:flex;align-items:center;gap:6px;';
+    var toast = document.createElement('div');
+    toast.className = 'collab-toast';
 
+    var initial = (author.name || '?').charAt(0).toUpperCase();
     var actionText = '';
     switch (changeType) {
       case 'replace':
@@ -76,25 +72,24 @@
         break;
     }
 
-    notif.innerHTML =
-      '<span style="font-weight:bold;">' +
-      escapeHtml(author.name || 'Anonymous') +
-      '</span><span>' +
-      actionText +
-      '</span>';
+    toast.innerHTML =
+      '<div class="toast-avatar" style="background:' + (author.color || '#3498db') + '">' +
+        initial +
+      '</div>' +
+      '<div class="toast-text"><strong>' + escapeHtml(author.name || 'Anonymous') + '</strong> ' + actionText + '</div>';
 
-    container.appendChild(notif);
+    document.body.appendChild(toast);
 
-    // Fade in
+    // Animate in
     requestAnimationFrame(function () {
-      notif.style.opacity = '1';
+      toast.classList.add('show');
     });
 
-    // Fade out and remove after 3 seconds
+    // Auto-remove after 3 seconds
     setTimeout(function () {
-      notif.style.opacity = '0';
+      toast.classList.remove('show');
       setTimeout(function () {
-        if (notif.parentNode) notif.parentNode.removeChild(notif);
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
       }, 300);
     }, 3000);
   }

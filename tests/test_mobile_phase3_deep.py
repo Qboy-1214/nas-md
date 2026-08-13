@@ -407,21 +407,17 @@ class TestNetworkStatusBehavior:
 # ================================================================
 
 class TestPhase3Future:
-    def test_tab_bar_not_yet_present(self):
-        """Phase 3.5 (tab bar) not yet implemented — should not exist"""
+    def test_tab_bar_present(self):
         path = os.path.join(WEB_DIR, 'index.html')
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
-        assert 'mobile-tab-bar' not in content, \
-            "mobile-tab-bar should not exist yet (Phase 3.5 not implemented)"
+        assert 'mobile-tab-bar' in content, "tab bar should now exist"
 
-    def test_collab_toast_not_yet_present(self):
-        """Phase 3.6 (collab toast) not yet implemented"""
+    def test_collab_toast_present(self):
         path = os.path.join(WEB_DIR, 'sync_layer.js')
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
-        assert 'collab-toast' not in content, \
-            "collab-toast should not exist yet (Phase 3.6 not implemented)"
+        assert 'collab-toast' in content, "collab toast should now exist"
 
 
 # ================================================================
