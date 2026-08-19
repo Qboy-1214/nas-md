@@ -627,15 +627,6 @@ async function buildTreeFromFileMap(fileMap, parentPath) {
   const dirMap = {};
 
   for (const [filePath, file] of Object.entries(fileMap)) {
-    let valid = false;
-    try {
-      await file.slice(0, 1).arrayBuffer();
-      valid = true;
-    } catch (_) {
-      /* file deleted externally */
-    }
-    if (!valid) continue;
-
     const relFromRoot = filePath.startsWith('/') ? filePath.substring(1) : filePath;
     const parts = relFromRoot.split('/');
     let currentPath = '';
@@ -863,8 +854,8 @@ function onDirPicked(event) {
 
     // Ensure all parent directories exist in the tree
     let currentPath = '';
-    for (let i = 0; i < parts.length - 1; i++) {
-      const parentPath = currentPath;
+    for (let i = 1; i < parts.length - 1; i++) {
+      const parentPath = currentPath || '/';
       currentPath = currentPath + '/' + parts[i];
       if (!dirMap[currentPath]) {
         const dirEntry = {
@@ -880,8 +871,8 @@ function onDirPicked(event) {
       }
     }
     // Add file entry
-    const filePath = currentPath + '/' + fileName;
-    const parentDir = dirMap[currentPath] || root;
+    const filePath = (currentPath || '') + '/' + fileName;
+    const parentDir = dirMap[currentPath || '/'] || root;
     parentDir.children.push({
       name: fileName,
       path: filePath,
