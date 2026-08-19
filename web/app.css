@@ -2575,3 +2575,34 @@ a:hover {
 .mme-toolbar[data-mme-theme='dark'] .mme-sep {
   background: #45475a;
 }
+
+/* ── Fullscreen Mode ── */
+[data-mme-protected].mme-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 10000 !important;
+  background: var(--c-canvas, #ffffff) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+[data-mme-protected].mme-fullscreen .mme-toolbar {
+  border-radius: 0 !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-top: none !important;
+  padding: 8px 16px !important;
+}
+
+[data-mme-protected].mme-fullscreen .mme-chart-target,
+[data-mme-protected].mme-fullscreen .language-mermaid[data-mme-enhanced],
+[data-mme-protected].mme-fullscreen .mme-code-area {
+  flex: 1 !important;
+  max-height: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+}

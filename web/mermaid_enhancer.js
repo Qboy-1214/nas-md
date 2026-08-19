@@ -131,6 +131,10 @@
       '<button class="mme-btn" data-action="zoomOut" title="缩小">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>' +
       '</button>' +
+      '<button class="mme-btn" data-action="toggleFullscreen" title="全屏查看">' +
+      '<svg class="mme-icon-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>' +
+      '<svg class="mme-icon-exit-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>' +
+      '</button>' +
       '<div class="mme-sep"></div>' +
       '<button class="mme-btn" data-action="downloadSVG" title="下载 SVG">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>SVG</span>' +
@@ -182,6 +186,9 @@
         break;
       case 'zoomOut':
         setZoom(id, Math.max(state.zoom - 0.25, 0.25), chartEl);
+        break;
+      case 'toggleFullscreen':
+        toggleFullscreen(id, toolbar, chartEl);
         break;
       case 'downloadSVG':
         downloadSVG(chartEl);
@@ -382,6 +389,34 @@
   function setZoom(id, zoom, chartEl) {
     _blocks[id].zoom = zoom;
     applyTransform(id, chartEl);
+  }
+
+  // ── Fullscreen toggle ──────────────────────────────────────
+  function toggleFullscreen(id, toolbar, chartEl) {
+    var wrapper = toolbar.closest('[data-mme-protected]');
+    if (!wrapper) wrapper = toolbar.parentElement;
+    var isFs = wrapper.classList.toggle('mme-fullscreen');
+    
+    var iconFs = toolbar.querySelector('.mme-icon-fullscreen');
+    var iconExit = toolbar.querySelector('.mme-icon-exit-fullscreen');
+    if (iconFs) iconFs.style.display = isFs ? 'none' : '';
+    if (iconExit) iconExit.style.display = isFs ? '' : 'none';
+    
+    var btn = toolbar.querySelector('[data-action="toggleFullscreen"]');
+    if (btn) btn.title = isFs ? '退出全屏' : '全屏查看';
+
+    // ESC key listener to exit fullscreen
+    if (isFs) {
+      wrapper._mmeEscHandler = function (e) {
+        if (e.key === 'Escape' && wrapper.classList.contains('mme-fullscreen')) {
+          toggleFullscreen(id, toolbar, chartEl);
+        }
+      };
+      document.addEventListener('keydown', wrapper._mmeEscHandler);
+    } else if (wrapper._mmeEscHandler) {
+      document.removeEventListener('keydown', wrapper._mmeEscHandler);
+      delete wrapper._mmeEscHandler;
+    }
   }
 
   // ── Copy code ────────────────────────────────────────────
