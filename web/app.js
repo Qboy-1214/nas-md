@@ -492,7 +492,9 @@ async function loadMounts() {
   if (_loadMountsBusy) return;
   _loadMountsBusy = true;
   try {
-    state.mounts = await API.getMounts();
+    const remoteMounts = await API.getMounts();
+    const localMounts = state.mounts.filter((m) => m._local);
+    state.mounts = [...remoteMounts, ...localMounts];
     renderSidebar();
   } catch (_e) {
     showToast('加载挂载点失败');
@@ -843,16 +845,16 @@ function onDirPicked(event) {
   // Build tree from flat file list
   const root = { name: dirName, path: '/', isDir: true, children: [], hasMd: false };
   const dirMap = { '/': root };
+  const fileMap = {};
 
   for (const file of files) {
     const relPath = file.webkitRelativePath; // e.g. "mydir/sub/file.md"
     if (!relPath) continue;
     const parts = relPath.split('/');
-    // Only include .md files
     const fileName = parts[parts.length - 1];
     if (!fileName.toLowerCase().endsWith('.md')) continue;
 
-    // Ensure all parent directories exist in the tree
+    // Save into fileMap and ensure all parent directories exist in the tree
     let currentPath = '';
     for (let i = 1; i < parts.length - 1; i++) {
       const parentPath = currentPath || '/';
@@ -870,8 +872,9 @@ function onDirPicked(event) {
         parent.children.push(dirEntry);
       }
     }
-    // Add file entry
     const filePath = (currentPath || '') + '/' + fileName;
+    fileMap[filePath] = file;
+    // Add file entry
     const parentDir = dirMap[currentPath || '/'] || root;
     parentDir.children.push({
       name: fileName,
@@ -902,16 +905,6 @@ function onDirPicked(event) {
     entry.children.forEach(sortChildren);
   }
   sortChildren(root);
-
-  // Store file references for reading later
-  const fileMap = {};
-  for (const file of files) {
-    if (file.webkitRelativePath) {
-      const parts = file.webkitRelativePath.split('/');
-      const filePath = '/' + parts.slice(1).join('/');
-      fileMap[filePath] = file;
-    }
-  }
 
   state.localMounts[mountId] = { fileMap, name: dirName };
   state.mounts.push({
@@ -995,13 +988,14 @@ async function toggleDir(mountId, dirPath) {
 }
 
 async function loadTree(mountId, path, force = false) {
-  if (!state.treeData[mountId]) state.treeData[mountId] = {};
   // Skip if already loaded (unless forced)
+  if (!state.treeData[mountId]) state.treeData[mountId] = {};
   if (!force && state.treeData[mountId][path]) return;
   // Local mount: load via File System Access API
   const mount = state.mounts.find((m) => m.id === mountId);
-  if (mount && mount._local && state.localMounts[mountId]) {
+  if (mount && mount._local) {
     const localMount = state.localMounts[mountId];
+    if (!localMount) return;
     // FSAA mode: read live directory handle
     if (localMount.handle) {
       try {
@@ -1014,10 +1008,27 @@ async function loadTree(mountId, path, force = false) {
       }
       return;
     }
-    // Fallback mode (webkitdirectory): rebuild tree from fileMap
+    // Fallback mode (webkitdirectory): tree is pre-built during onDirPicked in state.treeData[mountId]['/']
     if (localMount.fileMap) {
-      const tree = buildTreeFromFileMap(localMount.fileMap, path);
-      state.treeData[mountId][path] = tree;
+      if (path !== '/') {
+        const rootTree = state.treeData[mountId]['/'];
+        const findNode = (node, p) => {
+          if (node.path === p) return node;
+          if (node.children) {
+            for (const child of node.children) {
+              if (child.isDir) {
+                const found = findNode(child, p);
+                if (found) return found;
+              }
+            }
+          }
+          return null;
+        };
+        const subNode = rootTree ? findNode(rootTree, path) : null;
+        if (subNode) {
+          state.treeData[mountId][path] = subNode;
+        }
+      }
       return;
     }
   }
