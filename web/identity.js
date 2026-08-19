@@ -55,10 +55,21 @@
     return { os: os, browser: browser };
   }
 
+  function generateUUID() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0;
+      var v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
   function generateIdentity() {
     var name = pick(ADJECTIVES) + pick(ANIMALS) + Math.floor(Math.random() * 100);
     var color = pick(COLORS);
-    var id = crypto.randomUUID();
+    var id = generateUUID();
     var clientInfo = parseUserAgent();
     return { id: id, name: name, color: color, os: clientInfo.os, browser: clientInfo.browser };
   }
