@@ -2784,7 +2784,10 @@ def serve(
         else "(none)"
     )
     web_str = web_root if web_root else "(none)"
-    logger.info(f"Starting servers on {host}: HTTP port {port}" + (f", HTTPS port {https_port}" if https_server else ""))
+    logger.info(
+        f"Starting servers on {host}: HTTP port {port}"
+        + (f", HTTPS port {https_port}" if https_server else "")
+    )
     logger.info(f"  Mount points: {mounts_str}")
     logger.info(f"  Web root: {web_str}")
     logger.info("  Admin: access via /admin URL path")
