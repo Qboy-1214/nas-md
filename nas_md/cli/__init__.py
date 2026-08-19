@@ -49,6 +49,7 @@ def cmd_web() -> None:
     public_mount_names = cfg_mod.server_cfg.public_mount_names()
     web_root = cfg_mod.server_cfg.web_root
     port = cfg_mod.server_cfg.web_port
+    https_port = cfg_mod.server_cfg.https_port
     storage_dir = cfg_mod.server_cfg.storage_dir
 
     from nas_md.webserver import serve
@@ -59,6 +60,7 @@ def cmd_web() -> None:
         public_mount_names=public_mount_names,
         web_root=web_root,
         port=port,
+        https_port=https_port,
         storage_dir=storage_dir,
     )
 

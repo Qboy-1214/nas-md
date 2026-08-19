@@ -13,6 +13,7 @@ from pathlib import Path
 # --- 配置 ---
 BASE_DIR = Path(__file__).resolve().parent
 WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
+HTTPS_PORT = int(os.environ.get("HTTPS_PORT", "8443"))
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")
 MOUNT_DIRS = os.environ.get("MOUNT_DIRS", "")  # 留空，由用户通过前端打开目录
 OPEN_BROWSER_DELAY = 2  # 秒
@@ -38,6 +39,7 @@ def setup_env():
     """设置环境变量默认值"""
     defaults = {
         "WEB_PORT": str(WEB_PORT),
+        "HTTPS_PORT": str(HTTPS_PORT),
         "WEB_HOST": WEB_HOST,
         "WEB_ROOT": str(BASE_DIR / "web"),
         "STORAGE_DIR": str(BASE_DIR / "storage"),
@@ -54,7 +56,8 @@ def print_banner():
     print("=" * 50)
     print("  nas-md - 个人知识管理系统")
     print("=" * 50)
-    print(f"  访问地址: http://{WEB_HOST}:{WEB_PORT}")
+    print(f"  HTTP 访问地址: http://{WEB_HOST}:{WEB_PORT}")
+    print(f"  HTTPS 访问地址: https://{WEB_HOST}:{HTTPS_PORT}")
     print(f"  静态文件: {os.environ.get('WEB_ROOT', '(none)')}")
 
     mount_dirs = os.environ.get("MOUNT_DIRS", "")

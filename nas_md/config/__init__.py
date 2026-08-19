@@ -45,6 +45,7 @@ class Config:
     )
     web_root: str = "./web"
     web_port: int = 8080
+    https_port: int = 8443
     web_host: str = "127.0.0.1"
     open_browser: bool = True
     tz: str = "UTC"  # Timezone for scheduled tasks and date display (e.g. "Asia/Shanghai")
@@ -161,6 +162,7 @@ def load_bot_config() -> None:
         "PUBLIC_MOUNTS": "public_mounts",
         "WEB_ROOT": "web_root",
         "WEB_PORT": ("web_port", int),
+        "HTTPS_PORT": ("https_port", int),
         "WEB_HOST": "web_host",
         "TZ": "tz",
     }

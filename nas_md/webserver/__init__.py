@@ -13,6 +13,7 @@ import socket
 import ssl
 import stat
 import subprocess
+import threading
 import time
 import traceback
 import uuid
@@ -2652,6 +2653,7 @@ def serve(
     public_mount_names: set[str] | None = None,
     web_root: str = "",
     port: int = 8080,
+    https_port: int = 8443,
     host: str = "0.0.0.0",
     storage_dir: str = "",
 ):
@@ -2764,9 +2766,17 @@ def serve(
     # Initialize search index
     _init_search_index(all_dirs)
 
-    # In Docker mode, enable HTTPS with self-signed cert for LAN access
-    cert_dir = os.path.join(storage_dir, "certs") if _docker_mode and storage_dir else ""
-    server = _create_server(host, port, MountHTTPHandler, cert_dir=cert_dir)
+    # Create HTTP server
+    http_server = _create_server(host, port, MountHTTPHandler, cert_dir="")
+
+    # Create HTTPS server
+    cert_dir = os.path.join(storage_dir, "certs") if storage_dir else ""
+    https_server = None
+    if cert_dir and https_port:
+        try:
+            https_server = _create_server(host, https_port, MountHTTPHandler, cert_dir=cert_dir)
+        except Exception as e:
+            logger.warning(f"HTTPS server initialization failed: {e}")
 
     mounts_str = (
         ", ".join(f"{m.name} ({m.id})={m.path}" for m in mgr.mounts)
@@ -2774,40 +2784,33 @@ def serve(
         else "(none)"
     )
     web_str = web_root if web_root else "(none)"
-    protocol = "HTTPS" if cert_dir else "HTTP"
-    logger.info(f"Starting {protocol} server on {host}:{port}")
+    logger.info(f"Starting servers on {host}: HTTP port {port}" + (f", HTTPS port {https_port}" if https_server else ""))
     logger.info(f"  Mount points: {mounts_str}")
     logger.info(f"  Web root: {web_str}")
     logger.info("  Admin: access via /admin URL path")
-    logger.info("  API endpoints:")
-    logger.info("    GET  /api/health")
-    logger.info("    GET  /api/search?q=keyword")
-    logger.info("    GET  /api/query?type=task|tag|heading|link")
-    logger.info("    GET  /api/backlinks?page=xxx")
-    logger.info("    GET  /api/stats")
-    logger.info("    GET  /api/graph")
-    logger.info("    POST /api/sync")
-    logger.info("    GET  /api/sync/status")
-    logger.info("    GET  /api/plugins")
-    logger.info("    GET  /api/mounts")
-    logger.info("    GET  /api/mounts/public")
-    logger.info("    PUT  /api/mounts/{id}")
-    logger.info("    GET  /api/mounts/{id}/tree?path=/")
-    logger.info("    GET  /api/mounts/{id}/tree-recursive?path=/")
-    logger.info("    GET  /api/mounts/{id}/file?path=/file.md")
-    logger.info("    PUT  /api/mounts/{id}/file?path=/file.md  (deprecated, use POST /changes)")
-    logger.info("    POST /api/mounts/{id}/changes?path=/file.md  (version-driven)")
-    logger.info("    PUT  /api/mounts/{id}/rename?oldPath=/a.md&newPath=/b.md")
-    logger.info("    PUT  /api/mounts/{id}/mkdir?path=/newdir")
-    logger.info("    DELETE /api/mounts/{id}/file?path=/file.md")
-    logger.info(f"  Static files: {'https' if cert_dir else 'http'}://localhost:{port}/")
+    logger.info(f"  HTTP Access: http://localhost:{port}/")
+    if https_server:
+        logger.info(f"  HTTPS Access: https://localhost:{https_port}/")
+
+    servers = [http_server]
+    if https_server:
+        servers.append(https_server)
+
+    threads = []
+    for s in servers:
+        s.timeout = 0.5
+        t = threading.Thread(target=s.serve_forever, daemon=True)
+        t.start()
+        threads.append(t)
 
     try:
-        server.timeout = 0.5  # Allow Ctrl+C on Windows (select() won't block indefinitely)
-        server.serve_forever()
+        while True:
+            time.sleep(0.5)
     except KeyboardInterrupt:
-        logger.info("Server stopped.")
-        server.server_close()
+        logger.info("Servers stopping...")
+        for s in servers:
+            s.server_close()
+        logger.info("Servers stopped.")
 
 
 def _generate_self_signed_cert(cert_dir: str) -> tuple[str, str]:

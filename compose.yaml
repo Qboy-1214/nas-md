@@ -3,7 +3,8 @@ services:
     image: ghcr.io/qboy-1214/nas-md:latest
     build: .
     ports:
-      - "443:8080"  # HTTPS: Docker 模式自动生成自签名证书
+      - "8080:8080"
+      - "8443:8443"
     volumes:
       - storage:/app/storage
       - tokens:/app/tokens  # Telegram Bot 令牌存储（Web 模式未使用）

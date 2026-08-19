@@ -68,6 +68,7 @@ class TestLoadBotConfig:
             "STORAGE_QUOTA_KB": "2048",
             "UNLIMITED_QUOTA_IDS": "123,456",
             "MOUNT_DIRS": "/a;/b",
+            "HTTPS_PORT": "8443",
         },
     )
     def test_load_all_env_vars(self):
@@ -88,6 +89,7 @@ class TestLoadBotConfig:
         assert cfg_mod.server_cfg.storage_quota_kb == 2048
         assert cfg_mod.server_cfg.unlimited_quota_ids == "123,456"
         assert cfg_mod.server_cfg.mount_dirs == "/a;/b"
+        assert cfg_mod.server_cfg.https_port == 8443
 
     @patch.dict(os.environ, {}, clear=False)
     def test_load_defaults(self):

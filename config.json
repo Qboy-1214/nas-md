@@ -3,6 +3,7 @@
   "storage_dir": "./storage",
   "tokens_dir": "./tokens",
   "web_port": 8080,
+  "https_port": 8443,
   "web_host": "127.0.0.1",
   "web_auth_token": "",
   "mount_dirs": "",

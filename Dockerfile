@@ -28,7 +28,7 @@ VOLUME ["/app/storage", "/app/tokens"]
 # Run as root to access host-mounted directories with arbitrary ownership
 # USER app
 
-EXPOSE 8080
+EXPOSE 8080 8443
 
 ENV PYTHONPATH=/app
 ENV WEB_ROOT=/app/web
