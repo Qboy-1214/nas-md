@@ -47,10 +47,10 @@
 
 **位置**：`nas_md/webserver/__init__.py`
 
-**职责**：接收原始 bytes + content_type，返回 `(compressed_bytes, was_compressed)`。
+**职责**：接收原始 bytes + content_type + handler，返回 `(compressed_bytes, was_compressed)`。
 
 **逻辑**：
-1. 客户端 `Accept-Encoding` 不含 `gzip` → 原样返回
+1. `handler` 不为 None 且客户端 `Accept-Encoding` 不含 `gzip` → 原样返回
 2. content_type 含 `image/`、`font/`、`video/`、`audio/`、`event-stream` → 原样返回
 3. 数据长度 < 512 字节 → 原样返回
 4. 其他情况 → `gzip.GzipFile(fileobj, mode='wb', mtime=0, compresslevel=1)` 压缩
