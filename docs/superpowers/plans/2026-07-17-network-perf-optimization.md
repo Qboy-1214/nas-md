@@ -51,14 +51,18 @@ def _compute_etag(filepath: str) -> str | None:
         return None
 
 
-def _compress(data: bytes, content_type: str) -> tuple[bytes, bool]:
+def _compress(data: bytes, content_type: str, handler=None) -> tuple[bytes, bool]:
     """统一压缩入口。返回 (compressed_data, was_compressed)。
 
-    排除规则：
-    - Accept-Encoding 不含 gzip
+    排除规则（任一满足则原样返回）：
+    - 客户端 Accept-Encoding 不含 gzip
     - 已压缩类型（image/*、font/*、video/*、audio/*、text/event-stream）
     - 数据长度 < 512 字节
     """
+    # 检查客户端是否支持 gzip（handler 为 None 时视为不支持，调用方负责兜底）
+    if handler is not None:
+        if not _accepts_gzip(handler):
+            return data, False
     if len(data) < 512:
         return data, False
     # image/font/video/audio 已由调用方排除，此处额外保险
@@ -147,8 +151,8 @@ git commit -m "feat(webserver): add _compute_etag and _compress helpers"
         try:
             with open(full_path, "rb") as f:
                 data = f.read()
-            # 统一 Gzip 压缩
-            compressed, did_compress = _compress(data, ct)
+            # 统一 Gzip 压缩（handler=self 传入以检查 Accept-Encoding）
+            compressed, did_compress = _compress(data, ct, handler=self)
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -197,7 +201,7 @@ git commit -m "feat(webserver): tiered cache + ETag + gzip in _serve_static"
 ```python
     def _send_json(self, data: dict | list, status: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        compressed, did_compress = _compress(body, "application/json")
+        compressed, did_compress = _compress(body, "application/json", handler=self)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -240,7 +244,8 @@ git commit -m "feat(webserver): tiered cache + ETag + gzip in _serve_static"
 
 ```python
             # Tier 3: no-store + Gzip for text/markdown files > 512 bytes
-            compressed, did_compress = _compress(data, ct)
+            # 注意：X-File-Version 是服务端元数据，不受 Gzip 影响，前端轮询逻辑不变
+            compressed, did_compress = _compress(data, ct, handler=self)
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -595,6 +600,15 @@ class TestCompress:
         result, compressed = _compress(data, "application/json")
         assert compressed
         assert gzip.decompress(result) == data
+
+    def test_skipped_when_no_accept_gzip(self):
+        """When handler explicitly signals no Accept-Encoding, compression must be skipped."""
+        class FakeHandler:
+            headers = {"Accept-Encoding": ""}
+        data = b"x" * 1000
+        result, compressed = _compress(data, "text/plain", handler=FakeHandler())
+        assert not compressed
+        assert result == data
 
 
 # ---- Integration tests ----
