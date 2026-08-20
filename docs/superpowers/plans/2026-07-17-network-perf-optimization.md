@@ -183,12 +183,14 @@ git commit -m "feat(webserver): tiered cache + ETag + gzip in _serve_static"
 
 ---
 
-### Task 3：修改 `_send_json` 接入统一 Gzip
+### Task 3：修改 `_send_json` 和 `_handle_file` 接入统一 Gzip
 
 **Files:**
-- Modify: `nas_md/webserver/__init__.py`（`_send_json` 方法，约第 508 行）
+- Modify: `nas_md/webserver/__init__.py`（`_send_json` 方法，约第 508 行；`_handle_file` 方法，约第 1306 行）
 
-- [ ] **Step 1：替换 `_send_json` body**
+> **说明**：`_send_json` 处理 `/api/**` 路由（JSON 响应），`_handle_file` 处理 `/file` 路由（Markdown/文本文件下载）。两者都属于 Tier 3（no-store + Gzip），均需接入统一压缩。
+
+- [ ] **Step 1a：替换 `_send_json` body**
 
 将现有 `_send_json` 方法 body（从 `body = json.dumps(...)` 到 `self.wfile.write(body)`）替换为：
 
@@ -215,13 +217,65 @@ git commit -m "feat(webserver): tiered cache + ETag + gzip in _serve_static"
             self.wfile.write(body)
 ```
 
+- [ ] **Step 1b：替换 `_handle_file` 响应写入逻辑**
+
+在 `_handle_file` 方法中找到这段写入逻辑（约第 1355 行起）：
+
+```python
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Mod-Time", str(mtime))
+            self.send_header("X-File-Version", str(version))
+            # Prevent browser caching so pollCurrentFile always gets fresh mtime/size
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self._flush_session_cookie()
+            self.end_headers()
+            self.wfile.write(data)
+```
+
+将其替换为：
+
+```python
+            # Tier 3: no-store + Gzip for text/markdown files > 512 bytes
+            compressed, did_compress = _compress(data, ct)
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("X-Mod-Time", str(mtime))
+            self.send_header("X-File-Version", str(version))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self._flush_session_cookie()
+            if did_compress:
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(compressed)))
+                self.end_headers()
+                self.wfile.write(compressed)
+            else:
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+```
+
+> **注意**：`_handle_file` 保持 `Cache-Control: no-cache, no-store`（Tier 3 约束），不参与 ETag 协商缓存。只加 Gzip 压缩。
+
 - [ ] **Step 2：运行现有测试确认无回归**
 
 ```bash
-python -m pytest tests/test_webserver.py tests/test_sync.py -v --tb=short
+python -m pytest tests/test_webserver.py tests/test_sync.py tests/test_sse_handler.py -v --tb=short
 ```
 
-Expected: 所有现有测试通过（`_compress` 对 <512 字节的 JSON 不压缩，`Content-Length` 不变，行为与修改前一致）。
+Expected: 所有现有测试通过。
+
+> **回归矩阵覆盖说明**：以下 Spec §5.2 中的场景由现有测试套件保障，无需额外编写测试：
+> - 多端实时协同 → `tests/test_sync.py`
+> - SSE 长连接稳定性 → `tests/test_sse_handler.py`
+> - 外部修改检测 → `tests/test_file_watcher.py`
+> - 光标/滚动恢复、撤销栈隔离 → 前端功能，由 Task 4 Step 3 手动验证
 
 - [ ] **Step 3：Commit**
 
@@ -347,36 +401,23 @@ chmod +x "D:/own project/nas-md/scripts/hash-lib-assets.sh"
 
 - [ ] **Step 2：在 Dockerfile 中插入 hash 步骤**
 
-在 Dockerfile 中找到这一行：
-
-```dockerfile
-COPY web/ /app/web/
-```
-
-在 `COPY web/ /app/web/` 之后、`RUN mkdir -p /app/storage ...` 之前插入：
+将 Dockerfile 中的：
 
 ```dockerfile
 COPY web/ /app/web/
 
-# Hash-version top-level static assets at build time for long-term cache invalidation.
-# vditor-cdn internal files are intentionally skipped (hardcoded runtime paths).
-RUN bash /app/scripts/hash-lib-assets.sh /app/web || true
-# Fallback: if hash script is not available (e.g., Windows dev), copy it first.
-COPY scripts/hash-lib-assets.sh /app/scripts/hash-lib-assets.sh
-RUN bash /app/scripts/hash-lib-assets.sh /app/web
+RUN mkdir -p /app/storage /app/tokens && chown -R app:app /app
 ```
 
-> **注意**：上面先 COPY web/，再 COPY scripts/，最后运行脚本。原因是 `COPY web/` 会覆盖 `/app/web/` 的内容，脚本需要在 web/ 之后执行。
-
-实际正确的顺序应为：
+替换为：
 
 ```dockerfile
 COPY web/ /app/web/
 COPY scripts/hash-lib-assets.sh /app/scripts/hash-lib-assets.sh
 RUN bash /app/scripts/hash-lib-assets.sh /app/web
-```
 
-请将 Dockerfile 中的相关行更新为上述正确顺序。
+RUN mkdir -p /app/storage /app/tokens && chown -R app:app /app
+```
 
 - [ ] **Step 3：本地测试 hash 脚本**
 
