@@ -113,7 +113,7 @@ done
 
 **选择理由**：Docker 部署环境下构建时处理最合适，镜像内文件自洽，零运行时开销。
 
-**⚠️ hash 版本化范围限制**：
+**⚠️ hash 版本化范围限制（已确认）**：
 
 `vditor/index.min.js` 在运行时通过路径拼接动态加载 `lib/vditor-cdn/dist/js/lute/lute.min.js`、`lib/vditor-cdn/dist/js/mermaid/mermaid.min.js` 等子资源。**这些内部路径是 Vditor 硬编码的，不能重命名**。因此 hash 版本化仅覆盖以下直接引用的顶层文件：
 
@@ -127,7 +127,9 @@ web/lib/htmx.min.js                → htmx.<hash>.min.js
 web/lib/html2pdf/html2pdf.bundle.min.js → html2pdf.<hash>.bundle.min.js
 ```
 
-`lib/vditor-cdn/dist/js/` 内部文件不参与 hash 重命名，但仍享受 Tier 1 的 30 天强缓存（文件名不变不影响缓存生效）。
+**vditor-cdn 内部文件的缓存处理**：`lib/vditor-cdn/dist/js/` 不参与 hash 重命名（避免 Vditor 运行时 404），改用 Tier 1 的 `Cache-Control: public, max-age=2592000, immutable` 强缓存即可——文件名不变不影响缓存生效，且 30 天内内容不变时浏览器直接从磁盘命中。
+
+**本地开发模式兼容性**：Dockerfile 中的 hash 重命名脚本仅在构建镜像时执行，`web/` 目录的原始文件不受影响。开发者通过 `python start.py` 本地运行时代码时，看到的是原文件名，ETag 协商缓存正常工作，与生产 Docker 镜像行为无缝互补。
 
 ---
 
@@ -177,6 +179,7 @@ gzip_min 512
 | T1 | Gzip CPU 开销 | cURL 10 并发压测 | 13.7KB JSON 压缩 <10ms，CPU <15% | 提高体积阈值至 1KB 或跳过 Gzip |
 | T2 | SSE 实时性 | 双端协同 + Wireshark | 事件延迟 <200ms，无乱序 | 降级为压缩级别 1 |
 | T3 | hash 版本化 | 修改 lib 文件后重新部署 | 浏览器获取新 hash URL，返回 200 | 回滚 Docker 镜像 |
+| T3b | vditor-cdn 路径不破坏 | 本地运行 `python start.py` 访问图谱页 | lute.min.js、mermaid.min.js 正常加载，无 404 | — |
 
 ### 5.2 功能回归矩阵
 
