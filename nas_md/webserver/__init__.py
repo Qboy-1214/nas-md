@@ -2662,9 +2662,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         ct = _content_type(full_path)
 
-        # --- ETag / 304 check (only for non-/lib/ files) ---
-        is_lib = path.startswith("/lib/")
-        etag = None if is_lib else _compute_etag(full_path)
+        # --- ETag / 304 check for all static files ---
+        etag = _compute_etag(full_path)
         if etag:
             if_none_match = self.headers.get("If-None-Match")
             if if_none_match == etag:
@@ -2681,12 +2680,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", ct)
             self.send_header("Access-Control-Allow-Origin", "*")
             # --- Cache-Control 分层 ---
+            is_lib = path.startswith("/lib/")
             if is_lib:
-                self.send_header("Cache-Control", "public, max-age=2592000, immutable")
+                self.send_header("Cache-Control", "public, max-age=2592000")
             else:
                 self.send_header("Cache-Control", "no-cache")
-                if etag:
-                    self.send_header("ETag", etag)
+            if etag:
+                self.send_header("ETag", etag)
             self._flush_session_cookie()
             if did_compress:
                 self.send_header("Content-Encoding", "gzip")

@@ -186,8 +186,7 @@ class TestStaticCacheHeaders:
         assert status == 200
         cc = headers.get("cache-control", "")
         assert "max-age=2592000" in cc
-        assert "immutable" in cc
-        assert "etag" not in headers
+        assert "etag" in headers
 
     def test_non_lib_file_has_no_cache(self, perf_server):
         status, headers = _get(f"{perf_server}/index.html")
