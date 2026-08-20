@@ -6,6 +6,7 @@ __pycache__/
 .env
 storage/mounts.json
 storage/.version_history/
+storage/certs/
 storage-test-e2e/
 tokens/
 *.db
