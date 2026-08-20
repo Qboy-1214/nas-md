@@ -20,6 +20,8 @@ COPY --from=build /src/pyproject.toml /app/pyproject.toml
 COPY --from=build /usr/local/lib/python3.13/site-packages/ /usr/local/lib/python3.13/site-packages/
 COPY --from=build /usr/local/bin/ /usr/local/bin/
 COPY web/ /app/web/
+COPY scripts/hash-lib-assets.sh /app/scripts/hash-lib-assets.sh
+RUN bash /app/scripts/hash-lib-assets.sh /app/web
 
 RUN mkdir -p /app/storage /app/tokens && chown -R app:app /app
 # tokens: Telegram Bot 令牌存储（Web 模式未使用）

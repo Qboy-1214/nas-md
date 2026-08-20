@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import gzip
+import hashlib
 import json
 import logging
 import mimetypes
@@ -485,6 +486,45 @@ def _accepts_gzip(handler: MountHTTPHandler) -> bool:
     return "gzip" in ae
 
 
+def _compute_etag(filepath: str) -> str | None:
+    """用文件内容前 512 字节的 SHA1（取前 12 位）+ 完整 size 生成弱 ETag。
+
+    避免空文件碰撞（不同空文件 mtime 相同但 size 可区分），
+    且仅需读取前 512 字节，NAS ARM 设备上开销可忽略。
+    """
+    try:
+        size = os.path.getsize(filepath)
+        with open(filepath, "rb") as f:
+            head = f.read(512)
+        h = hashlib.sha1(head).hexdigest()[:12]
+        return f'W/"{h}-{size}"'
+    except OSError:
+        return None
+
+
+def _compress(data: bytes, content_type: str, handler=None) -> tuple[bytes, bool]:
+    """统一压缩入口。返回 (compressed_data, was_compressed)。
+
+    排除规则（任一满足则原样返回）：
+    - 客户端 Accept-Encoding 不含 gzip
+    - 已压缩类型（image/*、font/*、video/*、audio/*、text/event-stream）
+    - 数据长度 < 512 字节
+    """
+    if handler is not None and not _accepts_gzip(handler):
+        return data, False
+    if len(data) < 512:
+        return data, False
+    low = content_type.lower()
+    if any(t in low for t in ["image/", "font/", "video/", "audio/"]):
+        return data, False
+    if "event-stream" in low:
+        return data, False
+    buf = BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0, compresslevel=1) as gz:
+        gz.write(data)
+    return buf.getvalue(), True
+
+
 # --- Request Handler ---
 
 
@@ -507,17 +547,24 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
     def _send_json(self, data: dict | list, status: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        compressed, did_compress = _compress(body, "application/json", handler=self)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         # Prevent browser caching of dynamic API responses
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
         self._flush_session_cookie()
-        self.end_headers()
-        self.wfile.write(body)
+        if did_compress:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(compressed)))
+            self.end_headers()
+            self.wfile.write(compressed)
+        else:
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
     def _send_error(self, msg: str, status: int = 400):
         self._send_json({"error": msg}, status)
@@ -1350,18 +1397,27 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     store.init_file(file_key, abs_path, data.decode("utf-8", errors="replace"))
             except Exception:
                 version = 0
+            # Tier 3: no-store + Gzip for text/markdown files > 512 bytes
+            # 注意：X-File-Version 是服务端元数据，不受 Gzip 影响，前端轮询逻辑不变
+            compressed, did_compress = _compress(data, ct, handler=self)
             self.send_response(200)
             self.send_header("Content-Type", ct)
-            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("X-Mod-Time", str(mtime))
             self.send_header("X-File-Version", str(version))
-            # Prevent browser caching so pollCurrentFile always gets fresh mtime/size
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
             self._flush_session_cookie()
-            self.end_headers()
-            self.wfile.write(data)
+            if did_compress:
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(compressed)))
+                self.end_headers()
+                self.wfile.write(compressed)
+            else:
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
         except OSError as e:
             logger.error(f"File API: failed to read {abs_path}: {e}")
             self._send_error(str(e), 500)
@@ -2606,19 +2662,41 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         ct = _content_type(full_path)
 
+        # --- ETag / 304 check (only for non-/lib/ files) ---
+        is_lib = path.startswith("/lib/")
+        etag = None if is_lib else _compute_etag(full_path)
+        if etag:
+            if_none_match = self.headers.get("If-None-Match")
+            if if_none_match == etag:
+                self.send_response(304)
+                self.end_headers()
+                return
+
         try:
             with open(full_path, "rb") as f:
                 data = f.read()
+            # 统一 Gzip 压缩（handler=self 传入以检查 Accept-Encoding）
+            compressed, did_compress = _compress(data, ct, handler=self)
             self.send_response(200)
             self.send_header("Content-Type", ct)
-            self.send_header("Content-Length", str(len(data)))
-            # Prevent browser caching of static files during development
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            # --- Cache-Control 分层 ---
+            if is_lib:
+                self.send_header("Cache-Control", "public, max-age=2592000, immutable")
+            else:
+                self.send_header("Cache-Control", "no-cache")
+                if etag:
+                    self.send_header("ETag", etag)
             self._flush_session_cookie()
-            self.end_headers()
-            self.wfile.write(data)
+            if did_compress:
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(compressed)))
+                self.end_headers()
+                self.wfile.write(compressed)
+            else:
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
         except OSError:
             self.send_error(500, "Internal server error")
 

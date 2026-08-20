@@ -411,12 +411,12 @@
     var wrapper = toolbar.closest('[data-mme-protected]');
     if (!wrapper) wrapper = toolbar.parentElement;
     var isFs = wrapper.classList.toggle('mme-fullscreen');
-    
+
     var iconFs = toolbar.querySelector('.mme-icon-fullscreen');
     var iconExit = toolbar.querySelector('.mme-icon-exit-fullscreen');
     if (iconFs) iconFs.style.display = isFs ? 'none' : '';
     if (iconExit) iconExit.style.display = isFs ? '' : 'none';
-    
+
     var btn = toolbar.querySelector('[data-action="toggleFullscreen"]');
     if (btn) btn.title = isFs ? '退出全屏' : '全屏查看';
 

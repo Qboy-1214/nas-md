@@ -3787,6 +3787,16 @@ function navigateHome() {
 async function showGraph() {
   $('breadcrumb').textContent = '知识图谱';
   showPage('graph');
+  // 懒加载 d3：仅当未加载时动态注入 <script>
+  if (!window.d3) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'lib/d3/d3.min.js';
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load d3.min.js'));
+      document.head.appendChild(s);
+    });
+  }
   try {
     const data = await API.getGraph();
     renderGraph(data);
