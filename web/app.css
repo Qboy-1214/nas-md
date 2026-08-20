@@ -2503,9 +2503,13 @@ a:hover {
 
 .mme-chart-target svg,
 .language-mermaid[data-mme-enhanced] svg {
-  transition: transform 0.2s ease;
   transform-origin: top left;
   max-width: none !important;
+}
+
+.mme-chart-target svg.mme-animating,
+.language-mermaid[data-mme-enhanced] svg.mme-animating {
+  transition: transform 0.2s ease;
 }
 
 /* Code area: appears after the mermaid block */

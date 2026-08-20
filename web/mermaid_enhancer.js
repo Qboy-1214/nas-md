@@ -182,10 +182,10 @@
         toggleTheme(id, toolbar);
         break;
       case 'zoomIn':
-        setZoom(id, Math.min(state.zoom + 0.25, 3), chartEl);
+        setZoom(id, Math.min(state.zoom + 0.25, 3), chartEl, true);
         break;
       case 'zoomOut':
-        setZoom(id, Math.max(state.zoom - 0.25, 0.25), chartEl);
+        setZoom(id, Math.max(state.zoom - 0.25, 0.25), chartEl, true);
         break;
       case 'toggleFullscreen':
         toggleFullscreen(id, toolbar, chartEl);
@@ -298,6 +298,11 @@
     chartEl.addEventListener('mousedown', function (e) {
       if (e.button !== 0) return;
       if (chartEl.style.display === 'none') return;
+      var svg = chartEl.querySelector('svg');
+      if (svg) {
+        svg.classList.remove('mme-animating');
+        clearTimeout(svg._mmeAnimTimer);
+      }
       dragging = true;
       startX = e.clientX;
       startY = e.clientY;
@@ -329,7 +334,7 @@
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       var delta = e.deltaY < 0 ? 0.1 : -0.1;
-      setZoom(id, Math.max(0.25, Math.min(3, state.zoom + delta)), chartEl);
+      setZoom(id, Math.max(0.25, Math.min(3, state.zoom + delta)), chartEl, false);
     });
 
     chartEl.style.cursor = 'grab';
@@ -340,13 +345,13 @@
     var svg = chartEl.querySelector('svg');
     if (!svg) return;
     svg.style.transform =
-      'scale(' +
+      'translate3d(' +
+      (state.panX || 0) +
+      'px, ' +
+      (state.panY || 0) +
+      'px, 0px) scale(' +
       state.zoom +
-      ') translate(' +
-      (state.panX || 0) / state.zoom +
-      'px,' +
-      (state.panY || 0) / state.zoom +
-      'px)';
+      ')';
     svg.style.transformOrigin = 'top left';
   }
 
@@ -386,8 +391,18 @@
     if (moonIcon) moonIcon.style.display = newTheme === 'dark' ? '' : 'none';
   }
 
-  function setZoom(id, zoom, chartEl) {
+  function setZoom(id, zoom, chartEl, animate) {
     _blocks[id].zoom = zoom;
+    if (animate) {
+      var svg = chartEl.querySelector('svg');
+      if (svg) {
+        svg.classList.add('mme-animating');
+        clearTimeout(svg._mmeAnimTimer);
+        svg._mmeAnimTimer = setTimeout(function () {
+          svg.classList.remove('mme-animating');
+        }, 220);
+      }
+    }
     applyTransform(id, chartEl);
   }
 
