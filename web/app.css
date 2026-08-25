@@ -2610,3 +2610,26 @@ a:hover {
   border: none !important;
   border-radius: 0 !important;
 }
+
+/* ── Vditor Table Fixes ── */
+#vditor table,
+.vditor-reset table,
+.vditor-ir__node table,
+.vditor-wysiwyg__node table {
+  display: table !important;
+  width: 100% !important;
+  table-layout: auto !important;
+  overflow-x: visible !important;
+}
+
+#vditor table td,
+#vditor table th,
+.vditor-reset table td,
+.vditor-reset table th,
+.vditor-ir__node table td,
+.vditor-ir__node table th,
+.vditor-wysiwyg__node table td,
+.vditor-wysiwyg__node table th {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
