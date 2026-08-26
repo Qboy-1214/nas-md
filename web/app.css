@@ -2633,3 +2633,36 @@ a:hover {
   white-space: pre-wrap !important;
   word-break: break-word !important;
 }
+
+/* ── Full Width Mode (when Outline is closed) ── */
+#vditor:not(.vditor--outline-open) .vditor-toolbar {
+  padding-left: 10px !important;
+}
+
+#vditor:not(.vditor--outline-open) .vditor-ir pre.vditor-reset,
+#vditor:not(.vditor--outline-open) .vditor-wysiwyg pre.vditor-reset,
+#vditor:not(.vditor--outline-open) .vditor-preview .vditor-reset,
+#vditor:not(.vditor--outline-open) .vditor-sv {
+  padding-left: 36px !important;
+  padding-right: 36px !important;
+}
+
+#vditor:not(:has(.vditor-outline:not([style*='display: none']):not([style*='display:none'])))
+  .vditor-toolbar {
+  padding-left: 10px !important;
+}
+
+#vditor:not(:has(.vditor-outline:not([style*='display: none']):not([style*='display:none'])))
+  .vditor-ir
+  pre.vditor-reset,
+#vditor:not(:has(.vditor-outline:not([style*='display: none']):not([style*='display:none'])))
+  .vditor-wysiwyg
+  pre.vditor-reset,
+#vditor:not(:has(.vditor-outline:not([style*='display: none']):not([style*='display:none'])))
+  .vditor-preview
+  .vditor-reset,
+#vditor:not(:has(.vditor-outline:not([style*='display: none']):not([style*='display:none'])))
+  .vditor-sv {
+  padding-left: 36px !important;
+  padding-right: 36px !important;
+}

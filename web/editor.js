@@ -345,6 +345,7 @@ window._toggleOutline = () => {
   const outlineBtn = vditorEl?.querySelector('.vditor-toolbar [data-type="outline"]');
   if (outlineBtn) {
     outlineBtn.click();
+    setTimeout(_syncOutlineState, 50);
     return;
   }
   // Fallback: toggle outline element directly
@@ -354,23 +355,42 @@ window._toggleOutline = () => {
   const shouldShow = !isCurrentlyVisible;
   outlineEl.style.display = shouldShow ? '' : 'none';
   localStorage.setItem('nasmd_outline_visible', shouldShow ? '1' : '0');
+  _syncOutlineState();
 };
+
+function _syncOutlineState() {
+  const vditorEl = document.getElementById('vditor');
+  if (!vditorEl) return;
+  const outlineEl = vditorEl.querySelector('.vditor-outline');
+  const isVisible =
+    outlineEl &&
+    outlineEl.style.display !== 'none' &&
+    getComputedStyle(outlineEl).display !== 'none';
+  if (isVisible) {
+    vditorEl.classList.add('vditor--outline-open');
+  } else {
+    vditorEl.classList.remove('vditor--outline-open');
+  }
+}
 
 // Restore outline visibility from localStorage after editor init
 function _restoreOutlineVisibility() {
   const saved = localStorage.getItem('nasmd_outline_visible');
-  if (saved === null) return; // no saved state, use Vditor default
   const vditorEl = document.getElementById('vditor');
   const outlineEl = vditorEl?.querySelector('.vditor-outline');
-  if (!outlineEl) return;
-  const shouldShow = saved === '1';
-  outlineEl.style.display = shouldShow ? '' : 'none';
-  // If showing outline, force Vditor to render it
-  if (shouldShow && _vditor) {
-    // Vditor only renders outline content on certain events;
-    // trigger a render by dispatching a resize
-    window.dispatchEvent(new Event('resize'));
+  if (!outlineEl) {
+    _syncOutlineState();
+    return;
   }
+  if (saved !== null) {
+    const shouldShow = saved === '1';
+    outlineEl.style.display = shouldShow ? '' : 'none';
+    // If showing outline, force Vditor to render it
+    if (shouldShow && _vditor) {
+      window.dispatchEvent(new Event('resize'));
+    }
+  }
+  _syncOutlineState();
 }
 
 // Watch for outline panel toggle (via Vditor toolbar button) and persist state
@@ -383,11 +403,13 @@ function _watchOutlineToggle() {
   _outlineToggleObserver = new MutationObserver(() => {
     const isVisible = outlineEl.style.display !== 'none';
     localStorage.setItem('nasmd_outline_visible', isVisible ? '1' : '0');
+    _syncOutlineState();
   });
   _outlineToggleObserver.observe(outlineEl, {
     attributes: true,
     attributeFilter: ['style', 'class'],
   });
+  _syncOutlineState();
 }
 
 // Get the scrollable element for the current editor mode
