@@ -32,10 +32,43 @@
       vditorContainer.appendChild(_overlayLayer);
     }
     
-    // Use requestAnimationFrame for smooth 60fps tracking
+    // Aggressive DOM sanitizer for Vditor's native Undo bug in IR mode
+    // When Ctrl+Z is pressed, Vditor's undo stack sometimes restores corrupted HTML
+    // containing .vditor-wysiwyg__block inside .vditor-ir__node.
+    var irContainer = document.querySelector('.vditor-ir');
+    if (irContainer) {
+      if (!window._mmeSanitizerObserver) {
+        window._mmeSanitizerObserver = new MutationObserver(function(mutations) {
+          var hasCorruption = false;
+          mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+              for (var i = 0; i < mutation.addedNodes.length; i++) {
+                var node = mutation.addedNodes[i];
+                if (node.nodeType === 1) { // Element
+                  if (node.classList && node.classList.contains('vditor-wysiwyg__block')) {
+                    hasCorruption = true;
+                  } else if (node.querySelector && node.querySelector('.vditor-wysiwyg__block')) {
+                    hasCorruption = true;
+                  }
+                }
+              }
+            }
+          });
+          if (hasCorruption) {
+            var badBlocks = irContainer.querySelectorAll('.vditor-wysiwyg__block');
+            if (badBlocks.length > 0) {
+              console.log('[mermaid-enhancer] Sanitizing native Vditor undo corruption:', badBlocks.length, 'blocks removed');
+              badBlocks.forEach(function(el) { el.remove(); });
+            }
+          }
+        });
+        window._mmeSanitizerObserver.observe(irContainer, { childList: true, subtree: true });
+      }
+    }
+
     function loop() {
       updateOverlayPositions();
-      requestAnimationFrame(loop);
+      _trackingTimer = requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
     
