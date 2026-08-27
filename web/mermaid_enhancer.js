@@ -1,32 +1,82 @@
 /**
- * Mermaid Diagram Enhancer
+ * Mermaid Diagram Enhancer - Overlay Version
  *
- * Wraps each mermaid block with a toolbar:
- *   1. Code / Chart tab toggle (code mode shows "Copy" button)
- *   2. Light / Dark theme toggle for chart area (via CSS filter)
- *   3. Zoom in / out controls + drag-to-pan
- *   4. Download as SVG / PNG
- *
- * DOM structure (sibling insertion, no wrapper replacing original element):
- *   .mme-toolbar          ← inserted BEFORE .language-mermaid
- *   .language-mermaid     ← original element (unchanged in DOM tree)
- *   .mme-code-area        ← inserted AFTER .language-mermaid (hidden by default)
- *
- * Vditor IR-mode click-to-edit is prevented by temporarily removing the
- * vditor-ir__preview class from the ancestor during mousedown on our elements.
+ * This version uses a completely separate overlay layer outside Vditor's DOM
+ * to absolutely position the toolbars and code areas over the mermaid charts.
+ * This guarantees zero interference with Vditor's Lute engine and DOM diffing algorithm.
  */
 (function () {
   'use strict';
 
   var _blocks = {};
+  var _overlayLayer = null;
 
-  // ── Source code capture (before Vditor replaces innerHTML) ──
+  function initOverlayLayer() {
+    if (_overlayLayer) return _overlayLayer;
+    _overlayLayer = document.createElement('div');
+    _overlayLayer.className = 'mme-global-overlay';
+    _overlayLayer.style.position = 'absolute';
+    _overlayLayer.style.top = '0';
+    _overlayLayer.style.left = '0';
+    _overlayLayer.style.width = '100%';
+    _overlayLayer.style.height = '100%';
+    _overlayLayer.style.pointerEvents = 'none'; // Let clicks pass through except on our UI
+    _overlayLayer.style.zIndex = '1000';
+    
+    // We attach it to the vditor container so it scrolls with it
+    var vditorContainer = document.querySelector('.vditor-content') || document.querySelector('.vditor');
+    if (vditorContainer) {
+      if (getComputedStyle(vditorContainer).position === 'static') {
+        vditorContainer.style.position = 'relative';
+      }
+      vditorContainer.appendChild(_overlayLayer);
+    }
+    
+    // Use requestAnimationFrame for smooth 60fps tracking
+    function loop() {
+      updateOverlayPositions();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+    
+    return _overlayLayer;
+  }
+
+  function updateOverlayPositions() {
+    if (!_overlayLayer) return;
+    var uis = _overlayLayer.querySelectorAll('.mme-overlay-item');
+    uis.forEach(function(ui) {
+      var blockId = ui.getAttribute('data-mme-id');
+      var state = _blocks[blockId];
+      if (!state || !state.targetEl || !document.contains(state.targetEl)) {
+        // Target element is gone (e.g. Vditor re-rendered it)
+        ui.remove();
+        delete _blocks[blockId];
+        return;
+      }
+      
+      var target = state.targetEl;
+      // We position the UI relative to the overlay layer's offsetParent
+      var targetRect = target.getBoundingClientRect();
+      var layerRect = _overlayLayer.getBoundingClientRect();
+      
+      var toolbar = ui.querySelector('.mme-toolbar');
+      var toolbarHeight = toolbar ? toolbar.offsetHeight : 38;
+      
+      var top = targetRect.top - layerRect.top - toolbarHeight;
+      var left = targetRect.left - layerRect.left;
+      
+      ui.style.top = top + 'px';
+      ui.style.left = left + 'px';
+      ui.style.width = targetRect.width + 'px';
+      // height is dynamic
+    });
+  }
+
   function captureMermaidSources() {
     var vditor = document.getElementById('vditor');
     if (!vditor) return;
-    var areas = vditor.querySelectorAll(
-      '.vditor-preview, .vditor-ir__preview, .vditor-sv__preview',
-    );
+    var areas = vditor.querySelectorAll('.vditor-preview, .vditor-ir__preview, .vditor-sv__preview');
     areas.forEach(function (area) {
       area.querySelectorAll('.language-mermaid').forEach(function (el) {
         if (!el.getAttribute('data-mme-source') && !el.getAttribute('data-processed')) {
@@ -36,13 +86,12 @@
     });
   }
 
-  // ── Main entry: enhance all rendered mermaid blocks ─────────
   function enhanceAllMermaidBlocks() {
     var vditor = document.getElementById('vditor');
     if (!vditor) return;
-    var areas = vditor.querySelectorAll(
-      '.vditor-preview, .vditor-ir__preview, .vditor-sv__preview',
-    );
+    initOverlayLayer();
+    
+    var areas = vditor.querySelectorAll('.vditor-preview, .vditor-ir__preview, .vditor-sv__preview');
     if (!areas.length) return;
 
     areas.forEach(function (area) {
@@ -53,9 +102,16 @@
   }
 
   function enhanceBlock(el) {
-    if (el.getAttribute('data-mme-enhanced') === 'true') return;
+    if (el.getAttribute('data-mme-enhanced') === 'true') {
+        // Just verify if its UI still exists
+        var blockId = el.getAttribute('data-mme-id');
+        if (blockId && _overlayLayer && !_overlayLayer.querySelector('[data-mme-id="'+blockId+'"]')) {
+            el.setAttribute('data-mme-enhanced', 'false');
+        } else {
+            return;
+        }
+    }
 
-    // Wait for Vditor to finish rendering
     if (el.getAttribute('data-processed') !== 'true') {
       if (!el.getAttribute('data-mme-source')) {
         el.setAttribute('data-mme-source', el.textContent);
@@ -82,38 +138,53 @@
     }
 
     var blockId = 'mme_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-    _blocks[blockId] = { zoom: 1, theme: 'light', mode: 'chart', sourceCode: sourceCode };
+    _blocks[blockId] = { zoom: 1, theme: 'light', mode: 'chart', sourceCode: sourceCode, targetEl: el };
 
     el.setAttribute('data-mme-enhanced', 'true');
     el.setAttribute('data-mme-id', blockId);
 
-    // Insert toolbar before el, code area after el (siblings, no replaceChild)
-    insertUI(el, blockId, sourceCode);
+    insertOverlayUI(el, blockId, sourceCode);
   }
 
-  function insertUI(el, blockId, sourceCode) {
+  function insertOverlayUI(el, blockId, sourceCode) {
+    if (!_overlayLayer) return;
+    
+    var uiContainer = document.createElement('div');
+    uiContainer.className = 'mme-overlay-item';
+    uiContainer.setAttribute('data-mme-id', blockId);
+    uiContainer.style.position = 'absolute';
+    uiContainer.style.pointerEvents = 'none'; // Let clicks pass to the SVG
+    uiContainer.style.display = 'flex';
+    uiContainer.style.flexDirection = 'column';
+    uiContainer.style.alignItems = 'stretch';
+    
     // Toolbar
     var toolbar = document.createElement('div');
     toolbar.className = 'mme-toolbar';
-    toolbar.setAttribute('data-mme-id', blockId);
+    toolbar.style.pointerEvents = 'auto'; // Re-enable clicks for our UI
     toolbar.innerHTML = buildToolbarHTML();
-    el.parentNode.insertBefore(toolbar, el);
+    uiContainer.appendChild(toolbar);
 
     // Code area
-    var codeArea = document.createElement('pre');
+    var codeArea = document.createElement('div');
     codeArea.className = 'mme-code-area';
     codeArea.style.display = 'none';
-    codeArea.innerHTML = '<code>' + escapeHTML(sourceCode) + '</code>';
-    el.parentNode.insertBefore(codeArea, el.nextSibling);
+    codeArea.style.pointerEvents = 'auto'; // Re-enable clicks for our UI
+    codeArea.innerHTML = '<span class="mme-code-content">' + escapeHTML(sourceCode) + '</span>';
+    uiContainer.appendChild(codeArea);
 
-    bindEvents(blockId, toolbar, el, codeArea);
+    _overlayLayer.appendChild(uiContainer);
+    bindEvents(blockId, toolbar, el, codeArea, uiContainer);
+    
+    // Hide Vditor's chart when in code mode
+    // We do this by toggling visibility of the svg
+    el._mmeSvg = el.querySelector('svg');
   }
 
   function escapeHTML(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // ── Toolbar HTML ──────────────────────────────────────────
   function buildToolbarHTML() {
     return (
       '<div class="mme-tabs">' +
@@ -131,10 +202,6 @@
       '<button class="mme-btn" data-action="zoomOut" title="缩小">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>' +
       '</button>' +
-      '<button class="mme-btn" data-action="toggleFullscreen" title="全屏查看">' +
-      '<svg class="mme-icon-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>' +
-      '<svg class="mme-icon-exit-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>' +
-      '</button>' +
       '<div class="mme-sep"></div>' +
       '<button class="mme-btn" data-action="downloadSVG" title="下载 SVG">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>SVG</span>' +
@@ -151,9 +218,7 @@
     );
   }
 
-  // ── Event binding ────────────────────────────────────────
-  function bindEvents(id, toolbar, chartEl, codeEl) {
-    // Toolbar button clicks
+  function bindEvents(id, toolbar, chartEl, codeEl, uiContainer) {
     toolbar.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-action]');
       if (!btn) return;
@@ -162,11 +227,7 @@
       handleAction(id, btn.getAttribute('data-action'), toolbar, chartEl, codeEl, btn);
     });
 
-    // Drag-to-pan on chart
     bindDragPan(id, chartEl);
-
-    // Prevent Vditor IR click-to-edit on all our UI elements
-    preventVditorClick([toolbar, chartEl, codeEl]);
   }
 
   function handleAction(id, action, toolbar, chartEl, codeEl, btn) {
@@ -179,16 +240,13 @@
         setMode(id, 'chart', toolbar, chartEl, codeEl);
         break;
       case 'toggleTheme':
-        toggleTheme(id, toolbar);
+        toggleTheme(id, toolbar, chartEl);
         break;
       case 'zoomIn':
         setZoom(id, Math.min(state.zoom + 0.25, 3), chartEl, true);
         break;
       case 'zoomOut':
         setZoom(id, Math.max(state.zoom - 0.25, 0.25), chartEl, true);
-        break;
-      case 'toggleFullscreen':
-        toggleFullscreen(id, toolbar, chartEl);
         break;
       case 'downloadSVG':
         downloadSVG(chartEl);
@@ -202,102 +260,14 @@
     }
   }
 
-  // ── Prevent Vditor IR mode click-to-edit ──────────────────
-  // Vditor's click handler (bubble phase on .vditor-ir) does two things:
-  //   1. fb(target, "vditor-ir__preview") — if found, switches to edit mode
-  //   2. B(range, e) — expands the .vditor-ir__node containing the range,
-  //      adding .vditor-ir__node--expand class (shows the code)
-  //
-  // DOM structure for code blocks:
-  //   <div class="vditor-ir__node">
-  //     <span class="vditor-ir__marker--pre">```mermaid</span>
-  //     <div class="vditor-ir__preview">
-  //       <code class="language-mermaid" data-mme-enhanced="true">...</code>
-  //       .mme-toolbar (sibling, inserted by us)
-  //       .mme-code-area (sibling, inserted by us)
-  //     </div>
-  //   </div>
-  //
-  // Strategy: Register a click handler in CAPTURE phase on .vditor-ir
-  // (fires BEFORE Vditor's bubble handler). For clicks inside our
-  // enhanced mermaid block (the .vditor-ir__node that contains our
-  // enhanced elements), stop propagation so Vditor's handler never fires.
-  // Toolbar button clicks are allowed through.
-  function preventVditorClick(elements) {
-    if (!elements.length) return;
-    var preview = elements[0].closest('.vditor-ir__preview, .vditor-preview, .vditor-sv__preview');
-    if (!preview) return;
-
-    // Find the .vditor-ir__node that contains our enhanced block
-    var node = preview.closest('.vditor-ir__node');
-    if (node) {
-      node.setAttribute('data-mme-protected', 'true');
-    }
-    // Also mark the preview element
-    preview.setAttribute('data-mme-protected', 'true');
-
-    // Find the .vditor-ir element where Vditor's click handler lives
-    var irElement = preview.closest('.vditor-ir') || preview.closest('.vditor');
-    if (!irElement || irElement._mmeClickGuard) return;
-    irElement._mmeClickGuard = true;
-
-    irElement.addEventListener(
-      'click',
-      function (e) {
-        // Let toolbar button clicks through — toolbar's own handler
-        // will call stopPropagation after handling the action
-        var btn = e.target.closest('[data-action]');
-        if (btn && btn.closest('.mme-toolbar')) return;
-
-        // Stop clicks inside our protected node (covers toolbar, chart,
-        // code area, preview padding, node padding, marker, etc.)
-        if (e.target.closest('[data-mme-protected]')) {
-          e.stopPropagation();
-          return;
-        }
-
-        // Click on .vditor-reset padding (left/right of block):
-        // Vditor's B(r,e) creates a range from the click position and
-        // expands the nearest node. If the click's Y coordinate falls
-        // within a protected node's vertical bounds, intercept it.
-        if (e.target.classList.contains('vditor-reset')) {
-          var nodes = irElement.querySelectorAll('.vditor-ir__node[data-mme-protected]');
-          for (var i = 0; i < nodes.length; i++) {
-            var rect = nodes[i].getBoundingClientRect();
-            if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
-              e.stopPropagation();
-              return;
-            }
-          }
-        }
-      },
-      true,
-    ); // capture phase — fires before Vditor's bubble handler
-
-    // Also guard against double-click entering edit mode
-    irElement.addEventListener(
-      'dblclick',
-      function (e) {
-        if (e.target.closest('[data-mme-protected]')) {
-          e.stopPropagation();
-        }
-      },
-      true,
-    );
-  }
-
-  // ── Drag-to-pan ──────────────────────────────────────────
   function bindDragPan(id, chartEl) {
     var state = _blocks[id];
-    var dragging = false,
-      startX = 0,
-      startY = 0,
-      panX = 0,
-      panY = 0;
+    var dragging = false, startX = 0, startY = 0, panX = 0, panY = 0;
 
+    // We bind drag to the chartEl, which is still in the main DOM
     chartEl.addEventListener('mousedown', function (e) {
       if (e.button !== 0) return;
-      if (chartEl.style.display === 'none') return;
+      if (state.mode === 'code') return;
       var svg = chartEl.querySelector('svg');
       if (svg) {
         svg.classList.remove('mme-animating');
@@ -313,6 +283,7 @@
       chartEl.style.cursor = 'grabbing';
       chartEl.style.userSelect = 'none';
       e.preventDefault();
+      e.stopPropagation(); // Prevent Vditor from intercepting
     });
 
     document.addEventListener('mousemove', function (e) {
@@ -330,9 +301,10 @@
     });
 
     chartEl.addEventListener('wheel', function (e) {
-      if (chartEl.style.display === 'none') return;
+      if (state.mode === 'code') return;
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
+      e.stopPropagation();
       var delta = e.deltaY < 0 ? 0.1 : -0.1;
       setZoom(id, Math.max(0.25, Math.min(3, state.zoom + delta)), chartEl, false);
     });
@@ -344,20 +316,13 @@
     var state = _blocks[id];
     var svg = chartEl.querySelector('svg');
     if (!svg) return;
-    svg.style.transform =
-      'translate3d(' +
-      (state.panX || 0) +
-      'px, ' +
-      (state.panY || 0) +
-      'px, 0px) scale(' +
-      state.zoom +
-      ')';
+    svg.style.transform = 'translate3d(' + (state.panX || 0) + 'px, ' + (state.panY || 0) + 'px, 0px) scale(' + state.zoom + ')';
     svg.style.transformOrigin = 'top left';
   }
 
-  // ── Mode toggle ──────────────────────────────────────────
   function setMode(id, mode, toolbar, chartEl, codeEl) {
-    _blocks[id].mode = mode;
+    var state = _blocks[id];
+    state.mode = mode;
     var chartCtrls = toolbar.querySelector('.mme-chart-controls');
     var codeCtrls = toolbar.querySelector('.mme-code-controls');
 
@@ -366,24 +331,32 @@
     });
 
     if (mode === 'code') {
-      chartEl.style.display = 'none';
+      if (chartEl._mmeSvg) chartEl._mmeSvg.style.opacity = '0'; // Hide chart
       codeEl.style.display = '';
       chartCtrls.style.display = 'none';
       codeCtrls.style.display = '';
     } else {
-      chartEl.style.display = '';
+      if (chartEl._mmeSvg) chartEl._mmeSvg.style.opacity = '1';
       codeEl.style.display = 'none';
       chartCtrls.style.display = '';
       codeCtrls.style.display = 'none';
     }
   }
 
-  // ── Theme toggle (CSS filter based) ──────────────────────
-  function toggleTheme(id, toolbar) {
+  function toggleTheme(id, toolbar, chartEl) {
     var state = _blocks[id];
     var newTheme = state.theme === 'light' ? 'dark' : 'light';
     state.theme = newTheme;
-    toolbar.setAttribute('data-mme-theme', newTheme);
+    
+    // Apply theme filter to the svg
+    var svg = chartEl.querySelector('svg');
+    if (svg) {
+        if (newTheme === 'dark') {
+            svg.style.filter = 'invert(0.9) hue-rotate(180deg)';
+        } else {
+            svg.style.filter = '';
+        }
+    }
 
     var sunIcon = toolbar.querySelector('.mme-icon-sun');
     var moonIcon = toolbar.querySelector('.mme-icon-moon');
@@ -406,35 +379,6 @@
     applyTransform(id, chartEl);
   }
 
-  // ── Fullscreen toggle ──────────────────────────────────────
-  function toggleFullscreen(id, toolbar, chartEl) {
-    var wrapper = toolbar.closest('[data-mme-protected]');
-    if (!wrapper) wrapper = toolbar.parentElement;
-    var isFs = wrapper.classList.toggle('mme-fullscreen');
-
-    var iconFs = toolbar.querySelector('.mme-icon-fullscreen');
-    var iconExit = toolbar.querySelector('.mme-icon-exit-fullscreen');
-    if (iconFs) iconFs.style.display = isFs ? 'none' : '';
-    if (iconExit) iconExit.style.display = isFs ? '' : 'none';
-
-    var btn = toolbar.querySelector('[data-action="toggleFullscreen"]');
-    if (btn) btn.title = isFs ? '退出全屏' : '全屏查看';
-
-    // ESC key listener to exit fullscreen
-    if (isFs) {
-      wrapper._mmeEscHandler = function (e) {
-        if (e.key === 'Escape' && wrapper.classList.contains('mme-fullscreen')) {
-          toggleFullscreen(id, toolbar, chartEl);
-        }
-      };
-      document.addEventListener('keydown', wrapper._mmeEscHandler);
-    } else if (wrapper._mmeEscHandler) {
-      document.removeEventListener('keydown', wrapper._mmeEscHandler);
-      delete wrapper._mmeEscHandler;
-    }
-  }
-
-  // ── Copy code ────────────────────────────────────────────
   function copyCode(id, btn) {
     var text = _blocks[id].sourceCode || '';
     var span = btn.querySelector('span');
@@ -449,10 +393,7 @@
       }, 1500);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard
-        .writeText(text)
-        .then(doFlash)
-        .catch(function () {
+      navigator.clipboard.writeText(text).then(doFlash).catch(function () {
           fallbackCopy(text);
           doFlash();
         });
@@ -468,45 +409,31 @@
     ta.style.cssText = 'position:fixed;opacity:0';
     document.body.appendChild(ta);
     ta.select();
-    try {
-      document.execCommand('copy');
-    } catch (_) {}
+    try { document.execCommand('copy'); } catch (_) {}
     document.body.removeChild(ta);
   }
 
-  // ── Download SVG ─────────────────────────────────────────
   function downloadSVG(chartEl) {
     var svg = chartEl.querySelector('svg');
-    if (!svg) {
-      toast('\u65e0\u6cd5\u83b7\u53d6\u56fe\u8868');
-      return;
-    }
+    if (!svg) { toast('\u65e0\u6cd5\u83b7\u53d6\u56fe\u8868'); return; }
     var clone = svg.cloneNode(true);
     clone.removeAttribute('style');
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     var bbox = svg.getBoundingClientRect();
     clone.setAttribute('width', Math.round(bbox.width));
     clone.setAttribute('height', Math.round(bbox.height));
-    var blob = new Blob([new XMLSerializer().serializeToString(clone)], {
-      type: 'image/svg+xml;charset=utf-8',
-    });
+    var blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml;charset=utf-8' });
     saveBlob(blob, 'diagram.svg');
   }
 
-  // ── Download PNG ─────────────────────────────────────────
   function downloadPNG(chartEl) {
     var svg = chartEl.querySelector('svg');
-    if (!svg) {
-      toast('\u65e0\u6cd5\u83b7\u53d6\u56fe\u8868');
-      return;
-    }
+    if (!svg) { toast('\u65e0\u6cd5\u83b7\u53d6\u56fe\u8868'); return; }
     var clone = svg.cloneNode(true);
     clone.removeAttribute('style');
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     var bbox = svg.getBoundingClientRect();
-    var w = Math.ceil(bbox.width),
-      h = Math.ceil(bbox.height),
-      scale = window.devicePixelRatio || 2;
+    var w = Math.ceil(bbox.width), h = Math.ceil(bbox.height), scale = window.devicePixelRatio || 2;
     clone.setAttribute('width', w);
     clone.setAttribute('height', h);
     var data = new XMLSerializer().serializeToString(clone);
@@ -514,53 +441,33 @@
     var img = new Image();
     img.onload = function () {
       var c = document.createElement('canvas');
-      c.width = w * scale;
-      c.height = h * scale;
+      c.width = w * scale; c.height = h * scale;
       var ctx = c.getContext('2d');
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, c.width, c.height);
-      ctx.scale(scale, scale);
-      ctx.drawImage(img, 0, 0, w, h);
-      c.toBlob(function (b) {
-        saveBlob(b, 'diagram.png');
-      }, 'image/png');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.scale(scale, scale); ctx.drawImage(img, 0, 0, w, h);
+      c.toBlob(function (b) { saveBlob(b, 'diagram.png'); }, 'image/png');
     };
-    img.onerror = function () {
-      toast('PNG \u5bfc\u51fa\u5931\u8d25');
-    };
+    img.onerror = function () { toast('PNG \u5bfc\u51fa\u5931\u8d25'); };
     img.src = url;
   }
 
-  // ── Utilities ────────────────────────────────────────────
-  function capitalize(s) {
-    return s.charAt(0).toUpperCase() + s.slice(1);
-  }
+  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
   function saveBlob(blob, name) {
     var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () {
-      URL.revokeObjectURL(url);
-    }, 1000);
+    var a = document.createElement('a'); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
   function toast(msg) {
     var t = document.getElementById('toast');
     if (t) {
-      t.textContent = msg;
-      t.style.display = '';
-      setTimeout(function () {
-        t.style.display = 'none';
-      }, 2500);
+      t.textContent = msg; t.style.display = '';
+      setTimeout(function () { t.style.display = 'none'; }, 2500);
     } else alert(msg);
   }
 
-  // Public API
   window._enhanceMermaid = enhanceAllMermaidBlocks;
   window._captureMermaidSources = captureMermaidSources;
 })();

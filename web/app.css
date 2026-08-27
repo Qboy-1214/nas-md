@@ -2491,6 +2491,7 @@ a:hover {
 /* Chart target: the original mermaid element, styled to connect with toolbar */
 .mme-chart-target,
 .language-mermaid[data-mme-enhanced] {
+  margin-top: 38px !important;
   border: 1px solid var(--c-border, #e5e3df) !important;
   border-top: none !important;
   border-radius: 0 0 8px 8px !important;
@@ -2520,20 +2521,24 @@ a:hover {
   border: 1px solid var(--c-border, #e5e3df) !important;
   border-top: none !important;
   border-radius: 0 0 8px 8px !important;
+  font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace !important;
   font-size: 13px !important;
   line-height: 1.6 !important;
   overflow: auto !important;
   max-height: 60vh !important;
   white-space: pre-wrap !important;
   word-break: break-word !important;
+  user-select: text !important;
 }
 
-.mme-code-area code {
+.mme-code-area code,
+.mme-code-area .mme-code-content {
   font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace !important;
   font-size: inherit !important;
   background: none !important;
   padding: 0 !important;
   color: inherit !important;
+  white-space: pre-wrap !important;
 }
 
 /* ── Dark theme (chart area only, via CSS filter) ── */
