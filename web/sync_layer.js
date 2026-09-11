@@ -28,19 +28,43 @@
 
   function getCursorParagraphIndex() {
     if (!window._vditor) return -1;
-    var sel = window.getSelection();
-    if (!sel.rangeCount) return -1;
-    var range = sel.getRangeAt(0);
-    var node = range.startContainer;
-    var el = node.nodeType === 3 ? node.parentElement : node;
+    try {
+      var content = window._vditor.getValue();
+      if (!content) return 0;
+      var split =
+        window.nasmdDiff && window.nasmdDiff.splitParagraphs
+          ? window.nasmdDiff.splitParagraphs(content)
+          : content.split('\n\n');
+      if (split.length <= 1) return 0;
 
-    var vditorEl = document.getElementById('vditor');
-    if (!vditorEl) return -1;
+      var sel = window.getSelection();
+      if (!sel || !sel.rangeCount) return -1;
+      var range = sel.getRangeAt(0);
+      var node = range.startContainer;
+      var el = node.nodeType === 3 ? node.parentElement : node;
 
-    var paraSelectors = 'p, h1, h2, h3, h4, h5, h6, pre, blockquote, ul, ol, table, hr';
-    var allParas = vditorEl.querySelectorAll(paraSelectors);
-    for (var i = 0; i < allParas.length; i++) {
-      if (allParas[i].contains(el) || allParas[i] === el) return i;
+      var vditorEl = document.getElementById('vditor');
+      if (!vditorEl) return -1;
+
+      var contentArea =
+        vditorEl.querySelector('.vditor-wysiwyg') ||
+        vditorEl.querySelector('.vditor-sv') ||
+        vditorEl.querySelector('.vditor-ir') ||
+        vditorEl;
+
+      var current = el;
+      while (current && current.parentElement !== contentArea && current !== contentArea) {
+        current = current.parentElement;
+      }
+      if (current && current.parentElement === contentArea) {
+        var topBlocks = Array.prototype.slice.call(contentArea.children);
+        var blockIdx = topBlocks.indexOf(current);
+        if (blockIdx !== -1) {
+          return Math.min(blockIdx, split.length - 1);
+        }
+      }
+    } catch (_e) {
+      /* fallback */
     }
     return -1;
   }
@@ -148,34 +172,87 @@
 
   // === Paragraph update application ===
 
-  function applyRemoteChange(change, author) {
-    if (!window._vditor) return;
+  function applyChangesToContent(text, changes) {
+    if (!changes || changes.length === 0) return text;
+    if (window.nasmdDiff && window.nasmdDiff.applyChangesLocally) {
+      return window.nasmdDiff.applyChangesLocally(text, changes);
+    }
+    var paragraphs =
+      window.nasmdDiff && window.nasmdDiff.splitParagraphs
+        ? window.nasmdDiff.splitParagraphs(text)
+        : text.split('\n\n');
 
-    var currentContent = window._vditor.getValue();
-    var paragraphs = currentContent.split('\n\n');
+    var replaces = {};
+    var deletes = {};
+    var insertsByIdx = {};
 
-    switch (change.type) {
-      case 'replace':
-        if (change.paraIdx < paragraphs.length) {
-          paragraphs[change.paraIdx] = change.content;
-        }
-        break;
-      case 'delete':
-        if (change.paraIdx < paragraphs.length) {
-          paragraphs.splice(change.paraIdx, 1);
-        }
-        break;
-      case 'insert':
-        paragraphs.splice(change.paraIdx, 0, change.content);
-        break;
+    for (var i = 0; i < changes.length; i++) {
+      var ch = changes[i];
+      var t = ch.type;
+      var idx = ch.paraIdx !== undefined ? ch.paraIdx : 0;
+      if (t === 'replace') {
+        replaces[idx] = ch.content !== undefined ? ch.content : '';
+      } else if (t === 'delete') {
+        deletes[idx] = true;
+      } else if (t === 'insert') {
+        if (!insertsByIdx[idx]) insertsByIdx[idx] = [];
+        insertsByIdx[idx].push(ch.content !== undefined ? ch.content : '');
+      }
     }
 
-    var newContent = paragraphs.join('\n\n');
+    var resultParas = [];
+    var n = paragraphs.length;
+
+    for (var p = 0; p < n; p++) {
+      if (insertsByIdx[p]) {
+        for (var k = 0; k < insertsByIdx[p].length; k++) {
+          resultParas.push(insertsByIdx[p][k]);
+        }
+      }
+      if (deletes[p]) {
+        continue;
+      }
+      if (replaces[p] !== undefined) {
+        resultParas.push(replaces[p]);
+      } else {
+        resultParas.push(paragraphs[p]);
+      }
+    }
+
+    // Trailing inserts (paraIdx >= n)
+    var extraKeys = Object.keys(insertsByIdx)
+      .map(Number)
+      .filter(function (keyIdx) {
+        return keyIdx >= n;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+
+    for (var ek = 0; ek < extraKeys.length; ek++) {
+      var eIdx = extraKeys[ek];
+      for (var ekk = 0; ekk < insertsByIdx[eIdx].length; ekk++) {
+        resultParas.push(insertsByIdx[eIdx][ekk]);
+      }
+    }
+
+    return resultParas.join('\n\n');
+  }
+
+  function applyBatchRemoteChanges(batch) {
+    if (!window._vditor || !batch || batch.length === 0) return;
+
+    var currentContent = window._vditor.getValue();
+    var changes = batch.map(function (item) {
+      return item.change;
+    });
+    var newContent = applyChangesToContent(currentContent, changes);
 
     // Skip if content didn't actually change
     if (newContent === currentContent) {
-      // Still show notification even if content is same (edge case)
-      showCollabNotification(author, change.type, change.paraIdx);
+      for (var b = 0; b < batch.length; b++) {
+        showCollabNotification(batch[b].author, batch[b].change.type, batch[b].change.paraIdx);
+      }
       return;
     }
 
@@ -187,9 +264,12 @@
       window.saveCursorScrollToStorage();
     }
 
-    // Apply to editor
+    // Apply to editor in ONE single setValue call
     window._vditor.setValue(newContent);
     window._originalContent = window._vditor.getValue();
+    if (window.state) {
+      state.baseContent = newContent;
+    }
 
     // Clear the flag after Vditor finishes rendering
     setTimeout(function () {
@@ -199,8 +279,14 @@
       }
     }, 150);
 
-    // Show floating notification (NOT modifying editor DOM)
-    showCollabNotification(author, change.type, change.paraIdx);
+    // Show floating notifications
+    for (var b2 = 0; b2 < batch.length; b2++) {
+      showCollabNotification(batch[b2].author, batch[b2].change.type, batch[b2].change.paraIdx);
+    }
+  }
+
+  function applyRemoteChange(change, author) {
+    applyBatchRemoteChanges([{ change: change, author: author }]);
   }
 
   // === Pending update queue ===
@@ -211,9 +297,7 @@
 
     var pending = _pendingUpdates.slice();
     _pendingUpdates = [];
-    for (var i = 0; i < pending.length; i++) {
-      applyRemoteChange(pending[i].change, pending[i].author);
-    }
+    applyBatchRemoteChanges(pending);
   }
 
   // === Remote edit handler (with batching) ===
@@ -279,16 +363,7 @@
       var batch = _pendingBatch.slice();
       _pendingBatch = [];
       _applyTimer = null;
-      for (var j = 0; j < batch.length; j++) {
-        applyRemoteChange(batch[j].change, batch[j].author);
-      }
-      // After applying remote changes, sync baseContent to the new editor content
-      // so the next local save diff is computed against the merged result.
-      if (window._vditor && window.state) {
-        var merged = window._vditor.getValue();
-        state.baseContent = merged;
-        window._originalContent = merged;
-      }
+      applyBatchRemoteChanges(batch);
     }, 300);
   }
 
@@ -297,11 +372,9 @@
     API.getFile(mountId, path)
       .then(function (result) {
         if (!result || !result.content) return;
-        _applyingRemote = true;
-        window._vditor.setValue(result.content);
-        window._originalContent = result.content;
+
+        // Update version metadata
         if (window.state) {
-          state.baseContent = result.content;
           if (result.version !== undefined) {
             state.baseVersion = result.version;
             var key = mountId + ':' + path;
@@ -309,6 +382,22 @@
               state.fileVersions[key] = result.version;
             }
           }
+        }
+
+        // ISSUE-01 Fix: If user has unsaved edits, do NOT blow them away!
+        if (window.state && window.state.dirty) {
+          if (window.showToast) {
+            window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
+          }
+          return;
+        }
+
+        _applyingRemote = true;
+        window._vditor.setValue(result.content);
+        window._originalContent = result.content;
+        if (window.state) {
+          state.baseContent = result.content;
+          window._lastSavedContent = result.content;
         }
         setTimeout(function () {
           _applyingRemote = false;
@@ -413,6 +502,8 @@
     handleRemoteEdit: handleRemoteEdit,
     handleExternalReload: handleExternalReload,
     applyPendingUpdates: applyPendingUpdates,
+    applyRemoteChange: applyRemoteChange,
+    applyChangesToContent: applyChangesToContent,
     isApplyingRemote: function () {
       return _applyingRemote;
     },

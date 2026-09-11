@@ -24,7 +24,12 @@ import os
 import threading
 from dataclasses import dataclass, field
 
-from nas_md.webserver.paragraph_diff import apply_changes as apply_diff, merge_changes
+from nas_md.webserver.paragraph_diff import (
+    apply_changes as apply_diff,
+    compute_diff,
+    split_paragraphs,
+    transform_changes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +61,22 @@ class FileVersionStore:
         with self._lock:
             if file_key in self._files:
                 return self._files[file_key].version
-            self._files[file_key] = _FileVersion(version=0, content=content, changes_by_version={})
-            return 0
+
+            # Check if there is existing persisted history to maintain version monotonicity
+            base_version = 0
+            try:
+                from nas_md.webserver.version_history import _load
+
+                hist = _load(file_key, storage_dir=self._storage_dir)
+                if hist and hist.versions:
+                    base_version = max((v.version for v in hist.versions), default=0)
+            except Exception:
+                base_version = 0
+
+            self._files[file_key] = _FileVersion(
+                version=base_version, content=content, changes_by_version={}
+            )
+            return base_version
 
     def apply_changes(
         self,
@@ -72,6 +91,7 @@ class FileVersionStore:
         client_os: str = "",
         client_browser: str = "",
         user_agent: str = "",
+        client_content: str | None = None,
     ) -> dict:
         """Apply changes with version-based optimistic locking.
 
@@ -81,7 +101,7 @@ class FileVersionStore:
           newVersion: int
           content: str
         """
-        if not changes:
+        if not changes and client_content is None:
             return {
                 "applied": False,
                 "merged": False,
@@ -106,18 +126,29 @@ class FileVersionStore:
 
             if base_version == fv.version:
                 # Fast path: no conflict
-                new_content = apply_diff(fv.content, changes)
+                if client_content is not None:
+                    new_content = client_content
+                    # Compute canonical minimal changes between previous content and new content
+                    changes_to_apply = compute_diff(fv.content, new_content)
+                else:
+                    new_content = apply_diff(fv.content, changes)
+                    changes_to_apply = changes
             else:
-                # Stale base_version: merge with changes since base_version
+                # Stale base_version: transform incoming changes against accumulated changes
                 merged = True
                 accumulated_changes = []
                 for v in range(base_version + 1, fv.version + 1):
                     prev = fv.changes_by_version.get(v, [])
-                    accumulated_changes = merge_changes(accumulated_changes, prev)
-                # Merge accumulated changes with incoming changes
-                merged_changes = merge_changes(accumulated_changes, changes)
-                new_content = apply_diff(fv.content, merged_changes)
-                changes_to_apply = merged_changes  # for history record
+                    accumulated_changes.extend(prev)
+
+                base_count = len(split_paragraphs(fv.content))
+                transformed_changes = transform_changes(
+                    incoming_changes=changes,
+                    accumulated_changes=accumulated_changes,
+                    base_para_count=base_count,
+                )
+                new_content = apply_diff(fv.content, transformed_changes)
+                changes_to_apply = transformed_changes  # for history record
 
             # Write to disk
             try:
@@ -282,6 +313,7 @@ class FileVersionStore:
                 client_os=client_os,
                 client_browser=client_browser,
                 user_agent=user_agent,
+                storage_dir=self._storage_dir,
             )
         except Exception as e:
             logger.warning("Failed to record version history for %s: %s", file_key, e)

@@ -5,14 +5,16 @@ identity, and the diff applied. Persists to disk as JSON files so history
 survives server restarts.
 """
 
+import contextlib
 import json
 import os
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 
 _MAX_HISTORY_PER_FILE = 50
+_MAX_CACHE_FILES = 200
 _HISTORY_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     "storage",
@@ -130,47 +132,72 @@ class FileHistory:
 
 
 _lock = threading.Lock()
-_histories: dict[str, FileHistory] = {}
+_histories: OrderedDict[str, FileHistory] = OrderedDict()
 
 
 def _safe_filename(file_key: str) -> str:
-    """Convert file_key to a safe filename."""
-    # Replace path separators and colons
+    """Convert file_key to a safe filename with SHA-256 digest to prevent collision/overflow."""
+    import hashlib
+
+    key_hash = hashlib.sha256(file_key.encode("utf-8")).hexdigest()[:16]
+    safe_prefix = "".join(c if c.isalnum() or c in "._-" else "_" for c in file_key)[:40]
+    return f"{safe_prefix}_{key_hash}.json"
+
+
+def _safe_filename_legacy(file_key: str) -> str:
+    """Legacy filename format for backwards compatibility."""
     safe = file_key.replace(":", "_").replace("\\", "_").replace("/", "_")
-    # Remove or replace other unsafe chars
     safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe)
-    # Truncate to avoid filesystem limits
     if len(safe) > 200:
         safe = safe[:200]
     return safe + ".json"
 
 
-def _persist(file_key: str, hist: FileHistory):
+def _persist(file_key: str, hist: FileHistory, storage_dir: str | None = None):
     """Save history to disk (best-effort, non-blocking on errors)."""
     try:
-        os.makedirs(_HISTORY_DIR, exist_ok=True)
-        filepath = os.path.join(_HISTORY_DIR, _safe_filename(file_key))
+        target_dir = storage_dir or _HISTORY_DIR
+        os.makedirs(target_dir, exist_ok=True)
+        filepath = os.path.join(target_dir, _safe_filename(file_key))
         data = hist.to_dict()
-        # Write to temp file then rename for atomicity
         tmp = filepath + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp, filepath)
+
+        # Clean up legacy unhashed file if it exists
+        legacy_path = os.path.join(target_dir, _safe_filename_legacy(file_key))
+        if legacy_path != filepath and os.path.exists(legacy_path):
+            with contextlib.suppress(OSError):
+                os.remove(legacy_path)
     except Exception:
-        pass  # Persistence is best-effort; don't break editing
+        pass
 
 
-def _load(file_key: str) -> FileHistory | None:
+def _load(file_key: str, storage_dir: str | None = None) -> FileHistory | None:
     """Load history from disk if available."""
     try:
-        filepath = os.path.join(_HISTORY_DIR, _safe_filename(file_key))
+        target_dir = storage_dir or _HISTORY_DIR
+        filepath = os.path.join(target_dir, _safe_filename(file_key))
         if not os.path.exists(filepath):
-            return None
+            # Check legacy filename
+            legacy_path = os.path.join(target_dir, _safe_filename_legacy(file_key))
+            if os.path.exists(legacy_path):
+                filepath = legacy_path
+            else:
+                return None
+
         with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
         return FileHistory.from_dict(data)
     except Exception:
         return None
+
+
+def _evict_lru_if_needed():
+    """Evict least-recently used FileHistory if cache exceeds _MAX_CACHE_FILES."""
+    while len(_histories) > _MAX_CACHE_FILES:
+        _histories.popitem(last=False)
 
 
 def record_version(
@@ -186,21 +213,16 @@ def record_version(
     client_os: str = "",
     client_browser: str = "",
     user_agent: str = "",
+    storage_dir: str | None = None,
 ) -> VersionEntry:
-    """Record a new version for a file.
-
-    If previous_content is provided and the file has no history yet,
-    an initial version is recorded first using previous_content as snapshot,
-    so the first edit can be diffed against it.
-    """
+    """Record a new version for a file."""
     with _lock:
         if file_key not in _histories:
-            # Try loading from disk
-            loaded = _load(file_key)
+            loaded = _load(file_key, storage_dir=storage_dir)
             _histories[file_key] = loaded if loaded else FileHistory()
+        else:
+            _histories.move_to_end(file_key)
 
-        # If this is the first version and we have previous content,
-        # record the previous content as an initial baseline version
         if not _histories[file_key].versions and previous_content is not None:
             _histories[file_key].add(
                 author_id="system",
@@ -223,21 +245,24 @@ def record_version(
             client_browser=client_browser,
             user_agent=user_agent,
         )
-        # Persist to disk
-        _persist(file_key, _histories[file_key])
+        _persist(file_key, _histories[file_key], storage_dir=storage_dir)
+        _evict_lru_if_needed()
         return entry
 
 
-def get_history(file_key: str, limit: int = 20) -> list:
+def get_history(file_key: str, limit: int = 20, storage_dir: str | None = None) -> list:
     """Get version history for a file, newest first."""
     with _lock:
         hist = _histories.get(file_key)
         if not hist:
-            # Try loading from disk
-            loaded = _load(file_key)
+            loaded = _load(file_key, storage_dir=storage_dir)
             if loaded:
                 _histories[file_key] = loaded
                 hist = loaded
+        else:
+            _histories.move_to_end(file_key)
+
+        _evict_lru_if_needed()
         if not hist:
             return []
         return [

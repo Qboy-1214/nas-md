@@ -154,3 +154,195 @@ def test_merge_changes_empty_incoming():
     merged = merge_changes([{"type": "replace", "paraIdx": 0, "content": "A"}], [])
     assert len(merged) == 1
     assert merged[0]["content"] == "A"
+
+
+def test_split_paragraphs_fenced_code_block_with_blank_lines():
+    """Fenced code blocks with blank lines inside should NOT be split into multiple paragraphs."""
+    text = (
+        "Introduction paragraph.\n\n"
+        "```python\n"
+        "def foo():\n"
+        "    x = 1\n"
+        "\n"
+        "    y = 2\n"
+        "    return x + y\n"
+        "```\n\n"
+        "Conclusion paragraph."
+    )
+    paras = split_paragraphs(text)
+    assert len(paras) == 3
+    assert paras[0] == "Introduction paragraph."
+    assert paras[1] == (
+        "```python\n" "def foo():\n" "    x = 1\n" "\n" "    y = 2\n" "    return x + y\n" "```"
+    )
+    assert paras[2] == "Conclusion paragraph."
+
+
+def test_split_paragraphs_tilde_code_block():
+    """Tilde ~~~ code blocks should also be protected as atomic blocks."""
+    text = (
+        "Header\n\n" "~~~javascript\n" "const a = 1;\n" "\n" "console.log(a);\n" "~~~\n\n" "Footer"
+    )
+    paras = split_paragraphs(text)
+    assert len(paras) == 3
+    assert paras[1] == "~~~javascript\nconst a = 1;\n\nconsole.log(a);\n~~~"
+
+
+def test_split_paragraphs_yaml_frontmatter():
+    """YAML frontmatter with internal blank lines at document start should remain an atomic block."""
+    text = (
+        "---\n" "title: Doc Title\n" "\n" "tags:\n" "  - note\n" "---\n\n" "First body paragraph."
+    )
+    paras = split_paragraphs(text)
+    assert len(paras) == 2
+    assert paras[0] == "---\ntitle: Doc Title\n\ntags:\n  - note\n---"
+    assert paras[1] == "First body paragraph."
+
+
+def test_split_paragraphs_math_blocks():
+    """Math blocks $$ with internal blank lines should remain atomic."""
+    text = (
+        "Math formula:\n\n"
+        "$$\n"
+        "\\begin{aligned}\n"
+        "a &= b + c \\\\\n"
+        "\n"
+        "d &= e + f\n"
+        "\\end{aligned}\n"
+        "$$\n\n"
+        "After formula."
+    )
+    paras = split_paragraphs(text)
+    assert len(paras) == 3
+    assert paras[1] == "$$\n\\begin{aligned}\na &= b + c \\\\\n\nd &= e + f\n\\end{aligned}\n$$"
+
+
+def test_split_paragraphs_crlf_normalization():
+    """CRLF line endings should be normalized without leaving trailing \\r."""
+    text = "para one\r\n\r\npara two\r\n\r\npara three\r\n"
+    paras = split_paragraphs(text)
+    assert paras == ["para one", "para two", "para three"]
+    assert all("\r" not in p for p in paras)
+
+
+def test_compute_diff_and_apply_with_code_blocks():
+    """Diff and apply_changes should work seamlessly with code blocks."""
+    old_doc = (
+        "Intro\n\n" "```python\n" "def hello():\n" "\n" "    print('world')\n" "```\n\n" "Outro"
+    )
+    new_doc = (
+        "Intro\n\n"
+        "```python\n"
+        "def hello():\n"
+        "\n"
+        "    print('hello world')\n"
+        "```\n\n"
+        "New middle paragraph\n\n"
+        "Outro"
+    )
+    changes = compute_diff(old_doc, new_doc)
+    reconstructed = apply_changes(old_doc, changes)
+    assert reconstructed == new_doc
+
+
+def test_transform_changes_with_prior_insert():
+    """Incoming changes on base text should shift offsets correctly when prior version inserted paragraphs."""
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    # Base: A (0), B (1), C (2)
+    # Server accumulated: insert "X" at 0 -> server now has [X, A, B, C]
+    accumulated = [{"type": "insert", "paraIdx": 0, "content": "X"}]
+    # Incoming edit: user edited C (index 2 in base)
+    incoming = [{"type": "replace", "paraIdx": 2, "content": "C2"}]
+
+    transformed = transform_changes(incoming, accumulated)
+    assert len(transformed) == 1
+    assert transformed[0]["paraIdx"] == 3  # Shifted from 2 to 3
+    assert transformed[0]["content"] == "C2"
+
+    server_content = "X\n\nA\n\nB\n\nC"
+    result = apply_changes(server_content, transformed)
+    assert result == "X\n\nA\n\nB\n\nC2"
+
+
+def test_transform_changes_with_prior_delete():
+    """Incoming changes should adjust downwards when prior version deleted an earlier paragraph."""
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    # Base: A (0), B (1), C (2)
+    # Server accumulated: delete A (0) -> server now has [B, C]
+    accumulated = [{"type": "delete", "paraIdx": 0}]
+    # Incoming edit: user edited C (index 2 in base)
+    incoming = [{"type": "replace", "paraIdx": 2, "content": "C2"}]
+
+    transformed = transform_changes(incoming, accumulated)
+    assert len(transformed) == 1
+    assert transformed[0]["paraIdx"] == 1  # Shifted from 2 to 1
+    assert transformed[0]["content"] == "C2"
+
+    server_content = "B\n\nC"
+    result = apply_changes(server_content, transformed)
+    assert result == "B\n\nC2"
+
+
+def test_transform_changes_concurrent_both_insert():
+    """Concurrent inserts at different positions should both be correctly preserved."""
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    # Base: A (0), B (1)
+    # User 1 inserted X at 0 -> [X, A, B]
+    accumulated = [{"type": "insert", "paraIdx": 0, "content": "X"}]
+    # User 2 inserted Y at 1 (before B in base)
+    incoming = [{"type": "insert", "paraIdx": 1, "content": "Y"}]
+
+    transformed = transform_changes(incoming, accumulated)
+    assert len(transformed) == 1
+    assert transformed[0]["paraIdx"] == 2  # Shifted to index 2 (before B in server doc)
+
+    server_content = "X\n\nA\n\nB"
+    result = apply_changes(server_content, transformed)
+    assert result == "X\n\nA\n\nY\n\nB"
+
+
+def test_apply_changes_preserves_multiline_blank_delimiters():
+    """Applying a diff to one paragraph must not collapse multi-line blank delimiters in untouched paragraphs."""
+    doc = "# Title\n\n\n\n## Section 1\n\n---\n\n\n\n### Step 1\n\nParagraph to edit\n\n\n\n### Step 2\n\nUntouched\n"
+    diff = compute_diff(doc, doc.replace("Paragraph to edit", "Paragraph EDITED"))
+    assert len(diff) == 1
+    assert diff[0]["type"] == "replace"
+
+    result = apply_changes(doc, diff)
+    assert (
+        result
+        == "# Title\n\n\n\n## Section 1\n\n---\n\n\n\n### Step 1\n\nParagraph EDITED\n\n\n\n### Step 2\n\nUntouched\n"
+    )
+
+    # Undo
+    undo_diff = compute_diff(result, doc)
+    undo_result = apply_changes(result, undo_diff)
+    assert undo_result == doc
+
+
+def test_repeated_subheadings_diff_locality():
+    """Repeated subheadings and dividers must not cause distant LCS jumps."""
+    doc = (
+        "---\n\n"
+        "### STEP 1\n\n"
+        "Content A\n\n"
+        "---\n\n"
+        "### STEP 1\n\n"
+        "Content B\n\n"
+        "---\n\n"
+        "### STEP 1\n\n"
+        "Content C\n\n"
+    )
+    # Edit the first Content A
+    edited = doc.replace("Content A", "Content A MODIFIED")
+    diff = compute_diff(doc, edited)
+    assert len(diff) == 1
+    assert diff[0]["type"] == "replace"
+    assert diff[0]["paraIdx"] == 2
+    assert diff[0]["content"] == "Content A MODIFIED"
+
+    applied = apply_changes(doc, diff)
+    assert applied == edited

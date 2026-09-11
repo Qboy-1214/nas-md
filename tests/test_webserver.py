@@ -415,6 +415,20 @@ def writable_dir():
 @pytest.fixture
 def writable_server_url(web_root, writable_dir):
     """Start a test server with a writable mount and a readonly mount."""
+    from nas_md.webserver.file_version_store import get_store
+    from nas_md.webserver import version_history
+    import contextlib
+    import glob
+
+    store = get_store()
+    with store._lock:
+        store._files.clear()
+    with version_history._lock:
+        version_history._histories.clear()
+    for f in glob.glob("storage/.version_history/writable__*.json"):
+        with contextlib.suppress(OSError):
+            os.remove(f)
+
     port = _find_free_port()
     mgr = MountManager([])
     from nas_md.webserver import MountEntry

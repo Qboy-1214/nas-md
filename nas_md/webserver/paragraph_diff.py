@@ -3,38 +3,165 @@
 from difflib import SequenceMatcher
 
 
+def split_paragraphs_with_delims(text: str) -> tuple[list[str], list[str]]:
+    """Split text into paragraphs while preserving exact delimiters between them."""
+    if not text:
+        return [], []
+
+    # Normalize CRLF -> LF
+    text_norm = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    lines = text_norm.split("\n")
+    paragraphs: list[str] = []
+    delimiters: list[str] = []
+    current_lines: list[str] = []
+
+    in_fence: str | None = None  # '```' or '~~~'
+    fence_len: int = 0
+    in_math: bool = False
+
+    # Check if document starts with YAML frontmatter
+    if lines and lines[0].strip() == "---":
+        closing_idx = -1
+        for idx in range(1, min(50, len(lines))):
+            s = lines[idx].strip()
+            if s in ("---", "..."):
+                closing_idx = idx
+                break
+            if s.startswith("#") or s.startswith("```"):
+                break
+        if closing_idx > 0:
+            paragraphs.append("\n".join(lines[: closing_idx + 1]))
+            # Count following empty lines for delimiter
+            post_idx = closing_idx + 1
+            sep_count = 0
+            while post_idx < len(lines) and lines[post_idx].strip() == "":
+                sep_count += 1
+                post_idx += 1
+            delimiters.append("\n" * (sep_count + 1) if sep_count > 0 else "\n\n")
+            lines = lines[post_idx:]
+
+    i = 0
+    num_lines = len(lines)
+    while i < num_lines:
+        line = lines[i]
+        stripped = line.strip()
+
+        # Handle Fenced Code Blocks
+        if in_fence is None:
+            if stripped.startswith("```"):
+                in_fence = "```"
+                fence_len = len(stripped) - len(stripped.lstrip("`"))
+                current_lines.append(line)
+                i += 1
+                continue
+            elif stripped.startswith("~~~"):
+                in_fence = "~~~"
+                fence_len = len(stripped) - len(stripped.lstrip("~"))
+                current_lines.append(line)
+                i += 1
+                continue
+        else:
+            current_lines.append(line)
+            if in_fence == "```" and stripped.startswith("```"):
+                closing_len = len(stripped) - len(stripped.lstrip("`"))
+                if closing_len >= fence_len:
+                    in_fence = None
+            elif in_fence == "~~~" and stripped.startswith("~~~"):
+                closing_len = len(stripped) - len(stripped.lstrip("~"))
+                if closing_len >= fence_len:
+                    in_fence = None
+            i += 1
+            continue
+
+        # Handle Math Blocks ($$)
+        if not in_math:
+            if stripped.startswith("$$"):
+                if stripped.endswith("$$") and len(stripped) > 2:
+                    current_lines.append(line)
+                    i += 1
+                    continue
+                else:
+                    in_math = True
+                    current_lines.append(line)
+                    i += 1
+                    continue
+        else:
+            current_lines.append(line)
+            if stripped.endswith("$$") or stripped == "$$":
+                in_math = False
+            i += 1
+            continue
+
+        # Normal markdown text
+        if stripped == "":
+            if current_lines:
+                paragraphs.append("\n".join(current_lines))
+                current_lines = []
+                sep_count = 1
+                while i + 1 < num_lines and lines[i + 1].strip() == "":
+                    sep_count += 1
+                    i += 1
+                if i == num_lines - 1:
+                    delimiters.append("\n" * sep_count)
+                else:
+                    delimiters.append("\n" * (sep_count + 1))
+        else:
+            current_lines.append(line)
+
+        i += 1
+
+    if current_lines:
+        paragraphs.append("\n".join(current_lines))
+        if text_norm.endswith("\n"):
+            delimiters.append("\n")
+        else:
+            delimiters.append("")
+
+    while len(delimiters) < len(paragraphs):
+        delimiters.append("\n\n")
+
+    return paragraphs, delimiters
+
+
 def split_paragraphs(text: str) -> list[str]:
-    """Split text by double newline (paragraph boundary)."""
-    paragraphs = text.split("\n\n")
-    while paragraphs and paragraphs[-1].strip() == "":
-        paragraphs.pop()
-    return paragraphs
+    """Split text into logical Markdown paragraphs / block elements."""
+    paras, _ = split_paragraphs_with_delims(text)
+    return paras
 
 
 def compute_diff(old_text: str, new_text: str) -> list[dict]:
-    """Compute paragraph-level diff between old and new text.
-
-    Returns list of changes:
-    - {"type": "replace", "paraIdx": int, "content": str}
-    - {"type": "insert", "paraIdx": int, "content": str}
-    - {"type": "delete", "paraIdx": int}
-
-    paraIdx: 0-indexed paragraph position.
-    For insert: insert BEFORE the paragraph at paraIdx.
-    For replace/delete: target the paragraph at paraIdx.
-    """
+    """Compute paragraph-level diff between old and new text with prefix/suffix acceleration."""
     old_paras = split_paragraphs(old_text)
     new_paras = split_paragraphs(new_text)
 
     if old_paras == new_paras:
         return []
 
-    sm = SequenceMatcher(None, old_paras, new_paras, autojunk=False)
+    m = len(old_paras)
+    n = len(new_paras)
+
+    # Common Prefix & Common Suffix fast-path
+    prefix = 0
+    while prefix < m and prefix < n and old_paras[prefix] == new_paras[prefix]:
+        prefix += 1
+
+    suffix = 0
+    while (
+        suffix < m - prefix
+        and suffix < n - prefix
+        and old_paras[m - 1 - suffix] == new_paras[n - 1 - suffix]
+    ):
+        suffix += 1
+
+    mid_old = old_paras[prefix : m - suffix]
+    mid_new = new_paras[prefix : n - suffix]
+
     changes = []
+    sm = SequenceMatcher(None, mid_old, mid_new, autojunk=False)
 
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "replace":
-            # Handle potentially unequal length replacements
             old_len = i2 - i1
             new_len = j2 - j1
             paired = min(old_len, new_len)
@@ -43,50 +170,50 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
                 changes.append(
                     {
                         "type": "replace",
-                        "paraIdx": i1 + k,
-                        "content": new_paras[j1 + k],
+                        "paraIdx": prefix + i1 + k,
+                        "content": mid_new[j1 + k],
                     }
                 )
 
             if old_len > new_len:
-                # More old paragraphs than new -> extras are deletions
                 for k in range(paired, old_len):
                     changes.append(
                         {
                             "type": "delete",
-                            "paraIdx": i1 + k,
+                            "paraIdx": prefix + i1 + k,
                         }
                     )
             elif new_len > old_len:
-                # More new paragraphs than old -> extras are insertions
                 for k in range(paired, new_len):
                     changes.append(
                         {
                             "type": "insert",
-                            "paraIdx": i2,
-                            "content": new_paras[j1 + k],
+                            "paraIdx": prefix + i2,
+                            "content": mid_new[j1 + k],
                         }
                     )
         elif tag == "delete":
             for i in range(i1, i2):
-                changes.append({"type": "delete", "paraIdx": i})
+                changes.append({"type": "delete", "paraIdx": prefix + i})
         elif tag == "insert":
             for j in range(j1, j2):
-                changes.append({"type": "insert", "paraIdx": i1, "content": new_paras[j]})
+                changes.append(
+                    {
+                        "type": "insert",
+                        "paraIdx": prefix + i1,
+                        "content": mid_new[j],
+                    }
+                )
 
     return changes
 
 
 def apply_changes(text: str, changes: list) -> str:
-    """将 changes 应用到 text，返回新文本。
-
-    changes 中的 paraIdx 基于**原文本**的段落位置。
-    采用"重建"策略：把原文本切成段落列表，根据changes构建结果。
-    """
+    """将 changes 应用到 text，返回新文本，保留未修改段落的原生空白分隔符。"""
     if not changes:
         return text
 
-    paragraphs = split_paragraphs(text)
+    paragraphs, delimiters = split_paragraphs_with_delims(text)
 
     # 分类 changes
     replaces = {}  # paraIdx -> new_content
@@ -109,12 +236,14 @@ def apply_changes(text: str, changes: list) -> str:
         inserts_by_idx.setdefault(idx, []).append(content)
 
     result_paras = []
+    result_delims = []
     n = len(paragraphs)
     for i in range(n):
         # 先插入"在此段落之前"的 inserts
         if i in inserts_by_idx:
             for content in inserts_by_idx[i]:
                 result_paras.append(content)
+                result_delims.append("\n\n")
         # 处理原段落
         if i in deletes:
             continue
@@ -122,14 +251,31 @@ def apply_changes(text: str, changes: list) -> str:
             result_paras.append(replaces[i])
         else:
             result_paras.append(paragraphs[i])
+        if i < len(delimiters):
+            result_delims.append(delimiters[i])
+        else:
+            result_delims.append("\n\n")
 
     # 处理 paraIdx >= n 的 inserts（追加到末尾）
-    for idx in sorted(inserts_by_idx.keys()):
-        if idx >= n:
-            for content in inserts_by_idx[idx]:
-                result_paras.append(content)
+    trailing_indices = [idx for idx in sorted(inserts_by_idx.keys()) if idx >= n]
+    if trailing_indices and result_delims and result_delims[-1] in ("", "\n"):
+        result_delims[-1] = "\n\n"
 
-    return "\n\n".join(result_paras)
+    for idx in trailing_indices:
+        for content in inserts_by_idx[idx]:
+            result_paras.append(content)
+            result_delims.append("\n\n")
+
+    if trailing_indices and result_delims and result_delims[-1] == "\n\n":
+        result_delims[-1] = ""
+
+    result_parts = []
+    for idx, p in enumerate(result_paras):
+        result_parts.append(p)
+        if idx < len(result_delims):
+            result_parts.append(result_delims[idx])
+
+    return "".join(result_parts)
 
 
 def merge_changes(existing: list, incoming: list) -> list:
@@ -178,3 +324,75 @@ def merge_changes(existing: list, incoming: list) -> list:
         result.append(merged_rd[idx])
 
     return result
+
+
+def transform_changes(
+    incoming_changes: list[dict],
+    accumulated_changes: list[dict],
+    base_para_count: int = 1000,
+) -> list[dict]:
+    """Transform incoming changes' paraIdx against accumulated intermediate changes.
+
+    Maps paragraph indices from base_version coordinate space to current server
+    content coordinate space using Operational Transformation (OT).
+    """
+    if not accumulated_changes or not incoming_changes:
+        return list(incoming_changes)
+
+    max_idx = max(base_para_count, 100)
+    for ch in incoming_changes:
+        max_idx = max(max_idx, ch.get("paraIdx", 0) + 1)
+    for ch in accumulated_changes:
+        max_idx = max(max_idx, ch.get("paraIdx", 0) + 1)
+    max_idx += 50
+
+    # pos_map[base_idx] -> current_idx (or None if deleted)
+    pos_map = list(range(max_idx))
+    deleted = set()
+
+    for ch in accumulated_changes:
+        t = ch.get("type")
+        idx = ch.get("paraIdx", 0)
+        if t == "insert":
+            for b in range(max_idx):
+                if b not in deleted and pos_map[b] >= idx:
+                    pos_map[b] += 1
+        elif t == "delete":
+            del_base = None
+            for b in range(max_idx):
+                if b not in deleted and pos_map[b] == idx:
+                    del_base = b
+                    break
+            if del_base is not None:
+                deleted.add(del_base)
+            for b in range(max_idx):
+                if b not in deleted and pos_map[b] > idx:
+                    pos_map[b] -= 1
+
+    transformed = []
+    for ch in incoming_changes:
+        t = ch.get("type")
+        idx = ch.get("paraIdx", 0)
+        if idx >= max_idx:
+            transformed.append(dict(ch))
+            continue
+
+        target_idx = pos_map[idx]
+        if t == "insert":
+            transformed.append(
+                {"type": "insert", "paraIdx": target_idx, "content": ch.get("content", "")}
+            )
+        elif t == "replace":
+            if idx in deleted:
+                # Target was deleted by another user: preserve content as insert
+                transformed.append(
+                    {"type": "insert", "paraIdx": target_idx, "content": ch.get("content", "")}
+                )
+            else:
+                transformed.append(
+                    {"type": "replace", "paraIdx": target_idx, "content": ch.get("content", "")}
+                )
+        elif t == "delete" and idx not in deleted:
+            transformed.append({"type": "delete", "paraIdx": target_idx})
+
+    return transformed

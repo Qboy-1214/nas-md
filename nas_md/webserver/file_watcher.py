@@ -100,9 +100,11 @@ class FileWatcher:
     """Manages watchdog observers for all host mounts."""
 
     def __init__(self):
+        from collections import deque
+
         self._observers: dict = {}
         self._handlers: dict = {}
-        self._expected: dict = {}  # "mount_id:rel_path" -> expected_content
+        self._expected: dict[str, deque[str]] = {}  # "mount_id:rel_path" -> deque([content, ...])
         self._expected_lock = threading.Lock()
         self._lock = threading.Lock()
 
@@ -155,26 +157,51 @@ class FileWatcher:
 
     def mark_expected(self, mount_id: str, rel_path: str, content: str):
         """Mark an upcoming server write so watchdog doesn't flag it as external."""
+        from collections import deque
+
         key = f"{mount_id}:{rel_path}"
         with self._expected_lock:
-            self._expected[key] = content
+            if key not in self._expected:
+                self._expected[key] = deque(maxlen=10)
+            self._expected[key].append(content)
 
     def is_expected(self, mount_id: str, rel_path: str, abs_path: str) -> bool:
-        """Check if the file content matches the expected (server's own) write.
+        """Check if the file content matches any expected (server's own) write.
 
-        Pops the mark (one-shot). Returns True if content matches.
+        Pops the matching mark from FIFO queue. Returns True if content matches.
         """
         key = f"{mount_id}:{rel_path}"
         with self._expected_lock:
-            expected = self._expected.pop(key, None)
-        if expected is None:
-            return False
+            q = self._expected.get(key)
+            if not q:
+                return False
+
         try:
-            with open(abs_path, encoding="utf-8") as f:
+            with open(abs_path, encoding="utf-8", errors="replace") as f:
                 actual = f.read()
-            return actual == expected
         except OSError:
             return False
+
+        with self._expected_lock:
+            q = self._expected.get(key)
+            if not q:
+                return False
+
+            if actual in q:
+                # Remove up to and including the matched item
+                while q:
+                    item = q.popleft()
+                    if item == actual:
+                        break
+                if not q:
+                    self._expected.pop(key, None)
+                return True
+            else:
+                # Top item did not match; pop one to avoid stale queue buildup
+                q.popleft()
+                if not q:
+                    self._expected.pop(key, None)
+                return False
 
 
 _watcher: FileWatcher | None = None

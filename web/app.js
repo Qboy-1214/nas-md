@@ -611,7 +611,6 @@ async function readLocalDir(dirHandle, parentPath) {
   });
   const hasMd = children.some((c) => c.hasMd);
   const isEmpty = !hasRawEntries;
-  // Propagate hasEmptyDir: any child is empty or contains empty dirs
   const hasEmptyDir = children.some((c) => c.isDir && (c.isEmpty || c.hasEmptyDir));
   return {
     name: dirHandle.name,
@@ -622,102 +621,6 @@ async function readLocalDir(dirHandle, parentPath) {
     isEmpty,
     hasEmptyDir,
   };
-}
-
-async function buildTreeFromFileMap(fileMap, parentPath) {
-  const entries = [];
-  const dirMap = {};
-
-  for (const [filePath, file] of Object.entries(fileMap)) {
-    const relFromRoot = filePath.startsWith('/') ? filePath.substring(1) : filePath;
-    const parts = relFromRoot.split('/');
-    let currentPath = '';
-    for (let i = 0; i < parts.length - 1; i++) {
-      const prev = currentPath;
-      currentPath = currentPath ? currentPath + '/' + parts[i] : parts[i];
-      if (!dirMap['/' + currentPath]) {
-        dirMap['/' + currentPath] = {
-          name: parts[i],
-          path: '/' + currentPath,
-          isDir: true,
-          children: [],
-          hasMd: false,
-        };
-        if (prev) {
-          dirMap['/' + prev].children.push(dirMap['/' + currentPath]);
-        }
-      }
-    }
-    const parentDirPath = currentPath ? '/' + currentPath : '/';
-    const fileName = parts[parts.length - 1];
-    const entry = {
-      name: fileName,
-      path: filePath,
-      isDir: false,
-      hasMd: true,
-      size: file.size,
-      modTime: file.lastModified,
-    };
-    if (dirMap[parentDirPath]) {
-      dirMap[parentDirPath].children.push(entry);
-    } else {
-      entries.push(entry);
-    }
-  }
-
-  function markHasMd(dirEntry) {
-    let found = false;
-    for (const child of dirEntry.children) {
-      if (child.isDir) {
-        if (markHasMd(child)) found = true;
-      } else if (child.hasMd) {
-        found = true;
-      }
-    }
-    dirEntry.hasMd = found;
-    return found;
-  }
-  // Propagate hasEmptyDir: a dir has it if any child dir is empty or has empty dirs
-  function markHasEmptyDir(dirEntry) {
-    if (!dirEntry.isDir) return false;
-    let found = false;
-    for (const child of dirEntry.children) {
-      if (child.isDir) {
-        markHasEmptyDir(child);
-        if (child.isEmpty || child.hasEmptyDir) found = true;
-      }
-    }
-    dirEntry.hasEmptyDir = found;
-    return found;
-  }
-  for (const dirEntry of Object.values(dirMap)) {
-    dirEntry.children.sort((a, b) => {
-      if (a.isDir && !b.isDir) return -1;
-      if (!a.isDir && b.isDir) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }
-  const root = dirMap['/'] || {
-    name: '/',
-    path: '/',
-    isDir: true,
-    children: [],
-    hasMd: false,
-  };
-  if (root.children.length === 0) root.children = entries;
-  markHasMd(root);
-  markHasEmptyDir(root);
-
-  if (parentPath === '/') return root;
-  return (
-    dirMap[parentPath] || {
-      name: parentPath.split('/').pop(),
-      path: parentPath,
-      isDir: true,
-      children: [],
-      hasMd: false,
-    }
-  );
 }
 
 async function readLocalFile(mountId, path) {
@@ -3046,6 +2949,23 @@ async function openRemoteFile(src, path, key) {
 }
 
 async function openFile(path, preferredMountId, searchKeyword) {
+  // If opening the exact same file that's already open, do nothing
+  if (state.currentMountId === preferredMountId && state.currentPath === path) return;
+
+  // ISSUE-10 Fix: Intercept file switching if current editor has unsaved dirty changes
+  if (state.dirty && state.currentPath && window._vditor) {
+    if (state.autoSave) {
+      await saveFile(true);
+    } else {
+      const confirmSwitch = window.confirm(
+        '当前文件有未保存的修改，是否先保存再切换？\n\n点击【确定】保存并切换，点击【取消】放弃修改并直接切换。',
+      );
+      if (confirmSwitch) {
+        await saveFile(false);
+      }
+    }
+  }
+
   // Save current cursor/scroll position before switching files
   saveCursorScrollToStorage();
 
@@ -3574,6 +3494,7 @@ async function saveFile({ silent = false } = {}) {
           identity ? identity.name : 'Anonymous',
           identity ? identity.color : '#3498db',
           identity ? { os: identity.os, browser: identity.browser } : null,
+          content,
         );
 
         if (!resp || !resp.applied) {
@@ -3589,8 +3510,16 @@ async function saveFile({ silent = false } = {}) {
         state.baseContent = resp.content;
         state.fileVersions[fileKey] = resp.newVersion;
         window._originalContent = resp.content;
-        markClean();
-        clearLocalStorage(state.currentPath);
+
+        // ISSUE-04 Fix: Check if user typed new characters while save was in flight
+        const currentContentNow = window._vditor.getValue();
+        if (_normContent(currentContentNow) === _normContent(content)) {
+          markClean();
+          clearLocalStorage(state.currentPath);
+        } else {
+          state.dirty = true;
+          markDirty();
+        }
 
         if (resp.merged) {
           showToast('已合并保存');
@@ -3623,103 +3552,340 @@ async function saveFile({ silent = false } = {}) {
   }
 }
 
+// Markdown 块级段落切分：保留段落与其原始分隔空白符
+function splitParagraphsWithDelims(text) {
+  if (!text) return { paragraphs: [], delimiters: [] };
+  const textNorm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  var lines = textNorm.split('\n');
+  var paragraphs = [];
+  var delimiters = [];
+  var currentLines = [];
+
+  var inFence = null;
+  var fenceLen = 0;
+  var inMath = false;
+  var inFrontmatter = false;
+
+  if (lines.length > 0 && lines[0].trim() === '---') {
+    inFrontmatter = true;
+    currentLines.push(lines[0]);
+    lines = lines.slice(1);
+  }
+
+  var i = 0;
+  var numLines = lines.length;
+  while (i < numLines) {
+    var line = lines[i];
+    var stripped = line.trim();
+
+    if (inFrontmatter) {
+      currentLines.push(line);
+      if (stripped === '---' || stripped === '...') {
+        inFrontmatter = false;
+      }
+      i++;
+      continue;
+    }
+
+    if (!inFence) {
+      if (stripped.startsWith('```')) {
+        inFence = '```';
+        fenceLen = stripped.length - stripped.replace(/^`+/, '').length;
+        currentLines.push(line);
+        i++;
+        continue;
+      } else if (stripped.startsWith('~~~')) {
+        inFence = '~~~';
+        fenceLen = stripped.length - stripped.replace(/^~+/, '').length;
+        currentLines.push(line);
+        i++;
+        continue;
+      }
+    } else {
+      currentLines.push(line);
+      if (inFence === '```' && stripped.startsWith('```')) {
+        var closingLen1 = stripped.length - stripped.replace(/^`+/, '').length;
+        if (closingLen1 >= fenceLen) {
+          inFence = null;
+        }
+      } else if (inFence === '~~~' && stripped.startsWith('~~~')) {
+        var closingLen2 = stripped.length - stripped.replace(/^~+/, '').length;
+        if (closingLen2 >= fenceLen) {
+          inFence = null;
+        }
+      }
+      i++;
+      continue;
+    }
+
+    if (!inMath) {
+      if (stripped.startsWith('$$')) {
+        if (stripped.endsWith('$$') && stripped.length > 2) {
+          currentLines.push(line);
+          i++;
+          continue;
+        } else {
+          inMath = true;
+          currentLines.push(line);
+          i++;
+          continue;
+        }
+      }
+    } else {
+      currentLines.push(line);
+      if (stripped.endsWith('$$') || stripped === '$$') {
+        inMath = false;
+      }
+      i++;
+      continue;
+    }
+
+    if (stripped === '') {
+      if (currentLines.length > 0) {
+        paragraphs.push(currentLines.join('\n'));
+        currentLines = [];
+        var sepCount = 1;
+        while (i + 1 < numLines && lines[i + 1].trim() === '') {
+          sepCount++;
+          i++;
+        }
+        if (i === numLines - 1) {
+          delimiters.push('\n'.repeat(sepCount));
+        } else {
+          delimiters.push('\n'.repeat(sepCount + 1));
+        }
+      }
+    } else {
+      currentLines.push(line);
+    }
+
+    i++;
+  }
+
+  if (currentLines.length > 0) {
+    paragraphs.push(currentLines.join('\n'));
+    if (textNorm.endsWith('\n')) {
+      delimiters.push('\n');
+    } else {
+      delimiters.push('');
+    }
+  }
+
+  while (delimiters.length < paragraphs.length) {
+    delimiters.push('\n\n');
+  }
+
+  return { paragraphs, delimiters };
+}
+
+function splitParagraphs(text) {
+  return splitParagraphsWithDelims(text).paragraphs;
+}
+
+// 客户端本地验证 diff 是否能准确还原目标文本
+function applyChangesLocally(text, changes) {
+  if (!changes || changes.length === 0) return text;
+  const { paragraphs, delimiters } = splitParagraphsWithDelims(text);
+
+  const replaces = {};
+  const deletes = new Set();
+  const insertsByIdx = {};
+
+  for (const ch of changes) {
+    const t = ch.type;
+    const idx = ch.paraIdx || 0;
+    if (t === 'replace') replaces[idx] = ch.content || '';
+    else if (t === 'delete') deletes.add(idx);
+    else if (t === 'insert') {
+      if (!insertsByIdx[idx]) insertsByIdx[idx] = [];
+      insertsByIdx[idx].push(ch.content || '');
+    }
+  }
+
+  const resultParas = [];
+  const resultDelims = [];
+  const n = paragraphs.length;
+
+  for (let i = 0; i < n; i++) {
+    if (insertsByIdx[i]) {
+      for (const c of insertsByIdx[i]) {
+        resultParas.push(c);
+        resultDelims.push('\n\n');
+      }
+    }
+    if (deletes.has(i)) continue;
+    if (replaces[i] !== undefined) {
+      resultParas.push(replaces[i]);
+    } else {
+      resultParas.push(paragraphs[i]);
+    }
+    if (i < delimiters.length) {
+      resultDelims.push(delimiters[i]);
+    } else {
+      resultDelims.push('\n\n');
+    }
+  }
+
+  const sortedInsertKeys = Object.keys(insertsByIdx)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const idx of sortedInsertKeys) {
+    if (idx >= n) {
+      for (const c of insertsByIdx[idx]) {
+        resultParas.push(c);
+        resultDelims.push('\n\n');
+      }
+    }
+  }
+
+  const resultParts = [];
+  for (let i = 0; i < resultParas.length; i++) {
+    resultParts.push(resultParas[i]);
+    if (i < resultDelims.length) {
+      resultParts.append ? resultParts.append(resultDelims[i]) : resultParts.push(resultDelims[i]);
+    }
+  }
+  return resultParts.join('');
+}
+
 // 客户端段落级 diff 计算：对比 baseContent 与当前内容，输出 changes 列表。
-// 使用 LCS（最长公共子序列）算法，与服务端 paragraph_diff.compute_diff 完全一致。
-// 朴素按索引对齐会导致插入段落后所有后续段落被误判为修改，LCS 能正确识别真正的变更位置。
+// 引入公共前后缀快速修剪，杜绝重复标题/分割线导致的跨段落错位。
 function computeParagraphDiff(oldText, newText) {
   if (oldText === newText) return [];
 
-  // Split into paragraphs, matching server-side split_paragraphs
-  const splitParas = (text) => {
-    const paras = text.split('\n\n');
-    while (paras.length && paras[paras.length - 1].trim() === '') paras.pop();
-    return paras;
-  };
-
-  const oldParas = splitParas(oldText);
-  const newParas = splitParas(newText);
+  const oldParas = splitParagraphs(oldText);
+  const newParas = splitParagraphs(newText);
 
   if (JSON.stringify(oldParas) === JSON.stringify(newParas)) return [];
 
   const m = oldParas.length;
   const n = newParas.length;
 
-  // LCS DP table
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (oldParas[i - 1] === newParas[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
+  // 1. 公共前缀修剪
+  let prefix = 0;
+  while (prefix < m && prefix < n && oldParas[prefix] === newParas[prefix]) {
+    prefix++;
   }
 
-  // Backtrack to get opcodes (like Python's SequenceMatcher.get_opcodes)
-  const ops = [];
-  let i = m,
-    j = n;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldParas[i - 1] === newParas[j - 1]) {
-      ops.push({ tag: 'equal', i1: i - 1, i2: i, j1: j - 1, j2: j });
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      ops.push({ tag: 'insert', i1: i, i2: i, j1: j - 1, j2: j });
-      j--;
-    } else {
-      ops.push({ tag: 'delete', i1: i - 1, i2: i, j1: j, j2: j });
-      i--;
-    }
-  }
-  ops.reverse();
-
-  // Merge consecutive same-tag ops into blocks
-  const opcodes = [];
-  for (const op of ops) {
-    const last = opcodes[opcodes.length - 1];
-    if (last && last.tag === op.tag && last.i2 === op.i1 && last.j2 === op.j1) {
-      last.i2 = op.i2;
-      last.j2 = op.j2;
-    } else {
-      opcodes.push({ tag: op.tag, i1: op.i1, i2: op.i2, j1: op.j1, j2: op.j2 });
-    }
+  // 2. 公共后缀修剪
+  let suffix = 0;
+  while (
+    suffix < m - prefix &&
+    suffix < n - prefix &&
+    oldParas[m - 1 - suffix] === newParas[n - 1 - suffix]
+  ) {
+    suffix++;
   }
 
-  // Convert opcodes to changes (matching server-side compute_diff format)
+  const midOld = oldParas.slice(prefix, m - suffix);
+  const midNew = newParas.slice(prefix, n - suffix);
+  const midM = midOld.length;
+  const midN = midNew.length;
+
   const changes = [];
-  for (const op of opcodes) {
-    if (op.tag === 'replace') {
-      const oldLen = op.i2 - op.i1;
-      const newLen = op.j2 - op.j1;
-      const paired = Math.min(oldLen, newLen);
-      for (let k = 0; k < paired; k++) {
-        changes.push({ type: 'replace', paraIdx: op.i1 + k, content: newParas[op.j1 + k] });
-      }
-      if (oldLen > newLen) {
-        for (let k = paired; k < oldLen; k++) {
-          changes.push({ type: 'delete', paraIdx: op.i1 + k });
+
+  if (midM === 0) {
+    // 纯插入
+    for (let j = 0; j < midN; j++) {
+      changes.push({ type: 'insert', paraIdx: prefix, content: midNew[j] });
+    }
+  } else if (midN === 0) {
+    // 纯删除
+    for (let i = 0; i < midM; i++) {
+      changes.push({ type: 'delete', paraIdx: prefix + i });
+    }
+  } else if (midM === 1 && midN === 1) {
+    // 纯单段修改 (最常见打字场景)
+    changes.push({ type: 'replace', paraIdx: prefix, content: midNew[0] });
+  } else {
+    // LCS DP table on mid section only
+    const dp = Array.from({ length: midM + 1 }, () => new Array(midN + 1).fill(0));
+    for (let i = 1; i <= midM; i++) {
+      for (let j = 1; j <= midN; j++) {
+        if (midOld[i - 1] === midNew[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
         }
-      } else if (newLen > oldLen) {
-        for (let k = paired; k < newLen; k++) {
-          changes.push({ type: 'insert', paraIdx: op.i2, content: newParas[op.j1 + k] });
-        }
-      }
-    } else if (op.tag === 'delete') {
-      for (let k = op.i1; k < op.i2; k++) {
-        changes.push({ type: 'delete', paraIdx: k });
-      }
-    } else if (op.tag === 'insert') {
-      for (let k = op.j1; k < op.j2; k++) {
-        changes.push({ type: 'insert', paraIdx: op.i1, content: newParas[k] });
       }
     }
-    // 'equal' produces no changes
+
+    const ops = [];
+    let i = midM,
+      j = midN;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && midOld[i - 1] === midNew[j - 1]) {
+        ops.push({ tag: 'equal', i1: i - 1, i2: i, j1: j - 1, j2: j });
+        i--;
+        j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        ops.push({ tag: 'insert', i1: i, i2: i, j1: j - 1, j2: j });
+        j--;
+      } else {
+        ops.push({ tag: 'delete', i1: i - 1, i2: i, j1: j, j2: j });
+        i--;
+      }
+    }
+    ops.reverse();
+
+    const opcodes = [];
+    for (const op of ops) {
+      const last = opcodes[opcodes.length - 1];
+      if (last && last.tag === op.tag && last.i2 === op.i1 && last.j2 === op.j1) {
+        last.i2 = op.i2;
+        last.j2 = op.j2;
+      } else {
+        opcodes.push({ tag: op.tag, i1: op.i1, i2: op.i2, j1: op.j1, j2: op.j2 });
+      }
+    }
+
+    for (const op of opcodes) {
+      if (op.tag === 'replace') {
+        const oldLen = op.i2 - op.i1;
+        const newLen = op.j2 - op.j1;
+        const paired = Math.min(oldLen, newLen);
+        for (let k = 0; k < paired; k++) {
+          changes.push({
+            type: 'replace',
+            paraIdx: prefix + op.i1 + k,
+            content: midNew[op.j1 + k],
+          });
+        }
+        if (oldLen > newLen) {
+          for (let k = paired; k < oldLen; k++) {
+            changes.push({ type: 'delete', paraIdx: prefix + op.i1 + k });
+          }
+        } else if (newLen > oldLen) {
+          for (let k = paired; k < newLen; k++) {
+            changes.push({
+              type: 'insert',
+              paraIdx: prefix + op.i2,
+              content: midNew[op.j1 + k],
+            });
+          }
+        }
+      } else if (op.tag === 'delete') {
+        for (let k = op.i1; k < op.i2; k++) {
+          changes.push({ type: 'delete', paraIdx: prefix + k });
+        }
+      } else if (op.tag === 'insert') {
+        for (let k = op.j1; k < op.j2; k++) {
+          changes.push({ type: 'insert', paraIdx: prefix + op.i1, content: midNew[k] });
+        }
+      }
+    }
   }
 
   return changes;
 }
+
+window.nasmdDiff = {
+  splitParagraphs: splitParagraphs,
+  splitParagraphsWithDelims: splitParagraphsWithDelims,
+  applyChangesLocally: applyChangesLocally,
+  computeParagraphDiff: computeParagraphDiff,
+};
 
 function confirmNewFile() {
   const name = $('new-file-name').value.trim();
@@ -4155,12 +4321,50 @@ async function refreshFromDisk(silent) {
 }
 
 // === 离线支持 ===
-function saveToLocalStorage(path, content) {
+const DRAFT_MAX_AGE_MS = 7 * 24 * 3600 * 1000; // 7 days
+
+function cleanExpiredDrafts() {
   try {
-    const key = 'nasmd_draft_' + path;
-    localStorage.setItem(key, JSON.stringify({ content, savedAt: Date.now() }));
+    const now = Date.now();
+    const drafts = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('nasmd_draft_')) {
+        try {
+          const val = JSON.parse(localStorage.getItem(k));
+          if (val && val.savedAt && now - val.savedAt > DRAFT_MAX_AGE_MS) {
+            localStorage.removeItem(k);
+          } else if (val && val.savedAt) {
+            drafts.push({ key: k, savedAt: val.savedAt });
+          }
+        } catch (_e) {
+          localStorage.removeItem(k);
+        }
+      }
+    }
+    return drafts;
   } catch (_e) {
-    /* quota exceeded */
+    return [];
+  }
+}
+
+function saveToLocalStorage(path, content) {
+  const key = 'nasmd_draft_' + path;
+  const data = JSON.stringify({ content, savedAt: Date.now() });
+  try {
+    localStorage.setItem(key, data);
+  } catch (_e) {
+    try {
+      const drafts = cleanExpiredDrafts();
+      drafts.sort((a, b) => a.savedAt - b.savedAt);
+      while (drafts.length > 5) {
+        const oldest = drafts.shift();
+        localStorage.removeItem(oldest.key);
+      }
+      localStorage.setItem(key, data);
+    } catch (_e2) {
+      /* quota exceeded */
+    }
   }
 }
 
@@ -4169,7 +4373,12 @@ function loadFromLocalStorage(path) {
     const key = 'nasmd_draft_' + path;
     const data = localStorage.getItem(key);
     if (!data) return null;
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (parsed && parsed.savedAt && Date.now() - parsed.savedAt > DRAFT_MAX_AGE_MS) {
+      clearLocalStorage(path);
+      return null;
+    }
+    return parsed;
   } catch (_e) {
     return null;
   }
@@ -4183,11 +4392,43 @@ function clearLocalStorage(path) {
   }
 }
 
+// === 离线草稿自动同步与提醒 ===
+function syncOfflineDrafts() {
+  if (!navigator.onLine) return;
+  try {
+    const draftKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('nasmd_draft_')) {
+        draftKeys.push(k);
+      }
+    }
+    if (draftKeys.length === 0) return;
+
+    for (const key of draftKeys) {
+      const path = key.substring('nasmd_draft_'.length);
+      const draft = loadFromLocalStorage(path);
+      if (!draft) continue;
+
+      if (state.currentPath === path) {
+        if (state.dirty) {
+          saveFile(true);
+        }
+      } else {
+        showToast('已恢复网络，发现未同步的离线草稿: ' + path, 'info');
+      }
+    }
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
 // Online/offline event listeners
 window.addEventListener('online', () => {
   state.syncStatus = 'synced';
   updateSyncIndicator();
   performSync();
+  syncOfflineDrafts();
 });
 window.addEventListener('offline', () => {
   state.syncStatus = 'offline';

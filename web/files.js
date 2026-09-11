@@ -139,16 +139,29 @@ const API = {
   // 提交段落级changes（版本号驱动的协同编辑）
   // 调用 POST /api/mounts/{id}/changes?path=...
   // 返回 { applied, merged, newVersion, content } 或 null（失败时）
-  async submitChanges(mountId, path, baseVersion, changes, authorName, authorColor, clientInfo) {
+  async submitChanges(
+    mountId,
+    path,
+    baseVersion,
+    changes,
+    authorName,
+    authorColor,
+    clientInfo,
+    content,
+  ) {
     const url = `/api/mounts/${mountId}/changes?path=${encodeURIComponent(path)}`;
-    const body = JSON.stringify({
+    const payload = {
       baseVersion,
       changes,
       authorName: authorName || 'Anonymous',
       authorColor: authorColor || '#3498db',
       os: clientInfo ? clientInfo.os : 'Unknown OS',
       browser: clientInfo ? clientInfo.browser : 'Unknown Browser',
-    });
+    };
+    if (content !== undefined && content !== null) {
+      payload.content = content;
+    }
+    const body = JSON.stringify(payload);
     console.log('[submitChanges] sending POST:', {
       url,
       baseVersion,

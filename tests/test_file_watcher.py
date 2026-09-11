@@ -60,3 +60,29 @@ def test_get_watcher_singleton():
     a = get_watcher()
     b = get_watcher()
     assert a is b
+
+
+def test_mark_expected_fifo_queue_consecutive_saves(tmp_path):
+    """Consecutive rapid marks for the same file should be queued in FIFO order."""
+    w = FileWatcher()
+    f = tmp_path / "rapid.md"
+
+    # Rapid auto-save 1, 2, 3
+    w.mark_expected("mount-0", "rapid.md", "content v1")
+    w.mark_expected("mount-0", "rapid.md", "content v2")
+    w.mark_expected("mount-0", "rapid.md", "content v3")
+
+    # Write v1 and check
+    f.write_text("content v1", encoding="utf-8")
+    assert w.is_expected("mount-0", "rapid.md", str(f)) is True
+
+    # Write v2 and check
+    f.write_text("content v2", encoding="utf-8")
+    assert w.is_expected("mount-0", "rapid.md", str(f)) is True
+
+    # Write v3 and check
+    f.write_text("content v3", encoding="utf-8")
+    assert w.is_expected("mount-0", "rapid.md", str(f)) is True
+
+    # Queue is now empty
+    assert w.is_expected("mount-0", "rapid.md", str(f)) is False

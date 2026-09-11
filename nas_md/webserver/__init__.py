@@ -1482,7 +1482,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         new_text = body.decode("utf-8", errors="replace")
 
         from nas_md.webserver.file_version_store import get_store
-        from nas_md.webserver.paragraph_diff import compute_diff, apply_changes as apply_diff
+        from nas_md.webserver.paragraph_diff import compute_diff
 
         store = get_store()
         file_key = f"{mount_id}:{rel_path}"
@@ -1511,8 +1511,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             from nas_md.webserver.file_watcher import get_watcher
 
-            expected_content = apply_diff(old_content, changes)
-            get_watcher().mark_expected(mount_id, rel_path, expected_content)
+            get_watcher().mark_expected(mount_id, rel_path, new_text)
         except Exception:
             pass  # watcher optional
 
@@ -1524,6 +1523,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             author_id=session_id,
             author_name=author_name,
             author_color=author_color,
+            client_content=new_text,
         )
 
         if changes and result.get("applied"):
@@ -1699,6 +1699,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         base_version = int(payload.get("baseVersion", 0))
         changes = payload.get("changes", [])
+        client_content = payload.get("content")
         author_name = payload.get("authorName") or self.headers.get("X-Client-Name", "Anonymous")
         author_color = payload.get("authorColor") or self.headers.get("X-Client-Color", "#3498db")
         client_os = payload.get("os", "Unknown OS")
@@ -1727,7 +1728,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             from nas_md.webserver.file_watcher import get_watcher
 
-            expected_content = apply_diff(current_content, changes)
+            if client_content is not None and base_version == store.get_current_version(file_key):
+                expected_content = client_content
+            else:
+                expected_content = apply_diff(current_content, changes)
             get_watcher().mark_expected(mount_id, rel_path, expected_content)
         except Exception:
             pass  # watcher optional
@@ -1744,6 +1748,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             client_os=client_os,
             client_browser=client_browser,
             user_agent=user_agent,
+            client_content=client_content,
         )
 
         # Broadcast to other clients via SSE

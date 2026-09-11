@@ -239,51 +239,115 @@
   // === Simple line-level diff using LCS ===
 
   function computeLineDiff(oldText, newText) {
-    var oldLines = oldText.split('\n');
-    var newLines = newText.split('\n');
+    if (oldText === newText) {
+      return oldText
+        ? oldText.split('\n').map(function (l) {
+            return { type: 'equal', oldLine: l, newLine: l };
+          })
+        : [];
+    }
+
+    var oldLines = oldText ? oldText.split('\n') : [];
+    var newLines = newText ? newText.split('\n') : [];
     var m = oldLines.length;
     var n = newLines.length;
 
-    // Build LCS table
-    var dp = [];
-    for (var i = 0; i <= m; i++) {
-      dp[i] = new Array(n + 1).fill(0);
+    // Fast-path: Common Prefix and Common Suffix stripping
+    var prefixCount = 0;
+    while (prefixCount < m && prefixCount < n && oldLines[prefixCount] === newLines[prefixCount]) {
+      prefixCount++;
     }
-    for (var i = m - 1; i >= 0; i--) {
-      for (var j = n - 1; j >= 0; j--) {
-        if (oldLines[i] === newLines[j]) {
-          dp[i][j] = dp[i + 1][j + 1] + 1;
-        } else {
-          dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+
+    var suffixCount = 0;
+    while (
+      suffixCount < m - prefixCount &&
+      suffixCount < n - prefixCount &&
+      oldLines[m - 1 - suffixCount] === newLines[n - 1 - suffixCount]
+    ) {
+      suffixCount++;
+    }
+
+    var result = [];
+
+    // Add common prefix
+    for (var p = 0; p < prefixCount; p++) {
+      result.push({ type: 'equal', oldLine: oldLines[p], newLine: newLines[p] });
+    }
+
+    // Mid-section (actual diff window)
+    var midOld = oldLines.slice(prefixCount, m - suffixCount);
+    var midNew = newLines.slice(prefixCount, n - suffixCount);
+    var midM = midOld.length;
+    var midN = midNew.length;
+
+    if (midM === 0) {
+      // Pure insertion
+      for (var k1 = 0; k1 < midN; k1++) {
+        result.push({ type: 'insert', oldLine: null, newLine: midNew[k1] });
+      }
+    } else if (midN === 0) {
+      // Pure deletion
+      for (var k2 = 0; k2 < midM; k2++) {
+        result.push({ type: 'delete', oldLine: midOld[k2], newLine: null });
+      }
+    } else if (midM > 300 || midN > 300) {
+      // Large difference fallback: instant block replace to prevent freezing
+      for (var k2 = 0; k2 < midM; k2++) {
+        result.push({ type: 'delete', oldLine: midOld[k2], newLine: null });
+      }
+      for (var k1 = 0; k1 < midN; k1++) {
+        result.push({ type: 'insert', oldLine: null, newLine: midNew[k1] });
+      }
+    } else {
+      // Build DP table only on the small mid window (< 300 lines)
+      var dp = [];
+      for (var di = 0; di <= midM; di++) {
+        dp[di] = new Array(midN + 1).fill(0);
+      }
+      for (var i = midM - 1; i >= 0; i--) {
+        for (var j = midN - 1; j >= 0; j--) {
+          if (midOld[i] === midNew[j]) {
+            dp[i][j] = dp[i + 1][j + 1] + 1;
+          } else {
+            dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+          }
         }
+      }
+
+      var mi = 0,
+        mj = 0;
+      while (mi < midM && mj < midN) {
+        if (midOld[mi] === midNew[mj]) {
+          result.push({ type: 'equal', oldLine: midOld[mi], newLine: midNew[mj] });
+          mi++;
+          mj++;
+        } else if (dp[mi + 1][mj] >= dp[mi][mj + 1]) {
+          result.push({ type: 'delete', oldLine: midOld[mi], newLine: null });
+          mi++;
+        } else {
+          result.push({ type: 'insert', oldLine: null, newLine: midNew[mj] });
+          mj++;
+        }
+      }
+      while (mi < midM) {
+        result.push({ type: 'delete', oldLine: midOld[mi], newLine: null });
+        mi++;
+      }
+      while (mj < midN) {
+        result.push({ type: 'insert', oldLine: null, newLine: midNew[mj] });
+        mj++;
       }
     }
 
-    // Backtrack to build diff
-    var result = [];
-    var i = 0,
-      j = 0;
-    while (i < m && j < n) {
-      if (oldLines[i] === newLines[j]) {
-        result.push({ type: 'equal', oldLine: oldLines[i], newLine: newLines[j] });
-        i++;
-        j++;
-      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-        result.push({ type: 'delete', oldLine: oldLines[i], newLine: null });
-        i++;
-      } else {
-        result.push({ type: 'insert', oldLine: null, newLine: newLines[j] });
-        j++;
-      }
+    // Add common suffix
+    for (var s = suffixCount; s > 0; s--) {
+      result.push({
+        type: 'equal',
+        oldLine: oldLines[m - s],
+        newLine: newLines[n - s],
+      });
     }
-    while (i < m) {
-      result.push({ type: 'delete', oldLine: oldLines[i], newLine: null });
-      i++;
-    }
-    while (j < n) {
-      result.push({ type: 'insert', oldLine: null, newLine: newLines[j] });
-      j++;
-    }
+
     return result;
   }
 
@@ -454,17 +518,15 @@
         // Do NOT update state.baseContent to versionContent, otherwise diff
         // would be empty and save would be skipped.
         window._vditor.setValue(versionContent);
-        // Update markDirty to reflect the change
         if (window.markDirty) {
           window.markDirty();
         }
         modal.style.display = 'none';
-        // Use setTimeout to let Vditor finish rendering before save
-        setTimeout(function () {
+        requestAnimationFrame(function () {
           if (typeof window.saveFile === 'function') {
             window.saveFile();
           }
-        }, 200);
+        });
       }
     });
 
