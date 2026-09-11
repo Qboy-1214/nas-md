@@ -10,9 +10,21 @@
 
   var _blocks = {};
   var _overlayLayer = null;
+  var _trackingTimer = null;
 
   function initOverlayLayer() {
-    if (_overlayLayer) return _overlayLayer;
+    var vditorContainer = document.querySelector('.vditor-content') || document.querySelector('.vditor');
+    if (_overlayLayer) {
+      if (!document.contains(_overlayLayer) && vditorContainer) {
+        if (getComputedStyle(vditorContainer).position === 'static') {
+          vditorContainer.style.position = 'relative';
+        }
+        vditorContainer.appendChild(_overlayLayer);
+      }
+      installUndoPatch(window._vditor && window._vditor.vditor);
+      return _overlayLayer;
+    }
+    installUndoPatch(window._vditor && window._vditor.vditor);
     _overlayLayer = document.createElement('div');
     _overlayLayer.className = 'mme-global-overlay';
     _overlayLayer.style.position = 'absolute';
@@ -22,48 +34,13 @@
     _overlayLayer.style.height = '100%';
     _overlayLayer.style.pointerEvents = 'none'; // Let clicks pass through except on our UI
     _overlayLayer.style.zIndex = '1000';
-    
-    // We attach it to the vditor container so it scrolls with it
-    var vditorContainer = document.querySelector('.vditor-content') || document.querySelector('.vditor');
+
+    // Attach the overlay to the Vditor container so it scrolls with the editor.
     if (vditorContainer) {
       if (getComputedStyle(vditorContainer).position === 'static') {
         vditorContainer.style.position = 'relative';
       }
       vditorContainer.appendChild(_overlayLayer);
-    }
-    
-    // Aggressive DOM sanitizer for Vditor's native Undo bug in IR mode
-    // When Ctrl+Z is pressed, Vditor's undo stack sometimes restores corrupted HTML
-    // containing .vditor-wysiwyg__block inside .vditor-ir__node.
-    var irContainer = document.querySelector('.vditor-ir');
-    if (irContainer) {
-      if (!window._mmeSanitizerObserver) {
-        window._mmeSanitizerObserver = new MutationObserver(function(mutations) {
-          var hasCorruption = false;
-          mutations.forEach(function(mutation) {
-            if (mutation.addedNodes.length > 0) {
-              for (var i = 0; i < mutation.addedNodes.length; i++) {
-                var node = mutation.addedNodes[i];
-                if (node.nodeType === 1) { // Element
-                  if (node.classList && node.classList.contains('vditor-wysiwyg__block')) {
-                    hasCorruption = true;
-                  } else if (node.querySelector && node.querySelector('.vditor-wysiwyg__block')) {
-                    hasCorruption = true;
-                  }
-                }
-              }
-            }
-          });
-          if (hasCorruption) {
-            var badBlocks = irContainer.querySelectorAll('.vditor-wysiwyg__block');
-            if (badBlocks.length > 0) {
-              console.log('[mermaid-enhancer] Sanitizing native Vditor undo corruption:', badBlocks.length, 'blocks removed');
-              badBlocks.forEach(function(el) { el.remove(); });
-            }
-          }
-        });
-        window._mmeSanitizerObserver.observe(irContainer, { childList: true, subtree: true });
-      }
     }
 
     function loop() {
@@ -71,8 +48,96 @@
       _trackingTimer = requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
-    
+
     return _overlayLayer;
+  }
+
+  // Vditor IR snapshots include rendered Mermaid SVGs. Keep those snapshots
+  // source-based, and make IR undo restore IR nodes instead of WYSIWYG nodes.
+  function installUndoPatch(vditor) {
+    if (!vditor || !vditor.undo || vditor.undo._mmePatched) return;
+    var undo = vditor.undo;
+    if (!undo.addCaret || !undo.renderDiff) return;
+    undo._mmePatched = true;
+
+    function withCanonicalMermaid(vditorArg, callback) {
+      if (vditorArg.currentMode !== 'ir' || !vditorArg.ir || !vditorArg.ir.element) {
+        return callback();
+      }
+
+      var saved = [];
+      vditorArg.ir.element.querySelectorAll('.vditor-ir__preview').forEach(function (preview) {
+        var rendered = preview.firstElementChild;
+        if (!rendered || !rendered.classList.contains('language-mermaid')) return;
+
+        var sourceMarker = preview.previousElementSibling;
+        var source = sourceMarker && sourceMarker.querySelector('code');
+        if (!source) return;
+
+        var children = Array.prototype.slice.call(preview.childNodes);
+        children.forEach(function (child) {
+          preview.removeChild(child);
+        });
+        var sourceElement = document.createElement('code');
+        sourceElement.className = 'language-mermaid';
+        sourceElement.textContent = source.textContent || '';
+        preview.appendChild(sourceElement);
+        saved.push({ preview: preview, children: children, sourceElement: sourceElement });
+      });
+
+      try {
+        return callback();
+      } finally {
+        saved.forEach(function (item) {
+          if (item.sourceElement.parentNode === item.preview) {
+            item.preview.removeChild(item.sourceElement);
+          }
+          item.children.forEach(function (child) {
+            item.preview.appendChild(child);
+          });
+        });
+      }
+    }
+
+    var originalAddCaret = undo.addCaret;
+    undo.addCaret = function (vditorArg, insertWbr) {
+      return withCanonicalMermaid(vditorArg, function () {
+        return originalAddCaret.call(undo, vditorArg, insertWbr);
+      });
+    };
+
+    var originalRenderDiff = undo.renderDiff;
+    undo.renderDiff = function (patch, vditorArg, isRedo) {
+      if (
+        vditorArg.currentMode !== 'ir' ||
+        !vditorArg.lute ||
+        !vditorArg.lute.SpinVditorIRDOM
+      ) {
+        return originalRenderDiff.call(undo, patch, vditorArg, isRedo);
+      }
+
+      var lute = vditorArg.lute;
+      var originalSpinVditorDOM = lute.SpinVditorDOM;
+      var spinVditorIRDOM = lute.SpinVditorIRDOM;
+      lute.SpinVditorDOM = function (html) {
+        var rendered = spinVditorIRDOM.call(lute, html);
+        var container = document.createElement('div');
+        container.innerHTML = rendered;
+        var preview = container.querySelector('.vditor-ir__preview');
+        return preview ? preview.outerHTML : rendered;
+      };
+      try {
+        return originalRenderDiff.call(undo, patch, vditorArg, isRedo);
+      } finally {
+        lute.SpinVditorDOM = originalSpinVditorDOM;
+      }
+    };
+
+    if (vditor.currentMode === 'ir' && vditor.ir && vditor.ir.element && undo.ir) {
+      undo.ir.lastText = withCanonicalMermaid(vditor, function () {
+        return vditor.ir.element.innerHTML;
+      });
+    }
   }
 
   function updateOverlayPositions() {
@@ -82,29 +147,21 @@
       var blockId = ui.getAttribute('data-mme-id');
       var state = _blocks[blockId];
       if (!state || !state.targetEl || !document.contains(state.targetEl)) {
-        // Target element is gone (e.g. Vditor re-rendered it)
         ui.remove();
         delete _blocks[blockId];
         return;
       }
-      
-      var target = state.targetEl;
-      // We position the UI relative to the overlay layer's offsetParent
-      var targetRect = target.getBoundingClientRect();
+
+      var targetRect = state.targetEl.getBoundingClientRect();
       var layerRect = _overlayLayer.getBoundingClientRect();
-      
       var toolbar = ui.querySelector('.mme-toolbar');
       var toolbarHeight = toolbar ? toolbar.offsetHeight : 38;
-      
-      var top = targetRect.top - layerRect.top - toolbarHeight;
-      var left = targetRect.left - layerRect.left;
-      
-      ui.style.top = top + 'px';
-      ui.style.left = left + 'px';
+      ui.style.top = targetRect.top - layerRect.top - toolbarHeight + 'px';
+      ui.style.left = targetRect.left - layerRect.left + 'px';
       ui.style.width = targetRect.width + 'px';
-      // height is dynamic
     });
   }
+
 
   function captureMermaidSources() {
     var vditor = document.getElementById('vditor');

@@ -680,6 +680,8 @@ function initEditor(content, mode, readonly) {
       rewriteEditorImages();
       _addHeadingIdsToEditor(vditorEl);
       fixMermaidNodeHeights();
+      // Expose the current instance before Mermaid enhancement installs editor hooks.
+      window._vditor = _vditor;
       if (window._enhanceMermaid) window._enhanceMermaid();
       const contentEl =
         vditorEl.querySelector('.vditor-ir') || vditorEl.querySelector('.vditor-wysiwyg');
