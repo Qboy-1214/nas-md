@@ -48,6 +48,7 @@ test('Mermaid fallback fullscreen keeps the chart and existing controls usable',
   const codeArea = page.locator('.mme-code-area').first();
   await page.locator('[data-action="showCode"]').first().click();
   await expect(codeArea).toBeVisible();
+  await expect(fullscreenButton(page)).toHaveAttribute('title', '退出全屏');
   await page.locator('[data-action="showChart"]').first().click();
   await page.locator('[data-action="zoomIn"]').first().click();
   await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /scale\(1\.25\)/);
@@ -102,4 +103,41 @@ test('Mermaid fullscreen layout fits a mobile viewport', async ({ page }) => {
   await expect.poll(async () => page.locator('.mme-toolbar').first().boundingBox()).not.toBeNull();
   await expect.poll(async () => page.locator('.language-mermaid svg').last().boundingBox()).not.toBeNull();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+});
+
+test('Fullscreen does not pollute Mermaid Undo and Redo', async ({ page }) => {
+  await prepareEditor(page);
+  await page.evaluate(() => {
+    document.documentElement.requestFullscreen = () => Promise.reject(new Error('fullscreen unavailable'));
+  });
+
+  const originalValue = await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, ''));
+  const baselineSnapshot = await page.evaluate(() => window._vditor.vditor.undo.addCaret(window._vditor.vditor));
+  const editedValue = `${originalValue}!`;
+  await page.evaluate((value) => window._vditor.setValue(value), editedValue);
+  await expect.poll(async () => page.evaluate(() => window._vditor.getValue())).toContain('After the diagram!');
+  await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
+  await fullscreenButton(page).click();
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+
+  await page.evaluate((baseline) => {
+    const vditor = window._vditor.vditor;
+    const current = vditor.undo.addCaret(vditor);
+    window.fullscreenUndoPatch = vditor.undo.dmp.patch_make(current, baseline);
+    vditor.undo.ir.lastText = current;
+    vditor.undo.renderDiff(window.fullscreenUndoPatch, vditor, false);
+  }, baselineSnapshot);
+  await expect.poll(async () => page.evaluate(() => window._vditor.getValue().replace(/\n+$/, ''))).toBe(
+    originalValue,
+  );
+  await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
+  expect(await page.locator('.vditor-ir .vditor-wysiwyg__block').count()).toBe(0);
+
+  await page.evaluate(() => {
+    const vditor = window._vditor.vditor;
+    vditor.undo.renderDiff(window.fullscreenUndoPatch, vditor, true);
+  });
+  await expect.poll(async () => page.evaluate(() => window._vditor.getValue())).toContain('After the diagram!');
+  await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
+  expect(await page.locator('.vditor-ir .vditor-wysiwyg__block').count()).toBe(0);
 });
