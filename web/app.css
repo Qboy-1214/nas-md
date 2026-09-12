@@ -2585,35 +2585,91 @@ a:hover {
   background: #45475a;
 }
 
-/* ── Fullscreen Mode ── */
-[data-mme-protected].mme-fullscreen {
-  position: fixed !important;
-  inset: 0 !important;
-  z-index: 10000 !important;
+/* Mermaid fullscreen view: keep the chart and overlay in the document, but isolate them from the editor chrome. */
+html.mme-fullscreen-active,
+html.mme-fullscreen-active body {
+  overflow: hidden !important;
   background: var(--c-canvas, #ffffff) !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  border-radius: 0 !important;
+}
+html.mme-fullscreen-active .mme-global-overlay {
+  z-index: 2147483647 !important;
 }
 
-[data-mme-protected].mme-fullscreen .mme-toolbar {
+html.mme-fullscreen-active .sidebar,
+html.mme-fullscreen-active .sidebar-resizer,
+html.mme-fullscreen-active .topbar,
+html.mme-fullscreen-active #backlinks-panel,
+html.mme-fullscreen-active .vditor-toolbar,
+html.mme-fullscreen-active .vditor-outline {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+html.mme-fullscreen-active .language-mermaid[data-mme-fullscreen='true'] {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483646 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 56px 24px 24px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  overflow: auto !important;
+  background: var(--c-canvas, #ffffff) !important;
+}
+
+html.mme-fullscreen-active .language-mermaid[data-mme-fullscreen='true'] svg {
+  flex: 0 0 auto;
+  max-width: none !important;
+}
+
+html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483647 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  box-sizing: border-box !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  pointer-events: none !important;
+}
+
+html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-toolbar {
+  flex: 0 0 auto;
+  padding: 8px 16px !important;
   border-radius: 0 !important;
   border-left: none !important;
   border-right: none !important;
   border-top: none !important;
-  padding: 8px 16px !important;
+  pointer-events: auto !important;
 }
 
-[data-mme-protected].mme-fullscreen .mme-chart-target,
-[data-mme-protected].mme-fullscreen .language-mermaid[data-mme-enhanced],
-[data-mme-protected].mme-fullscreen .mme-code-area {
-  flex: 1 !important;
+html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-code-area {
+  flex: 1 1 auto !important;
   max-height: none !important;
   border: none !important;
   border-radius: 0 !important;
+  overflow: auto !important;
+}
+
+@media (max-width: 600px) {
+  html.mme-fullscreen-active .language-mermaid[data-mme-fullscreen='true'] {
+    padding: 50px 8px 8px !important;
+  }
+
+  html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-toolbar {
+    gap: 4px;
+    padding: 8px !important;
+  }
 }
 
 /* ── Vditor Table Fixes ── */
