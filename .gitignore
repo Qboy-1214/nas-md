@@ -21,3 +21,4 @@ pytest-output.txt
 .coverage
 .mimocode/
 .understand-anything/
+.worktrees/
