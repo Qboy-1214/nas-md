@@ -10,9 +10,12 @@
 
   var _blocks = {};
   var _overlayLayer = null;
+  var _fullscreenState = null;
+  var _fullscreenListenersInstalled = false;
   var _trackingTimer = null;
 
   function initOverlayLayer() {
+    installFullscreenListeners();
     var vditorContainer = document.querySelector('.vditor-content') || document.querySelector('.vditor');
     if (_overlayLayer) {
       if (!document.contains(_overlayLayer) && vditorContainer) {
@@ -143,12 +146,20 @@
   function updateOverlayPositions() {
     if (!_overlayLayer) return;
     var uis = _overlayLayer.querySelectorAll('.mme-overlay-item');
-    uis.forEach(function(ui) {
+    uis.forEach(function (ui) {
       var blockId = ui.getAttribute('data-mme-id');
       var state = _blocks[blockId];
       if (!state || !state.targetEl || !document.contains(state.targetEl)) {
+        if (state && state.fullscreenMode) clearFullscreenState(state);
         ui.remove();
         delete _blocks[blockId];
+        return;
+      }
+
+      if (state.fullscreenMode) {
+        ui.style.top = '0px';
+        ui.style.left = '0px';
+        ui.style.width = '100%';
         return;
       }
 
@@ -160,6 +171,125 @@
       ui.style.left = targetRect.left - layerRect.left + 'px';
       ui.style.width = targetRect.width + 'px';
     });
+  }
+
+  function installFullscreenListeners() {
+    if (_fullscreenListenersInstalled) return;
+    _fullscreenListenersInstalled = true;
+    document.addEventListener('fullscreenchange', handleNativeFullscreenChange);
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape' || !_fullscreenState || _fullscreenState.mode !== 'app') return;
+      event.preventDefault();
+      exitFullscreen(_fullscreenState.blockId);
+    });
+  }
+
+  function fullscreenButtonFor(state) {
+    return state.uiContainer
+      ? state.uiContainer.querySelector('[data-action="toggleFullscreen"]')
+      : null;
+  }
+
+  function updateFullscreenButton(state) {
+    var button = fullscreenButtonFor(state);
+    if (!button) return;
+    var isFullscreen = !!state.fullscreenMode;
+    var enterIcon = button.querySelector('.mme-icon-fullscreen');
+    var exitIcon = button.querySelector('.mme-icon-exit-fullscreen');
+    button.title = isFullscreen ? '退出全屏' : '全屏查看';
+    button.setAttribute('aria-label', button.title);
+    if (enterIcon) enterIcon.style.display = isFullscreen ? 'none' : '';
+    if (exitIcon) exitIcon.style.display = isFullscreen ? '' : 'none';
+  }
+
+  function markFullscreenElements(state, active) {
+    var target = state.targetEl;
+    var container = state.uiContainer;
+    if (active) {
+      if (target) target.setAttribute('data-mme-fullscreen', 'true');
+      if (container) container.setAttribute('data-mme-fullscreen', 'true');
+      document.documentElement.classList.add('mme-fullscreen-active');
+      document.body.classList.toggle('mme-app-fullscreen', state.fullscreenMode === 'app');
+    } else {
+      if (target) target.removeAttribute('data-mme-fullscreen');
+      if (container) container.removeAttribute('data-mme-fullscreen');
+    }
+  }
+
+  function clearFullscreenState(state) {
+    if (!state) return;
+    var isCurrent = _fullscreenState && _fullscreenState.state === state;
+    state.fullscreenMode = null;
+    markFullscreenElements(state, false);
+    updateFullscreenButton(state);
+    if (state.uiContainer) {
+      state.uiContainer.style.top = '';
+      state.uiContainer.style.left = '';
+      state.uiContainer.style.width = '';
+    }
+    if (isCurrent) {
+      document.documentElement.classList.remove('mme-fullscreen-active');
+      document.body.classList.remove('mme-app-fullscreen');
+      _fullscreenState = null;
+    }
+  }
+
+  async function enterFullscreen(id) {
+    var state = _blocks[id];
+    if (!state || !state.targetEl || !state.uiContainer) return;
+    if (_fullscreenState && _fullscreenState.state !== state) {
+      await exitFullscreen(_fullscreenState.blockId);
+    }
+
+    _fullscreenState = { blockId: id, mode: null, state: state };
+    var root = document.documentElement;
+    if (root && typeof root.requestFullscreen === 'function') {
+      try {
+        await root.requestFullscreen();
+        if (!_fullscreenState || _fullscreenState.state !== state) return;
+        _fullscreenState.mode = 'native';
+        state.fullscreenMode = 'native';
+        markFullscreenElements(state, true);
+        updateFullscreenButton(state);
+        return;
+      } catch (_error) {
+        // Fall back to an application-level fullscreen view.
+      }
+    }
+
+    if (!_fullscreenState || _fullscreenState.state !== state) return;
+    _fullscreenState.mode = 'app';
+    state.fullscreenMode = 'app';
+    markFullscreenElements(state, true);
+    updateFullscreenButton(state);
+  }
+
+  async function exitFullscreen(id) {
+    if (!_fullscreenState || _fullscreenState.blockId !== id) return;
+    var fullscreenState = _fullscreenState;
+    try {
+      if (
+        fullscreenState.mode === 'native' &&
+        document.fullscreenElement &&
+        typeof document.exitFullscreen === 'function'
+      ) {
+        await document.exitFullscreen();
+      }
+    } catch (_error) {
+      // Always clear the application state even if the browser API rejects.
+    } finally {
+      clearFullscreenState(fullscreenState.state);
+    }
+  }
+
+  function handleNativeFullscreenChange() {
+    if (
+      _fullscreenState &&
+      _fullscreenState.mode === 'native' &&
+      !document.fullscreenElement
+    ) {
+      clearFullscreenState(_fullscreenState.state);
+    }
   }
 
 
@@ -228,7 +358,15 @@
     }
 
     var blockId = 'mme_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-    _blocks[blockId] = { zoom: 1, theme: 'light', mode: 'chart', sourceCode: sourceCode, targetEl: el };
+    _blocks[blockId] = {
+      zoom: 1,
+      theme: 'light',
+      mode: 'chart',
+      sourceCode: sourceCode,
+      targetEl: el,
+      uiContainer: null,
+      fullscreenMode: null,
+    };
 
     el.setAttribute('data-mme-enhanced', 'true');
     el.setAttribute('data-mme-id', blockId);
@@ -263,6 +401,7 @@
     codeArea.innerHTML = '<span class="mme-code-content">' + escapeHTML(sourceCode) + '</span>';
     uiContainer.appendChild(codeArea);
 
+    _blocks[blockId].uiContainer = uiContainer;
     _overlayLayer.appendChild(uiContainer);
     bindEvents(blockId, toolbar, el, codeArea, uiContainer);
     
@@ -300,6 +439,10 @@
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>PNG</span>' +
       '</button>' +
       '</div>' +
+      '<button class="mme-btn mme-fullscreen-control" data-action="toggleFullscreen" title="全屏查看" aria-label="全屏查看">' +
+      '<svg class="mme-icon-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>' +
+      '<svg class="mme-icon-exit-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>' +
+      '</button>' +
       '<div class="mme-controls mme-code-controls" style="display:none">' +
       '<button class="mme-btn" data-action="copyCode" title="复制代码">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>复制</span>' +
@@ -337,6 +480,13 @@
         break;
       case 'zoomOut':
         setZoom(id, Math.max(state.zoom - 0.25, 0.25), chartEl, true);
+        break;
+      case 'toggleFullscreen':
+        if (state.fullscreenMode) {
+          exitFullscreen(id);
+        } else {
+          enterFullscreen(id);
+        }
         break;
       case 'downloadSVG':
         downloadSVG(chartEl);
