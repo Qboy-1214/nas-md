@@ -192,3 +192,53 @@ test('Fullscreen hides other Mermaid toolbars in the same document', async ({ pa
   await expect(page.locator('.mme-overlay-item[data-mme-fullscreen="true"]')).toHaveCount(1);
   await expect(page.locator('.mme-overlay-item:not([data-mme-fullscreen="true"])')).toBeHidden();
 });
+
+test('Exiting fullscreen restores the chart transform from before fullscreen', async ({ page }) => {
+  await prepareEditor(page);
+  await page.evaluate(() => {
+    document.documentElement.requestFullscreen = () => Promise.reject(new Error('fullscreen unavailable'));
+  });
+
+  const before = await page.evaluate(() => {
+    const target = document.querySelector('.language-mermaid[data-mme-enhanced]');
+    const svg = target.querySelector('svg');
+    return {
+      transform: svg.style.transform,
+      transformOrigin: svg.style.transformOrigin,
+      targetRect: target.getBoundingClientRect().toJSON(),
+    };
+  });
+
+  await fullscreenButton(page).click();
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+  await page.locator('[data-action="zoomIn"]').first().click();
+  await page.locator('[data-action="zoomIn"]').first().click();
+
+  const chart = page.locator('.language-mermaid[data-mme-enhanced]').last();
+  const box = await chart.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 450, box.y + box.height / 2 + 280, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /translate3d\(450px, 280px/);
+
+  await fullscreenButton(page).click();
+  await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
+  await page.waitForTimeout(100);
+
+  const after = await page.evaluate(() => {
+    const target = document.querySelector('.language-mermaid[data-mme-enhanced]');
+    const svg = target.querySelector('svg');
+    return {
+      transform: svg.style.transform,
+      transformOrigin: svg.style.transformOrigin,
+      targetRect: target.getBoundingClientRect().toJSON(),
+      svgRect: svg.getBoundingClientRect().toJSON(),
+    };
+  });
+  expect(after.transform).toBe(before.transform);
+  expect(after.transformOrigin).toBe(before.transformOrigin);
+  expect(after.svgRect.left).toBeGreaterThanOrEqual(after.targetRect.left - 1);
+  expect(after.svgRect.left).toBeLessThan(after.targetRect.right);
+  expect(after.svgRect.top).toBeGreaterThanOrEqual(after.targetRect.top - 1);
+});

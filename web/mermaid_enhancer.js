@@ -215,6 +215,41 @@
     if (exitIcon) exitIcon.style.display = isFullscreen ? '' : 'none';
   }
 
+  function captureFullscreenView(state) {
+    var svg = state.targetEl && state.targetEl.querySelector('svg');
+    state.preFullscreenView = {
+      zoom: state.zoom,
+      panX: state.panX || 0,
+      panY: state.panY || 0,
+      theme: state.theme,
+      transform: svg ? svg.style.transform : '',
+      transformOrigin: svg ? svg.style.transformOrigin : '',
+      filter: svg ? svg.style.filter : '',
+    };
+  }
+
+  function restoreFullscreenView(state) {
+    var view = state.preFullscreenView;
+    if (!view) return;
+    state.zoom = view.zoom;
+    state.panX = view.panX;
+    state.panY = view.panY;
+    state.theme = view.theme;
+    var svg = state.targetEl && state.targetEl.querySelector('svg');
+    if (svg) {
+      svg.style.transform = view.transform;
+      svg.style.transformOrigin = view.transformOrigin;
+      svg.style.filter = view.filter;
+    }
+    if (state.uiContainer) {
+      var sunIcon = state.uiContainer.querySelector('.mme-icon-sun');
+      var moonIcon = state.uiContainer.querySelector('.mme-icon-moon');
+      if (sunIcon) sunIcon.style.display = state.theme === 'dark' ? 'none' : '';
+      if (moonIcon) moonIcon.style.display = state.theme === 'dark' ? '' : 'none';
+    }
+    state.preFullscreenView = null;
+  }
+
   function markFullscreenElements(state, active) {
     var target = state.targetEl;
     var container = state.uiContainer;
@@ -232,6 +267,7 @@
   function clearFullscreenState(state) {
     if (!state) return;
     var isCurrent = _fullscreenState && _fullscreenState.state === state;
+    restoreFullscreenView(state);
     state.fullscreenMode = null;
     markFullscreenElements(state, false);
     updateFullscreenButton(state);
@@ -255,6 +291,7 @@
     }
 
     _fullscreenState = { blockId: id, mode: null, state: state };
+    captureFullscreenView(state);
     var root = document.documentElement;
     if (root && typeof root.requestFullscreen === 'function') {
       try {
@@ -379,6 +416,7 @@
       targetEl: el,
       uiContainer: null,
       fullscreenMode: null,
+      preFullscreenView: null,
     };
 
     el.setAttribute('data-mme-enhanced', 'true');
