@@ -45,14 +45,14 @@ test('Mermaid fallback fullscreen keeps the chart and existing controls usable',
   await expect(page.locator('.language-mermaid[data-mme-fullscreen="true"]')).toBeVisible();
   await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
 
-  const codeArea = page.locator('.mme-code-area').first;
-  await page.locator('[data-action="showCode"]').first.click();
+  const codeArea = page.locator('.mme-code-area').first();
+  await page.locator('[data-action="showCode"]').first().click();
   await expect(codeArea).toBeVisible();
-  await page.locator('[data-action="showChart"]').first.click();
-  await page.locator('[data-action="zoomIn"]').first.click();
-  await expect(page.locator('.language-mermaid svg').last).toHaveAttribute('style', /scale\(1\.25\)/);
-  await page.locator('[data-action="toggleTheme"]').first.click();
-  await expect(page.locator('.language-mermaid svg').last).toHaveAttribute('style', /invert/);
+  await page.locator('[data-action="showChart"]').first().click();
+  await page.locator('[data-action="zoomIn"]').first().click();
+  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /scale\(1\.25\)/);
+  await page.locator('[data-action="toggleTheme"]').first().click();
+  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /invert/);
 
   await page.keyboard.press('Escape');
   await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
@@ -99,7 +99,7 @@ test('Mermaid fullscreen layout fits a mobile viewport', async ({ page }) => {
   });
   await fullscreenButton(page).click();
   await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
-  await expect.poll(async () => page.locator('.mme-toolbar').first.boundingBox()).not.toBeNull();
-  await expect.poll(async () => page.locator('.language-mermaid svg').last.boundingBox()).not.toBeNull();
+  await expect.poll(async () => page.locator('.mme-toolbar').first().boundingBox()).not.toBeNull();
+  await expect.poll(async () => page.locator('.language-mermaid svg').last().boundingBox()).not.toBeNull();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
