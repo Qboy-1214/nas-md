@@ -2594,6 +2594,10 @@ html.mme-fullscreen-active body {
 html.mme-fullscreen-active .mme-global-overlay {
   z-index: 2147483647 !important;
 }
+html.mme-fullscreen-active .mme-overlay-item:not([data-mme-fullscreen='true']) {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 
 html.mme-fullscreen-active .sidebar,
 html.mme-fullscreen-active .sidebar-resizer,

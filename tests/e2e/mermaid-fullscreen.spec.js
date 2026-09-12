@@ -9,6 +9,20 @@ flowchart TD
 
 After the diagram`;
 
+const twoMermaidMarkdown = `# Two Mermaid Blocks
+
+\`\`\`mermaid
+flowchart TD
+  A --> B
+\`\`\`
+
+Between diagrams
+
+\`\`\`mermaid
+flowchart LR
+  C --> D
+\`\`\``;
+
 async function prepareEditor(page) {
   await page.addInitScript(() => localStorage.clear());
   await page.route('**/api/events**', (route) => route.abort());
@@ -161,4 +175,20 @@ test('Fullscreen removes a legacy inline Mermaid toolbar', async ({ page }) => {
   await expect(page.locator('.mme-overlay-item .mme-toolbar')).toHaveCount(1);
   await expect(page.locator('.mme-toolbar')).toHaveCount(1);
   await expect(page.locator('.mme-code-area')).toHaveCount(1);
+});
+
+test('Fullscreen hides other Mermaid toolbars in the same document', async ({ page }) => {
+  await prepareEditor(page);
+  await page.evaluate((value) => window._vditor.setValue(value), twoMermaidMarkdown);
+  await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(2);
+  await expect.poll(async () => page.locator('.mme-overlay-item').count()).toBe(2);
+  await page.evaluate(() => {
+    document.documentElement.requestFullscreen = () => Promise.reject(new Error('fullscreen unavailable'));
+  });
+
+  await fullscreenButton(page).first().click();
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+  await expect(page.locator('.mme-overlay-item:visible')).toHaveCount(1);
+  await expect(page.locator('.mme-overlay-item[data-mme-fullscreen="true"]')).toHaveCount(1);
+  await expect(page.locator('.mme-overlay-item:not([data-mme-fullscreen="true"])')).toBeHidden();
 });
