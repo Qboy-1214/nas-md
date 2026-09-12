@@ -14,7 +14,20 @@
   var _fullscreenListenersInstalled = false;
   var _trackingTimer = null;
 
+  function removeLegacyMermaidUI() {
+    var vditor = document.getElementById('vditor');
+    if (!vditor) return;
+    vditor.querySelectorAll('.mme-toolbar, .mme-code-area').forEach(function (element) {
+      if (element.closest('.mme-global-overlay')) return;
+      element.remove();
+    });
+    vditor.querySelectorAll('[data-mme-protected]').forEach(function (element) {
+      if (!element.closest('.mme-global-overlay')) element.removeAttribute('data-mme-protected');
+    });
+  }
+
   function initOverlayLayer() {
+    removeLegacyMermaidUI();
     installFullscreenListeners();
     var vditorContainer = document.querySelector('.vditor-content') || document.querySelector('.vditor');
     if (_overlayLayer) {

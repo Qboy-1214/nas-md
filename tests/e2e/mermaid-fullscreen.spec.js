@@ -21,6 +21,7 @@ async function prepareEditor(page) {
   });
   await page.waitForFunction(() => window.state?.currentPath === '/mermaid-fullscreen.md');
   await page.waitForSelector('.vditor-ir');
+  await page.evaluate((value) => window._vditor.setValue(value), markdown);
   await expect.poll(async () => (await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, '')))).toBe(
     markdown,
   );
@@ -140,4 +141,24 @@ test('Fullscreen does not pollute Mermaid Undo and Redo', async ({ page }) => {
   await expect.poll(async () => page.evaluate(() => window._vditor.getValue())).toContain('After the diagram!');
   await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
   expect(await page.locator('.vditor-ir .vditor-wysiwyg__block').count()).toBe(0);
+});
+
+test('Fullscreen removes a legacy inline Mermaid toolbar', async ({ page }) => {
+  await prepareEditor(page);
+  await page.evaluate(() => {
+    const editor = document.querySelector('.vditor-ir');
+    const legacyToolbar = document.createElement('div');
+    legacyToolbar.className = 'mme-toolbar';
+    legacyToolbar.setAttribute('data-mme-id', 'legacy-toolbar');
+    const legacyCodeArea = document.createElement('div');
+    legacyCodeArea.className = 'mme-code-area';
+    editor.append(legacyToolbar, legacyCodeArea);
+    document.documentElement.requestFullscreen = () => Promise.reject(new Error('fullscreen unavailable'));
+  });
+
+  await fullscreenButton(page).click();
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+  await expect(page.locator('.mme-overlay-item .mme-toolbar')).toHaveCount(1);
+  await expect(page.locator('.mme-toolbar')).toHaveCount(1);
+  await expect(page.locator('.mme-code-area')).toHaveCount(1);
 });
