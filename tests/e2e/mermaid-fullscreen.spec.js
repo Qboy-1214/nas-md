@@ -242,3 +242,34 @@ test('Exiting fullscreen restores the chart transform from before fullscreen', a
   expect(after.svgRect.left).toBeLessThan(after.targetRect.right);
   expect(after.svgRect.top).toBeGreaterThanOrEqual(after.targetRect.top - 1);
 });
+
+test('Entering fullscreen resets an existing normal chart transform', async ({ page }) => {
+  await prepareEditor(page);
+  await page.evaluate(() => {
+    document.documentElement.requestFullscreen = () => Promise.reject(new Error('fullscreen unavailable'));
+  });
+
+  await page.locator('[data-action="zoomIn"]').first().click();
+  await page.locator('[data-action="zoomIn"]').first().click();
+  const chart = page.locator('.language-mermaid[data-mme-enhanced]').last();
+  const box = await chart.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 450, box.y + box.height / 2 + 280, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /scale\(1\.5\)/);
+
+  await fullscreenButton(page).click();
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+  await expect.poll(async () => page.locator('.language-mermaid svg').last().getAttribute('style')).toContain(
+    'translate3d(0px, 0px, 0px) scale(1)',
+  );
+
+  const fullscreenView = await page.evaluate(() => {
+    const target = document.querySelector('.language-mermaid[data-mme-fullscreen="true"]');
+    const svg = target.querySelector('svg');
+    return { target: target.getBoundingClientRect().toJSON(), svg: svg.getBoundingClientRect().toJSON() };
+  });
+  expect(fullscreenView.svg.left).toBeGreaterThanOrEqual(fullscreenView.target.left - 1);
+  expect(fullscreenView.svg.top).toBeGreaterThanOrEqual(fullscreenView.target.top - 1);
+});

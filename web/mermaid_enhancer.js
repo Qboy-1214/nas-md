@@ -250,6 +250,16 @@
     state.preFullscreenView = null;
   }
 
+  function resetFullscreenView(state) {
+    state.zoom = 1;
+    state.panX = 0;
+    state.panY = 0;
+    var svg = state.targetEl && state.targetEl.querySelector('svg');
+    if (!svg) return;
+    svg.style.transform = 'translate3d(0px, 0px, 0px) scale(1)';
+    svg.style.transformOrigin = 'top left';
+  }
+
   function markFullscreenElements(state, active) {
     var target = state.targetEl;
     var container = state.uiContainer;
@@ -300,6 +310,7 @@
         _fullscreenState.mode = 'native';
         state.fullscreenMode = 'native';
         markFullscreenElements(state, true);
+        resetFullscreenView(state);
         updateFullscreenButton(state);
         return;
       } catch (_error) {
@@ -311,6 +322,7 @@
     _fullscreenState.mode = 'app';
     state.fullscreenMode = 'app';
     markFullscreenElements(state, true);
+    resetFullscreenView(state);
     updateFullscreenButton(state);
   }
 

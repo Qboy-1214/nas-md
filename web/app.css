@@ -2614,8 +2614,8 @@ html.mme-fullscreen-active .language-mermaid[data-mme-fullscreen='true'] {
   inset: 0 !important;
   z-index: 2147483646 !important;
   display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
+  align-items: flex-start !important;
+  justify-content: flex-start !important;
   box-sizing: border-box !important;
   width: 100vw !important;
   height: 100vh !important;
