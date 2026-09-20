@@ -502,6 +502,23 @@ class TestWriteFileAPI:
         with open(path, "rb") as f:
             assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
 
+    def test_write_file_blank_only_content_increments_version(
+        self, writable_server_url, writable_dir
+    ):
+        path = os.path.join(writable_dir, "blank-only.md")
+        with open(path, "wb"):
+            pass
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/blank-only.md",
+            data=b"\n",
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 1
+        with open(path, "rb") as f:
+            assert f.read() == os.linesep.encode("utf-8")
+
     def test_write_file_normalized_line_endings_remain_a_successful_noop(
         self, writable_server_url, writable_dir
     ):
@@ -693,6 +710,34 @@ class TestSubmitChangesAPI:
         assert data["applied"] is True
         assert data["newVersion"] == 1
         assert data["content"] == "para one\n\nCHANGED\n\npara three"
+
+    def test_submit_changes_delimiter_only_preserves_paragraph_text(
+        self, writable_server_url, writable_dir
+    ):
+        path = os.path.join(writable_dir, "delimiter-only.md")
+        base = "A\n\nB"
+        target = "A\n\n\nB"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/delimiter-only.md",
+            data={
+                "baseVersion": 0,
+                "changes": [{"type": "delimiter", "paraIdx": 0, "delimiter": "\n\n\n"}],
+            },
+        )
+
+        assert status == 200
+        data = json.loads(body)
+        assert data["applied"] is True
+        assert data["newVersion"] == 1
+        assert data["content"] == target
+        assert data["appliedChanges"] == [
+            {"type": "delimiter", "paraIdx": 0, "delimiter": "\n\n\n"}
+        ]
+        with open(path, "rb") as f:
+            assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
 
     def test_submit_changes_version_increments(self, writable_server_url, writable_dir):
         """Consecutive POST /changes should increment version monotonically."""
@@ -904,12 +949,22 @@ class TestSubmitChangesAPI:
                 {"type": "delete", "paraIdx": 0, "delimiter": ""},
                 "Invalid changes: delimiter is only valid for insert/replace changes",
             ),
+            (
+                {"type": "delimiter", "paraIdx": 0, "delimiter": "\n", "content": "invalid"},
+                "Invalid changes: delimiter changes must not include content",
+            ),
+            (
+                {"type": "delimiter", "paraIdx": 0},
+                "Invalid changes: delimiter must be a string",
+            ),
         ],
         ids=[
             "negative-index",
             "current-version-index-out-of-range",
             "non-string-delimiter",
             "delete-with-delimiter",
+            "delimiter-change-with-content",
+            "delimiter-change-missing-delimiter",
         ],
     )
     def test_submit_changes_rejects_invalid_changes_without_side_effects(

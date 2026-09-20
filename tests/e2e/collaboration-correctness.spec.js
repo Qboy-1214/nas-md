@@ -45,6 +45,8 @@ test('paragraph diff and apply round-trip exact content', async ({ page }) => {
     ['change-blank-line-delimiter', 'A\n\nB', 'A\n\n\n\nB'],
     ['change-frontmatter-boundary', '---\ntitle: Doc\n---\nBody', '---\ntitle: Doc\n---\n\nBody'],
     ['empty-content', 'A', ''],
+    ['blank-only-content', '', '\n'],
+    ['delete-blank-only-content', '\n', ''],
   ];
 
   const results = await page.evaluate((roundTripCases) => {
@@ -55,6 +57,23 @@ test('paragraph diff and apply round-trip exact content', async ({ page }) => {
   }, cases);
 
   expect(results).toEqual(cases.map(([name, , target]) => [name, target]));
+});
+
+test('paragraph diff operations match the backend contract', async ({ page }) => {
+  await page.goto('/admin');
+
+  const results = await page.evaluate(() => ({
+    delimiterOnly: window.nasmdDiff.computeParagraphDiff('A\n\nB', 'A\n\n\nB'),
+    multiReplace: window.nasmdDiff.computeParagraphDiff('A\n\nB', 'X\n\nY'),
+  }));
+
+  expect(results).toEqual({
+    delimiterOnly: [{ type: 'delimiter', paraIdx: 0, delimiter: '\n\n\n' }],
+    multiReplace: [
+      { type: 'replace', paraIdx: 0, content: 'X', delimiter: '\n\n' },
+      { type: 'replace', paraIdx: 1, content: 'Y', delimiter: '' },
+    ],
+  });
 });
 
 test.describe('rebase', () => {
@@ -84,6 +103,18 @@ test.describe('rebase', () => {
         [{ type: 'delete', paraIdx: 1 }],
         3,
       ),
+      window.nasmdDiff.transformParagraphChanges(
+        [
+          {
+            type: 'delimiter',
+            paraIdx: 1,
+            delimiter: '\n',
+            operationId: 'local-format-1',
+          },
+        ],
+        [{ type: 'insert', paraIdx: 0, content: 'HEADER' }],
+        3,
+      ),
     ]);
 
     expect(results).toEqual([
@@ -91,6 +122,14 @@ test.describe('rebase', () => {
       [{ type: 'replace', paraIdx: 1, content: 'C-local' }],
       [{ type: 'insert', paraIdx: 1, content: 'B-local' }],
       [],
+      [
+        {
+          type: 'delimiter',
+          paraIdx: 2,
+          delimiter: '\n',
+          operationId: 'local-format-1',
+        },
+      ],
     ]);
   });
 
@@ -116,6 +155,15 @@ test.describe('rebase', () => {
     });
 
     expect(result).toBe('A-remote\n\nB\n\nC\n');
+  });
+
+  test('delimiter-only rebases preserve remote paragraph text', async ({ page }) => {
+    const results = await page.evaluate(() => [
+      window.nasmdDiff.rebaseContent('A\n\nB', 'A\n\n\nB', 'A-remote\n\nB'),
+      window.nasmdDiff.rebaseContent('A\n\nB\n\nC', 'A\n\nB', 'A\n\nB-remote\n\nC'),
+    ]);
+
+    expect(results).toEqual(['A-remote\n\n\nB', 'A\n\nB-remote']);
   });
 
   test('handles batched remote changes in base coordinates', async ({ page }) => {
@@ -231,6 +279,20 @@ test.describe('rebase', () => {
             ),
         ],
         [
+          'delimiter-change-missing-delimiter',
+          () =>
+            window.nasmdDiff.transformParagraphChanges([{ type: 'delimiter', paraIdx: 0 }], [], 1),
+        ],
+        [
+          'delimiter-change-with-content',
+          () =>
+            window.nasmdDiff.transformParagraphChanges(
+              [{ type: 'delimiter', paraIdx: 0, delimiter: '\n', content: 'X' }],
+              [],
+              1,
+            ),
+        ],
+        [
           'invalid-accumulated-change',
           () =>
             window.nasmdDiff.transformParagraphChanges([], [{ type: 'delete', paraIdx: -1 }], 1),
@@ -267,6 +329,8 @@ test.describe('rebase', () => {
       ['non-string-content', true],
       ['non-string-delimiter', true],
       ['delete-with-delimiter', true],
+      ['delimiter-change-missing-delimiter', true],
+      ['delimiter-change-with-content', true],
       ['invalid-accumulated-change', true],
       ['unsafe-change-index', true],
     ]);

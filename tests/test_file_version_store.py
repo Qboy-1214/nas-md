@@ -664,6 +664,63 @@ def test_stale_exact_delimiter_edit_three_way_merges(store, test_file):
 
 
 @pytest.mark.parametrize(
+    ("base", "local_content", "remote_content", "expected"),
+    [
+        (
+            "A\n\nB",
+            "A\n\n\nB",
+            "A-remote\n\nB",
+            "A-remote\n\n\nB",
+        ),
+        (
+            "A\n\nB\n\nC",
+            "A\n\nB",
+            "A\n\nB-remote\n\nC",
+            "A\n\nB-remote",
+        ),
+    ],
+    ids=["delimiter-edit-with-remote-text-edit", "final-delete-with-remote-preceding-edit"],
+)
+def test_stale_delimiter_only_edits_preserve_remote_text(
+    store, test_file, base, local_content, remote_content, expected
+):
+    key = "mount-0:/test.md"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    remote = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, remote_content),
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=remote_content,
+        base_content=base,
+    )
+    assert remote["applied"] is True
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, local_content),
+        "local",
+        "Local",
+        "#0f0",
+        client_content=local_content,
+        base_content=base,
+    )
+
+    assert result["applied"] is True
+    assert result["merged"] is True
+    assert result["content"] == expected
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == expected
+
+
+@pytest.mark.parametrize(
     ("remote_changes", "client_changes", "current_content"),
     [
         (

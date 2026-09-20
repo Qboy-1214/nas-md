@@ -67,6 +67,8 @@ def test_compute_diff_no_change():
         ("A\n\nB", "A\n\n\n\nB"),
         ("---\ntitle: Doc\n---\nBody", "---\ntitle: Doc\n---\n\nBody"),
         ("A", ""),
+        ("", "\n"),
+        ("\n", ""),
     ],
     ids=[
         "delete-final-paragraph",
@@ -74,6 +76,8 @@ def test_compute_diff_no_change():
         "change-blank-line-delimiter",
         "change-frontmatter-boundary",
         "empty-content",
+        "blank-only-content",
+        "delete-blank-only-content",
     ],
 )
 def test_compute_diff_apply_round_trips_exact_content(base, target):
@@ -90,6 +94,62 @@ def test_compute_diff_replace():
     assert changes[0]["type"] == "replace"
     assert changes[0]["paraIdx"] == 1
     assert changes[0]["content"] == "CHANGED"
+
+
+def test_compute_diff_uses_dedicated_delimiter_change_without_stale_text():
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    changes = compute_diff("A\n\nB", "A\n\n\nB")
+
+    assert changes == [{"type": "delimiter", "paraIdx": 0, "delimiter": "\n\n\n"}]
+    transformed = transform_changes(
+        changes,
+        [{"type": "replace", "paraIdx": 0, "content": "A-remote", "delimiter": "\n\n"}],
+        base_para_count=2,
+    )
+    assert transformed == changes
+    assert apply_changes("A-remote\n\nB", transformed) == "A-remote\n\n\nB"
+    assert (
+        transform_changes(
+            [{"type": "delimiter", "paraIdx": 1, "delimiter": ""}],
+            [{"type": "delete", "paraIdx": 1}],
+            base_para_count=2,
+        )
+        == []
+    )
+
+
+def test_transform_delimiter_change_maps_position_and_preserves_metadata():
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    transformed = transform_changes(
+        [
+            {
+                "type": "delimiter",
+                "paraIdx": 1,
+                "delimiter": "\n",
+                "operationId": "local-format-1",
+            }
+        ],
+        [{"type": "insert", "paraIdx": 0, "content": "HEADER"}],
+        base_para_count=2,
+    )
+
+    assert transformed == [
+        {
+            "type": "delimiter",
+            "paraIdx": 2,
+            "delimiter": "\n",
+            "operationId": "local-format-1",
+        }
+    ]
+
+
+def test_compute_diff_multi_paragraph_replacement_has_deterministic_operations():
+    assert compute_diff("A\n\nB", "X\n\nY") == [
+        {"type": "replace", "paraIdx": 0, "content": "X", "delimiter": "\n\n"},
+        {"type": "replace", "paraIdx": 1, "content": "Y", "delimiter": ""},
+    ]
 
 
 def test_compute_diff_insert():
@@ -443,6 +503,15 @@ def test_transform_changes_batch_orders_local_inserts_after_remote_inserts():
             TypeError,
         ),
         ([{"type": "delete", "paraIdx": 0, "delimiter": ""}], [], 1, ValueError),
+        ([{"type": "delimiter", "paraIdx": 0}], [], 1, TypeError),
+        ([{"type": "delimiter", "paraIdx": 0, "delimiter": 7}], [], 1, TypeError),
+        (
+            [{"type": "delimiter", "paraIdx": 0, "delimiter": "\n", "content": "X"}],
+            [],
+            1,
+            ValueError,
+        ),
+        ([{"type": "delimiter", "paraIdx": 1, "delimiter": "\n"}], [], 1, ValueError),
         ([], [{"type": "delete", "paraIdx": -1}], 1, ValueError),
         (
             [{"type": "insert", "paraIdx": 2**53, "content": "X"}],
@@ -462,6 +531,10 @@ def test_transform_changes_batch_orders_local_inserts_after_remote_inserts():
         "non-string-content",
         "non-string-delimiter",
         "delete-with-delimiter",
+        "delimiter-change-missing-delimiter",
+        "delimiter-change-non-string-delimiter",
+        "delimiter-change-with-content",
+        "delimiter-change-at-end",
         "invalid-accumulated-change",
         "unsafe-change-index",
     ],

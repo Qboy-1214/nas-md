@@ -3689,6 +3689,10 @@ function splitParagraphsWithDelims(text) {
     delimiters.push('\n\n');
   }
 
+  if (paragraphs.length === 0 && textNorm) {
+    return { paragraphs: [''], delimiters: [textNorm] };
+  }
+
   return { paragraphs, delimiters };
 }
 
@@ -3703,6 +3707,7 @@ function applyChangesLocally(text, changes) {
 
   const missingDelimiter = Symbol('missing delimiter');
   const replaces = {};
+  const delimiterChanges = {};
   const deletes = new Set();
   const insertsByIdx = {};
 
@@ -3714,6 +3719,7 @@ function applyChangesLocally(text, changes) {
       : missingDelimiter;
     if (t === 'replace') replaces[idx] = { content: ch.content || '', delimiter };
     else if (t === 'delete') deletes.add(idx);
+    else if (t === 'delimiter') delimiterChanges[idx] = ch.delimiter || '';
     else if (t === 'insert') {
       if (!insertsByIdx[idx]) insertsByIdx[idx] = [];
       insertsByIdx[idx].push({ content: ch.content || '', delimiter });
@@ -3739,7 +3745,9 @@ function applyChangesLocally(text, changes) {
     } else {
       resultParas.push(paragraphs[i]);
     }
-    if (delimiter !== missingDelimiter) {
+    if (delimiterChanges[i] !== undefined) {
+      resultDelims.push(delimiterChanges[i]);
+    } else if (delimiter !== missingDelimiter) {
       resultDelims.push(delimiter);
     } else if (i < delimiters.length) {
       resultDelims.push(delimiters[i]);
@@ -3795,30 +3803,25 @@ function computeParagraphDiff(oldText, newText) {
 
   const oldParts = splitParagraphsWithDelims(oldText);
   const newParts = splitParagraphsWithDelims(newText);
-  const oldUnits = oldParts.paragraphs.map((content, idx) => ({
-    content,
-    delimiter: oldParts.delimiters[idx],
-  }));
-  const newUnits = newParts.paragraphs.map((content, idx) => ({
-    content,
-    delimiter: newParts.delimiters[idx],
-  }));
-  const unitsEqual = (left, right) =>
-    left.content === right.content && left.delimiter === right.delimiter;
+  const oldParas = oldParts.paragraphs;
+  const newParas = newParts.paragraphs;
 
   if (
-    oldUnits.length === newUnits.length &&
-    oldUnits.every((unit, idx) => unitsEqual(unit, newUnits[idx]))
+    oldParas.length === newParas.length &&
+    oldParas.every(
+      (paragraph, idx) =>
+        paragraph === newParas[idx] && oldParts.delimiters[idx] === newParts.delimiters[idx],
+    )
   ) {
     return [];
   }
 
-  const m = oldUnits.length;
-  const n = newUnits.length;
+  const m = oldParas.length;
+  const n = newParas.length;
 
   // 1. 公共前缀修剪
   let prefix = 0;
-  while (prefix < m && prefix < n && unitsEqual(oldUnits[prefix], newUnits[prefix])) {
+  while (prefix < m && prefix < n && oldParas[prefix] === newParas[prefix]) {
     prefix++;
   }
 
@@ -3827,125 +3830,118 @@ function computeParagraphDiff(oldText, newText) {
   while (
     suffix < m - prefix &&
     suffix < n - prefix &&
-    unitsEqual(oldUnits[m - 1 - suffix], newUnits[n - 1 - suffix])
+    oldParas[m - 1 - suffix] === newParas[n - 1 - suffix]
   ) {
     suffix++;
   }
 
-  const midOld = oldUnits.slice(prefix, m - suffix);
-  const midNew = newUnits.slice(prefix, n - suffix);
+  const changes = [];
+  const addDelimiterChange = (oldIdx, newIdx) => {
+    if (oldParts.delimiters[oldIdx] !== newParts.delimiters[newIdx]) {
+      changes.push({
+        type: 'delimiter',
+        paraIdx: oldIdx,
+        delimiter: newParts.delimiters[newIdx],
+      });
+    }
+  };
+
+  for (let idx = 0; idx < prefix; idx++) {
+    addDelimiterChange(idx, idx);
+  }
+
+  const midOld = oldParas.slice(prefix, m - suffix);
+  const midNew = newParas.slice(prefix, n - suffix);
   const midM = midOld.length;
   const midN = midNew.length;
 
-  const changes = [];
+  const dp = Array.from({ length: midM + 1 }, () => new Array(midN + 1).fill(0));
+  for (let i = 1; i <= midM; i++) {
+    for (let j = 1; j <= midN; j++) {
+      if (midOld[i - 1] === midNew[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
 
-  if (midM === 0) {
-    // 纯插入
-    for (let j = 0; j < midN; j++) {
+  const operations = [];
+  let i = midM;
+  let j = midN;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && midOld[i - 1] === midNew[j - 1]) {
+      operations.push('equal');
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      operations.push('insert');
+      j--;
+    } else {
+      operations.push('delete');
+      i--;
+    }
+  }
+  operations.reverse();
+
+  let oldCursor = 0;
+  let newCursor = 0;
+  let blockStart = null;
+  const emitBlock = (oldStart, newStart, oldEnd, newEnd) => {
+    const oldLen = oldEnd - oldStart;
+    const newLen = newEnd - newStart;
+    const paired = Math.min(oldLen, newLen);
+
+    for (let offset = 0; offset < paired; offset++) {
+      const targetIdx = prefix + newStart + offset;
       changes.push({
-        type: 'insert',
-        paraIdx: prefix,
-        content: midNew[j].content,
-        delimiter: midNew[j].delimiter,
+        type: 'replace',
+        paraIdx: prefix + oldStart + offset,
+        content: newParas[targetIdx],
+        delimiter: newParts.delimiters[targetIdx],
       });
     }
-  } else if (midN === 0) {
-    // 纯删除
-    for (let i = 0; i < midM; i++) {
-      changes.push({ type: 'delete', paraIdx: prefix + i });
+    for (let offset = paired; offset < oldLen; offset++) {
+      changes.push({ type: 'delete', paraIdx: prefix + oldStart + offset });
     }
-  } else if (midM === 1 && midN === 1) {
-    // 纯单段修改 (最常见打字场景)
-    changes.push({
-      type: 'replace',
-      paraIdx: prefix,
-      content: midNew[0].content,
-      delimiter: midNew[0].delimiter,
-    });
-  } else {
-    // LCS DP table on mid section only
-    const dp = Array.from({ length: midM + 1 }, () => new Array(midN + 1).fill(0));
-    for (let i = 1; i <= midM; i++) {
-      for (let j = 1; j <= midN; j++) {
-        if (unitsEqual(midOld[i - 1], midNew[j - 1])) {
-          dp[i][j] = dp[i - 1][j - 1] + 1;
-        } else {
-          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-        }
-      }
+    for (let offset = paired; offset < newLen; offset++) {
+      const targetIdx = prefix + newStart + offset;
+      changes.push({
+        type: 'insert',
+        paraIdx: prefix + oldEnd,
+        content: newParas[targetIdx],
+        delimiter: newParts.delimiters[targetIdx],
+      });
     }
+  };
 
-    const ops = [];
-    let i = midM,
-      j = midN;
-    while (i > 0 || j > 0) {
-      if (i > 0 && j > 0 && unitsEqual(midOld[i - 1], midNew[j - 1])) {
-        ops.push({ tag: 'equal', i1: i - 1, i2: i, j1: j - 1, j2: j });
-        i--;
-        j--;
-      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-        ops.push({ tag: 'insert', i1: i, i2: i, j1: j - 1, j2: j });
-        j--;
+  for (const operation of operations) {
+    if (operation === 'equal') {
+      if (blockStart) {
+        emitBlock(blockStart.old, blockStart.new, oldCursor, newCursor);
+        blockStart = null;
+      }
+      addDelimiterChange(prefix + oldCursor, prefix + newCursor);
+      oldCursor++;
+      newCursor++;
+    } else {
+      if (!blockStart) {
+        blockStart = { old: oldCursor, new: newCursor };
+      }
+      if (operation === 'delete') {
+        oldCursor++;
       } else {
-        ops.push({ tag: 'delete', i1: i - 1, i2: i, j1: j, j2: j });
-        i--;
+        newCursor++;
       }
     }
-    ops.reverse();
+  }
 
-    const opcodes = [];
-    for (const op of ops) {
-      const last = opcodes[opcodes.length - 1];
-      if (last && last.tag === op.tag && last.i2 === op.i1 && last.j2 === op.j1) {
-        last.i2 = op.i2;
-        last.j2 = op.j2;
-      } else {
-        opcodes.push({ tag: op.tag, i1: op.i1, i2: op.i2, j1: op.j1, j2: op.j2 });
-      }
-    }
+  if (blockStart) {
+    emitBlock(blockStart.old, blockStart.new, oldCursor, newCursor);
+  }
 
-    for (const op of opcodes) {
-      if (op.tag === 'replace') {
-        const oldLen = op.i2 - op.i1;
-        const newLen = op.j2 - op.j1;
-        const paired = Math.min(oldLen, newLen);
-        for (let k = 0; k < paired; k++) {
-          changes.push({
-            type: 'replace',
-            paraIdx: prefix + op.i1 + k,
-            content: midNew[op.j1 + k].content,
-            delimiter: midNew[op.j1 + k].delimiter,
-          });
-        }
-        if (oldLen > newLen) {
-          for (let k = paired; k < oldLen; k++) {
-            changes.push({ type: 'delete', paraIdx: prefix + op.i1 + k });
-          }
-        } else if (newLen > oldLen) {
-          for (let k = paired; k < newLen; k++) {
-            changes.push({
-              type: 'insert',
-              paraIdx: prefix + op.i2,
-              content: midNew[op.j1 + k].content,
-              delimiter: midNew[op.j1 + k].delimiter,
-            });
-          }
-        }
-      } else if (op.tag === 'delete') {
-        for (let k = op.i1; k < op.i2; k++) {
-          changes.push({ type: 'delete', paraIdx: prefix + k });
-        }
-      } else if (op.tag === 'insert') {
-        for (let k = op.j1; k < op.j2; k++) {
-          changes.push({
-            type: 'insert',
-            paraIdx: prefix + op.i1,
-            content: midNew[k].content,
-            delimiter: midNew[k].delimiter,
-          });
-        }
-      }
-    }
+  for (let offset = 0; offset < suffix; offset++) {
+    addDelimiterChange(m - suffix + offset, n - suffix + offset);
   }
 
   return changes;
@@ -3968,7 +3964,7 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
       if (change === null || typeof change !== 'object' || Array.isArray(change)) {
         throw new TypeError(`each ${changesName} entry must be an object`);
       }
-      if (!['insert', 'delete', 'replace'].includes(change.type)) {
+      if (!['insert', 'delete', 'replace', 'delimiter'].includes(change.type)) {
         throw new TypeError(`invalid change type: ${change.type}`);
       }
       if (typeof change.paraIdx !== 'number' || !Number.isInteger(change.paraIdx)) {
@@ -3984,17 +3980,31 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
       } else if (change.paraIdx >= baseCount) {
         throw new RangeError('replace/delete paraIdx exceeds base paragraph count');
       }
-      if (
-        (change.type === 'insert' || change.type === 'replace') &&
-        typeof change.content !== 'string'
-      ) {
-        throw new TypeError('insert/replace content must be a string');
-      }
-      if (Object.prototype.hasOwnProperty.call(change, 'delimiter')) {
-        if (change.type !== 'insert' && change.type !== 'replace') {
-          throw new TypeError('delimiter is only valid for insert/replace changes');
+      if (change.type === 'delimiter') {
+        if (Object.prototype.hasOwnProperty.call(change, 'content')) {
+          throw new TypeError('delimiter changes must not include content');
         }
         if (typeof change.delimiter !== 'string') {
+          throw new TypeError('delimiter must be a string');
+        }
+      } else {
+        if (
+          (change.type === 'insert' || change.type === 'replace') &&
+          typeof change.content !== 'string'
+        ) {
+          throw new TypeError('insert/replace content must be a string');
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(change, 'delimiter') &&
+          change.type !== 'insert' &&
+          change.type !== 'replace'
+        ) {
+          throw new TypeError('delimiter is only valid for insert/replace changes');
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(change, 'delimiter') &&
+          typeof change.delimiter !== 'string'
+        ) {
           throw new TypeError('delimiter must be a string');
         }
       }
@@ -4043,6 +4053,8 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
       transformed.push(transformedChange);
     } else if (type === 'delete' && !deleted.has(idx)) {
       transformed.push({ type: 'delete', paraIdx: targetIdx });
+    } else if (type === 'delimiter' && !deleted.has(idx)) {
+      transformed.push({ ...change, paraIdx: targetIdx });
     }
   }
 

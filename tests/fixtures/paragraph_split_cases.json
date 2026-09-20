@@ -1,5 +1,17 @@
 [
   {
+    "name": "blank-only-single-newline",
+    "text": "\n",
+    "paragraphs": [""],
+    "delimiters": ["\n"]
+  },
+  {
+    "name": "blank-only-multiple-newlines",
+    "text": "\n\n",
+    "paragraphs": [""],
+    "delimiters": ["\n\n"]
+  },
+  {
     "name": "frontmatter-without-blank-line",
     "text": "---\ntitle: Doc\n---\nBody",
     "paragraphs": ["---\ntitle: Doc\n---", "Body"],
