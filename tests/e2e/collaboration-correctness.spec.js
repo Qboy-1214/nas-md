@@ -36,6 +36,27 @@ test('paragraph contract preserves frontmatter delimiters', async ({ page }) => 
   }
 });
 
+test('paragraph diff and apply round-trip exact content', async ({ page }) => {
+  await page.goto('/admin');
+
+  const cases = [
+    ['delete-final-paragraph', 'A\n\nB\n\nC', 'A\n\nB'],
+    ['add-trailing-newline', 'A\n\nB', 'A\n\nB\n'],
+    ['change-blank-line-delimiter', 'A\n\nB', 'A\n\n\n\nB'],
+    ['change-frontmatter-boundary', '---\ntitle: Doc\n---\nBody', '---\ntitle: Doc\n---\n\nBody'],
+    ['empty-content', 'A', ''],
+  ];
+
+  const results = await page.evaluate((roundTripCases) => {
+    return roundTripCases.map(([name, base, target]) => {
+      const changes = window.nasmdDiff.computeParagraphDiff(base, target);
+      return [name, window.nasmdDiff.applyChangesLocally(base, changes)];
+    });
+  }, cases);
+
+  expect(results).toEqual(cases.map(([name, , target]) => [name, target]));
+});
+
 test.describe('rebase', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/admin');
@@ -82,6 +103,19 @@ test.describe('rebase', () => {
     });
 
     expect(result).toBe('HEADER\n\nA\n\nB\n\nC-local');
+  });
+
+  test('preserves a stale exact delimiter edit across a remote paragraph edit', async ({
+    page,
+  }) => {
+    const result = await page.evaluate(() => {
+      const base = 'A\n\nB\n\nC';
+      const local = 'A\n\nB\n\nC\n';
+      const remote = 'A-remote\n\nB\n\nC';
+      return window.nasmdDiff.rebaseContent(base, local, remote);
+    });
+
+    expect(result).toBe('A-remote\n\nB\n\nC\n');
   });
 
   test('handles batched remote changes in base coordinates', async ({ page }) => {
@@ -179,6 +213,24 @@ test.describe('rebase', () => {
             ),
         ],
         [
+          'non-string-delimiter',
+          () =>
+            window.nasmdDiff.transformParagraphChanges(
+              [{ type: 'replace', paraIdx: 0, content: 'X', delimiter: 7 }],
+              [],
+              1,
+            ),
+        ],
+        [
+          'delete-with-delimiter',
+          () =>
+            window.nasmdDiff.transformParagraphChanges(
+              [{ type: 'delete', paraIdx: 0, delimiter: '' }],
+              [],
+              1,
+            ),
+        ],
+        [
           'invalid-accumulated-change',
           () =>
             window.nasmdDiff.transformParagraphChanges([], [{ type: 'delete', paraIdx: -1 }], 1),
@@ -213,6 +265,8 @@ test.describe('rebase', () => {
       ['replace-at-end', true],
       ['unknown-type', true],
       ['non-string-content', true],
+      ['non-string-delimiter', true],
+      ['delete-with-delimiter', true],
       ['invalid-accumulated-change', true],
       ['unsafe-change-index', true],
     ]);

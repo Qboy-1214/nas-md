@@ -132,31 +132,33 @@ def split_paragraphs(text: str) -> list[str]:
 
 
 def compute_diff(old_text: str, new_text: str) -> list[dict]:
-    """Compute paragraph-level diff between old and new text with prefix/suffix acceleration."""
-    old_paras = split_paragraphs(old_text)
-    new_paras = split_paragraphs(new_text)
+    """Compute an exact paragraph-and-delimiter diff between two documents."""
+    old_paras, old_delimiters = split_paragraphs_with_delims(old_text)
+    new_paras, new_delimiters = split_paragraphs_with_delims(new_text)
+    old_units = list(zip(old_paras, old_delimiters, strict=True))
+    new_units = list(zip(new_paras, new_delimiters, strict=True))
 
-    if old_paras == new_paras:
+    if old_units == new_units:
         return []
 
-    m = len(old_paras)
-    n = len(new_paras)
+    m = len(old_units)
+    n = len(new_units)
 
     # Common Prefix & Common Suffix fast-path
     prefix = 0
-    while prefix < m and prefix < n and old_paras[prefix] == new_paras[prefix]:
+    while prefix < m and prefix < n and old_units[prefix] == new_units[prefix]:
         prefix += 1
 
     suffix = 0
     while (
         suffix < m - prefix
         and suffix < n - prefix
-        and old_paras[m - 1 - suffix] == new_paras[n - 1 - suffix]
+        and old_units[m - 1 - suffix] == new_units[n - 1 - suffix]
     ):
         suffix += 1
 
-    mid_old = old_paras[prefix : m - suffix]
-    mid_new = new_paras[prefix : n - suffix]
+    mid_old = old_units[prefix : m - suffix]
+    mid_new = new_units[prefix : n - suffix]
 
     changes = []
     sm = SequenceMatcher(None, mid_old, mid_new, autojunk=False)
@@ -172,7 +174,8 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
                     {
                         "type": "replace",
                         "paraIdx": prefix + i1 + k,
-                        "content": mid_new[j1 + k],
+                        "content": mid_new[j1 + k][0],
+                        "delimiter": mid_new[j1 + k][1],
                     }
                 )
 
@@ -190,7 +193,8 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
                         {
                             "type": "insert",
                             "paraIdx": prefix + i2,
-                            "content": mid_new[j1 + k],
+                            "content": mid_new[j1 + k][0],
+                            "delimiter": mid_new[j1 + k][1],
                         }
                     )
         elif tag == "delete":
@@ -202,7 +206,8 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
                     {
                         "type": "insert",
                         "paraIdx": prefix + i1,
-                        "content": mid_new[j],
+                        "content": mid_new[j][0],
+                        "delimiter": mid_new[j][1],
                     }
                 )
 
@@ -217,7 +222,8 @@ def apply_changes(text: str, changes: list) -> str:
     paragraphs, delimiters = split_paragraphs_with_delims(text)
 
     # 分类 changes
-    replaces = {}  # paraIdx -> new_content
+    missing_delimiter = object()
+    replaces = {}  # paraIdx -> (new_content, optional delimiter)
     deletes = set()  # paraIdx
     inserts = []  # list of (paraIdx, content)
 
@@ -225,16 +231,16 @@ def apply_changes(text: str, changes: list) -> str:
         t = ch.get("type")
         idx = ch.get("paraIdx", 0)
         if t == "replace":
-            replaces[idx] = ch.get("content", "")
+            replaces[idx] = (ch.get("content", ""), ch.get("delimiter", missing_delimiter))
         elif t == "delete":
             deletes.add(idx)
         elif t == "insert":
-            inserts.append((idx, ch.get("content", "")))
+            inserts.append((idx, ch.get("content", ""), ch.get("delimiter", missing_delimiter)))
 
     # 按 paraIdx 分组 inserts
     inserts_by_idx = {}
-    for idx, content in inserts:
-        inserts_by_idx.setdefault(idx, []).append(content)
+    for idx, content, delimiter in inserts:
+        inserts_by_idx.setdefault(idx, []).append((content, delimiter))
 
     result_paras = []
     result_delims = []
@@ -242,17 +248,21 @@ def apply_changes(text: str, changes: list) -> str:
     for i in range(n):
         # 先插入"在此段落之前"的 inserts
         if i in inserts_by_idx:
-            for content in inserts_by_idx[i]:
+            for content, delimiter in inserts_by_idx[i]:
                 result_paras.append(content)
-                result_delims.append("\n\n")
+                result_delims.append("\n\n" if delimiter is missing_delimiter else delimiter)
         # 处理原段落
         if i in deletes:
             continue
         if i in replaces:
-            result_paras.append(replaces[i])
+            content, delimiter = replaces[i]
+            result_paras.append(content)
         else:
             result_paras.append(paragraphs[i])
-        if i < len(delimiters):
+            delimiter = missing_delimiter
+        if delimiter is not missing_delimiter:
+            result_delims.append(delimiter)
+        elif i < len(delimiters):
             result_delims.append(delimiters[i])
         else:
             result_delims.append("\n\n")
@@ -262,12 +272,19 @@ def apply_changes(text: str, changes: list) -> str:
     if trailing_indices and result_delims and result_delims[-1] in ("", "\n"):
         result_delims[-1] = "\n\n"
 
+    last_trailing_delimiter = missing_delimiter
     for idx in trailing_indices:
-        for content in inserts_by_idx[idx]:
+        for content, delimiter in inserts_by_idx[idx]:
             result_paras.append(content)
-            result_delims.append("\n\n")
+            result_delims.append("\n\n" if delimiter is missing_delimiter else delimiter)
+            last_trailing_delimiter = delimiter
 
-    if trailing_indices and result_delims and result_delims[-1] == "\n\n":
+    if (
+        trailing_indices
+        and last_trailing_delimiter is missing_delimiter
+        and result_delims
+        and result_delims[-1] == "\n\n"
+    ):
         result_delims[-1] = ""
 
     result_parts = []
@@ -359,6 +376,11 @@ def validate_changes(
 
         if change_type in {"insert", "replace"} and not isinstance(change.get("content"), str):
             raise TypeError("insert/replace content must be a string")
+        if "delimiter" in change:
+            if change_type not in {"insert", "replace"}:
+                raise ValueError("delimiter is only valid for insert/replace changes")
+            if not isinstance(change["delimiter"], str):
+                raise TypeError("delimiter must be a string")
 
 
 def transform_changes(
@@ -391,17 +413,31 @@ def transform_changes(
         idx = ch["paraIdx"]
         target_idx = map_position(idx)
         if t == "insert":
-            transformed.append({"type": "insert", "paraIdx": target_idx, "content": ch["content"]})
+            transformed_change = {
+                "type": "insert",
+                "paraIdx": target_idx,
+                "content": ch["content"],
+            }
+            if "delimiter" in ch:
+                transformed_change["delimiter"] = ch["delimiter"]
+            transformed.append(transformed_change)
         elif t == "replace":
             if idx in deleted:
                 # Target was deleted by another user: preserve content as insert
-                transformed.append(
-                    {"type": "insert", "paraIdx": target_idx, "content": ch["content"]}
-                )
+                transformed_change = {
+                    "type": "insert",
+                    "paraIdx": target_idx,
+                    "content": ch["content"],
+                }
             else:
-                transformed.append(
-                    {"type": "replace", "paraIdx": target_idx, "content": ch["content"]}
-                )
+                transformed_change = {
+                    "type": "replace",
+                    "paraIdx": target_idx,
+                    "content": ch["content"],
+                }
+            if "delimiter" in ch:
+                transformed_change["delimiter"] = ch["delimiter"]
+            transformed.append(transformed_change)
         elif t == "delete" and idx not in deleted:
             transformed.append({"type": "delete", "paraIdx": target_idx})
 

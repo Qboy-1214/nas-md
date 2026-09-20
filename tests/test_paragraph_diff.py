@@ -59,6 +59,29 @@ def test_compute_diff_no_change():
     assert compute_diff(text, text) == []
 
 
+@pytest.mark.parametrize(
+    ("base", "target"),
+    [
+        ("A\n\nB\n\nC", "A\n\nB"),
+        ("A\n\nB", "A\n\nB\n"),
+        ("A\n\nB", "A\n\n\n\nB"),
+        ("---\ntitle: Doc\n---\nBody", "---\ntitle: Doc\n---\n\nBody"),
+        ("A", ""),
+    ],
+    ids=[
+        "delete-final-paragraph",
+        "add-trailing-newline",
+        "change-blank-line-delimiter",
+        "change-frontmatter-boundary",
+        "empty-content",
+    ],
+)
+def test_compute_diff_apply_round_trips_exact_content(base, target):
+    changes = compute_diff(base, target)
+
+    assert apply_changes(base, changes) == target
+
+
 def test_compute_diff_replace():
     old = "para one\n\npara two\n\npara three"
     new = "para one\n\nCHANGED\n\npara three"
@@ -413,6 +436,13 @@ def test_transform_changes_batch_orders_local_inserts_after_remote_inserts():
         ([{"type": "replace", "paraIdx": 1, "content": "X"}], [], 1, ValueError),
         ([{"type": "unknown", "paraIdx": 0}], [], 1, ValueError),
         ([{"type": "insert", "paraIdx": 0, "content": 7}], [], 1, TypeError),
+        (
+            [{"type": "replace", "paraIdx": 0, "content": "X", "delimiter": 7}],
+            [],
+            1,
+            TypeError,
+        ),
+        ([{"type": "delete", "paraIdx": 0, "delimiter": ""}], [], 1, ValueError),
         ([], [{"type": "delete", "paraIdx": -1}], 1, ValueError),
         (
             [{"type": "insert", "paraIdx": 2**53, "content": "X"}],
@@ -430,6 +460,8 @@ def test_transform_changes_batch_orders_local_inserts_after_remote_inserts():
         "replace-at-end",
         "unknown-type",
         "non-string-content",
+        "non-string-delimiter",
+        "delete-with-delimiter",
         "invalid-accumulated-change",
         "unsafe-change-index",
     ],

@@ -1,8 +1,11 @@
 # tests/test_file_version_store.py
 import os
 import threading
+from unittest.mock import Mock
+
 import pytest
 from nas_md.webserver.file_version_store import FileVersionStore
+from nas_md.webserver.paragraph_diff import compute_diff
 from nas_md.webserver import version_history
 
 
@@ -25,6 +28,10 @@ def test_file(tmp_path):
     f = tmp_path / "test.md"
     f.write_text("para one\n\npara two\n\npara three", encoding="utf-8")
     return str(f)
+
+
+def _history_count(store, file_key):
+    return len(version_history.get_history(file_key, limit=1000, storage_dir=store._storage_dir))
 
 
 def test_init_file_new(store, test_file):
@@ -258,7 +265,9 @@ def test_stale_change_rebases_through_each_version_coordinate_space(store, test_
         "merged": True,
         "newVersion": 3,
         "content": expected,
-        "appliedChanges": [{"type": "replace", "paraIdx": 4, "content": "C-stale"}],
+        "appliedChanges": [
+            {"type": "replace", "paraIdx": 4, "content": "C-stale", "delimiter": ""}
+        ],
     }
     assert store.get_current_content(file_key) == expected
     with open(test_file, "rb") as f:
@@ -300,7 +309,7 @@ def test_stale_change_uses_pre_delete_paragraph_count(store, test_file):
         "merged": True,
         "newVersion": 2,
         "content": expected,
-        "appliedChanges": [{"type": "insert", "paraIdx": 2, "content": "C-stale"}],
+        "appliedChanges": [{"type": "insert", "paraIdx": 2, "content": "C-stale", "delimiter": ""}],
     }
     assert store.get_current_content(file_key) == expected
     with open(test_file, "rb") as f:
@@ -428,6 +437,8 @@ def test_ahead_version_returns_resync_without_writing(store, test_file):
     store.init_file(key, test_file, base)
     with open(test_file, "rb") as f:
         disk_before = f.read()
+    before_write = Mock()
+    history_before = _history_count(store, key)
 
     result = store.apply_changes(
         key,
@@ -439,6 +450,7 @@ def test_ahead_version_returns_resync_without_writing(store, test_file):
         "#0f0",
         client_content="A\n\nB-local",
         base_content=base,
+        before_write=before_write,
     )
 
     assert result == {
@@ -450,6 +462,8 @@ def test_ahead_version_returns_resync_without_writing(store, test_file):
     }
     with open(test_file, "rb") as f:
         assert f.read() == disk_before
+    assert _history_count(store, key) == history_before
+    before_write.assert_not_called()
 
 
 def test_missing_stale_base_content_returns_resync_without_writing(store, test_file):
@@ -471,6 +485,8 @@ def test_missing_stale_base_content_returns_resync_without_writing(store, test_f
     )
     with open(test_file, "rb") as f:
         disk_before = f.read()
+    before_write = Mock()
+    history_before = _history_count(store, key)
 
     result = store.apply_changes(
         key,
@@ -481,6 +497,7 @@ def test_missing_stale_base_content_returns_resync_without_writing(store, test_f
         "Local",
         "#0f0",
         client_content="A\n\nB-local",
+        before_write=before_write,
     )
 
     assert result == {
@@ -492,6 +509,8 @@ def test_missing_stale_base_content_returns_resync_without_writing(store, test_f
     }
     with open(test_file, "rb") as f:
         assert f.read() == disk_before
+    assert _history_count(store, key) == history_before
+    before_write.assert_not_called()
 
 
 def test_current_version_wrong_base_content_returns_resync_without_writing(store, test_file):
@@ -503,6 +522,8 @@ def test_current_version_wrong_base_content_returns_resync_without_writing(store
     store.init_file(key, test_file, current)
     with open(test_file, "rb") as f:
         disk_before = f.read()
+    before_write = Mock()
+    history_before = _history_count(store, key)
 
     result = store.apply_changes(
         key,
@@ -514,6 +535,7 @@ def test_current_version_wrong_base_content_returns_resync_without_writing(store
         "#0f0",
         client_content=submitted_base,
         base_content=submitted_base,
+        before_write=before_write,
     )
 
     assert result == {
@@ -523,6 +545,184 @@ def test_current_version_wrong_base_content_returns_resync_without_writing(store
         "newVersion": 0,
         "content": current,
     }
+    with open(test_file, "rb") as f:
+        assert f.read() == disk_before
+    assert _history_count(store, key) == history_before
+    before_write.assert_not_called()
+
+
+def test_current_version_save_writes_exact_target_content(store, test_file):
+    key = "mount-0:/test.md"
+    base = "A\n\nB\n\nC"
+    target = "A\n\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    before_write = Mock()
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, target),
+        "local",
+        "Local",
+        "#0f0",
+        client_content=target,
+        base_content=base,
+        before_write=before_write,
+    )
+
+    assert result["applied"] is True
+    assert result["newVersion"] == 1
+    assert result["content"] == target
+    assert store.get_current_content(key) == target
+    with open(test_file, "rb") as f:
+        assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
+    before_write.assert_called_once_with(target)
+
+
+@pytest.mark.parametrize(
+    ("base", "changes", "target"),
+    [
+        (
+            "A\n\nB\n\nC",
+            [{"type": "delete", "paraIdx": 2}],
+            "A\n\nB",
+        ),
+        (
+            "A\n\nB",
+            [{"type": "replace", "paraIdx": 1, "content": "B2"}],
+            "A\n\nB2\n",
+        ),
+    ],
+    ids=["legacy-final-delete", "legacy-trailing-newline"],
+)
+def test_legacy_changes_accept_exact_delimiter_differences(store, test_file, base, changes, target):
+    key = "mount-0:/test.md"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        changes,
+        "local",
+        "Local",
+        "#0f0",
+        client_content=target,
+        base_content=base,
+    )
+
+    assert result["applied"] is True
+    assert result["content"] == target
+    assert any("delimiter" in change for change in result["appliedChanges"])
+    with open(test_file, "rb") as f:
+        assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
+
+
+def test_stale_exact_delimiter_edit_three_way_merges(store, test_file):
+    key = "mount-0:/test.md"
+    base = "A\n\nB\n\nC"
+    remote_content = "A-remote\n\nB\n\nC"
+    local_content = "A\n\nB\n\nC\n"
+    expected = "A-remote\n\nB\n\nC\n"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, remote_content),
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=remote_content,
+        base_content=base,
+    )
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, local_content),
+        "local",
+        "Local",
+        "#0f0",
+        client_content=local_content,
+        base_content=base,
+    )
+
+    assert result["applied"] is True
+    assert result["merged"] is True
+    assert result["content"] == expected
+    with open(test_file, "rb") as f:
+        assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("remote_changes", "client_changes", "current_content"),
+    [
+        (
+            [{"type": "delete", "paraIdx": 1}],
+            [{"type": "delete", "paraIdx": 1}],
+            "A\n\nC",
+        ),
+        (
+            [{"type": "replace", "paraIdx": 1, "content": "B2"}],
+            [{"type": "replace", "paraIdx": 1, "content": "B2"}],
+            "A\n\nB2\n\nC",
+        ),
+    ],
+    ids=["delete-delete", "identical-replace"],
+)
+def test_stale_transformed_noop_has_no_side_effects(
+    store, test_file, remote_changes, client_changes, current_content
+):
+    key = "mount-0:/test.md"
+    base = "A\n\nB\n\nC"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    first = store.apply_changes(
+        key,
+        test_file,
+        0,
+        remote_changes,
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=current_content,
+        base_content=base,
+    )
+    assert first["applied"] is True
+    with open(test_file, "rb") as f:
+        disk_before = f.read()
+    history_before = _history_count(store, key)
+    before_write = Mock()
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        client_changes,
+        "local",
+        "Local",
+        "#0f0",
+        client_content=current_content,
+        base_content=base,
+        before_write=before_write,
+    )
+
+    assert result["applied"] is False
+    assert result["newVersion"] == 1
+    assert result["content"] == current_content
+    assert store.get_current_version(key) == 1
+    assert _history_count(store, key) == history_before
+    before_write.assert_not_called()
     with open(test_file, "rb") as f:
         assert f.read() == disk_before
 
@@ -700,6 +900,8 @@ def test_declared_changes_must_reconstruct_client_content(store, test_file):
     store.init_file("mount-0:/test.md", test_file, base)
     with open(test_file, "rb") as f:
         disk_before = f.read()
+    before_write = Mock()
+    history_before = _history_count(store, "mount-0:/test.md")
 
     result = store.apply_changes(
         file_key="mount-0:/test.md",
@@ -711,6 +913,7 @@ def test_declared_changes_must_reconstruct_client_content(store, test_file):
         author_color="#fff",
         client_content="para one edited\n\npara two\n",
         base_content=base,
+        before_write=before_write,
     )
 
     assert result == {
@@ -722,3 +925,5 @@ def test_declared_changes_must_reconstruct_client_content(store, test_file):
     }
     with open(test_file, "rb") as f:
         assert f.read() == disk_before
+    assert _history_count(store, "mount-0:/test.md") == history_before
+    before_write.assert_not_called()

@@ -138,7 +138,7 @@ class FileVersionStore:
             else:
                 if not isinstance(submitted_content, str):
                     raise TypeError("content must be a string")
-                if reconstructed_content != submitted_content:
+                if split_paragraphs(reconstructed_content) != split_paragraphs(submitted_content):
                     return self._resync_result(fv)
 
             canonical_changes = compute_diff(submitted_base, submitted_content)
@@ -164,6 +164,14 @@ class FileVersionStore:
                     len(split_paragraphs(submitted_base)),
                 )
                 new_content = apply_diff(fv.content, changes_to_apply)
+
+            if not changes_to_apply or new_content == fv.content:
+                return {
+                    "applied": False,
+                    "merged": False,
+                    "newVersion": fv.version,
+                    "content": fv.content,
+                }
 
             # Write to disk
             try:

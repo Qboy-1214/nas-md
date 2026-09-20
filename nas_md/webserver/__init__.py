@@ -1497,26 +1497,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         store.init_file(file_key, abs_path, old_content)
 
-        if not old_content and new_text:
-            # A full-content insert preserves exact delimiters when creating a file.
-            changes = [{"type": "insert", "paraIdx": 0, "content": new_text}]
-        elif old_content != new_text:
-            changes = compute_diff(old_content, new_text)
-            if not changes:
-                changes = [{"type": "replace", "paraIdx": 0, "content": new_text}]
-        else:
-            changes = []
+        changes = compute_diff(old_content, new_text) if old_content != new_text else []
 
         author_name = self.headers.get("X-Client-Name", "Anonymous")
         author_color = self.headers.get("X-Client-Color", "#3498db")
 
-        # Pre-mark expected write to file_watcher so our own write isn't flagged external
-        try:
-            from nas_md.webserver.file_watcher import get_watcher
+        def mark_expected(content: str):
+            try:
+                from nas_md.webserver.file_watcher import get_watcher
 
-            get_watcher().mark_expected(mount_id, rel_path, new_text)
-        except Exception:
-            pass  # watcher optional
+                get_watcher().mark_expected(mount_id, rel_path, content)
+            except Exception:
+                pass  # watcher optional
 
         result = store.apply_changes(
             file_key=file_key,
@@ -1527,7 +1519,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             author_name=author_name,
             author_color=author_color,
             client_content=new_text,
+            before_write=mark_expected,
         )
+
+        if changes and not result.get("applied"):
+            return self._send_json(result, 409)
 
         if changes and result.get("applied"):
             try:

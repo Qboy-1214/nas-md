@@ -483,6 +483,79 @@ class TestWriteFileAPI:
         with open(os.path.join(writable_dir, "hello.md"), encoding="utf-8") as f:
             assert f.read() == new_content
 
+    def test_write_file_existing_exact_delimiter_change_is_not_false_success(
+        self, writable_server_url, writable_dir
+    ):
+        path = os.path.join(writable_dir, "exact-formatting.md")
+        base = "---\ntitle: Doc\n---\nBody"
+        target = "---\ntitle: Doc\n---\n\nBody"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/exact-formatting.md",
+            data=target.encode("utf-8"),
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 1
+        with open(path, "rb") as f:
+            assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
+
+    def test_write_file_normalized_line_endings_remain_a_successful_noop(
+        self, writable_server_url, writable_dir
+    ):
+        path = os.path.join(writable_dir, "normalized-noop.md")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("same\n")
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/normalized-noop.md",
+            data=b"same\r\n",
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 0
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "same\n"
+
+    def test_write_file_rejected_store_result_returns_conflict_without_marking(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver.file_version_store import get_store
+
+        path = os.path.join(writable_dir, "rejected-put.md")
+        base = "before"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+
+        store = get_store()
+        rejected_result = {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 0,
+            "content": base,
+        }
+        monkeypatch.setattr(store, "apply_changes", Mock(return_value=rejected_result))
+        watcher = Mock()
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/rejected-put.md",
+            data=b"after",
+        )
+
+        assert status == 409
+        with open(path, "rb") as f:
+            assert f.read() == base.encode("utf-8")
+        watcher.mark_expected.assert_not_called()
+        broadcast.assert_not_called()
+
     def test_write_file_with_expected_mtime_no_conflict_copy(
         self, writable_server_url, writable_dir
     ):
@@ -681,6 +754,80 @@ class TestSubmitChangesAPI:
         assert data["merged"] is True
         assert data["content"] == "B-wins"
 
+    @pytest.mark.parametrize(
+        ("remote_changes", "client_changes", "current_content"),
+        [
+            (
+                [{"type": "delete", "paraIdx": 1}],
+                [{"type": "delete", "paraIdx": 1}],
+                "A\n\nC",
+            ),
+            (
+                [{"type": "replace", "paraIdx": 1, "content": "B2"}],
+                [{"type": "replace", "paraIdx": 1, "content": "B2"}],
+                "A\n\nB2\n\nC",
+            ),
+        ],
+        ids=["delete-delete", "identical-replace"],
+    )
+    def test_submit_changes_stale_noop_does_not_mark_or_broadcast(
+        self,
+        writable_server_url,
+        writable_dir,
+        monkeypatch,
+        remote_changes,
+        client_changes,
+        current_content,
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver.file_version_store import get_store
+
+        base = "A\n\nB\n\nC"
+        rel_path = "/stale-noop.md"
+        path = os.path.join(writable_dir, "stale-noop.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": current_content,
+                "changes": remote_changes,
+            },
+        )
+        assert status == 200
+        assert json.loads(body)["applied"] is True
+        with open(path, "rb") as f:
+            disk_before = f.read()
+
+        watcher = Mock()
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": current_content,
+                "changes": client_changes,
+            },
+        )
+
+        assert status == 200
+        data = json.loads(body)
+        assert data["applied"] is False
+        assert data["newVersion"] == 1
+        assert get_store().get_current_version("writable:/stale-noop.md") == 1
+        with open(path, "rb") as f:
+            assert f.read() == disk_before
+        watcher.mark_expected.assert_not_called()
+        broadcast.assert_not_called()
+
     def test_submit_changes_stale_base_three_way_merges_after_store_restart(
         self, writable_server_url, writable_dir
     ):
@@ -749,8 +896,21 @@ class TestSubmitChangesAPI:
                 {"type": "replace", "paraIdx": 1, "content": "invalid"},
                 "Invalid changes: replace/delete paraIdx exceeds base paragraph count",
             ),
+            (
+                {"type": "replace", "paraIdx": 0, "content": "valid", "delimiter": 7},
+                "Invalid changes: delimiter must be a string",
+            ),
+            (
+                {"type": "delete", "paraIdx": 0, "delimiter": ""},
+                "Invalid changes: delimiter is only valid for insert/replace changes",
+            ),
         ],
-        ids=["negative-index", "current-version-index-out-of-range"],
+        ids=[
+            "negative-index",
+            "current-version-index-out-of-range",
+            "non-string-delimiter",
+            "delete-with-delimiter",
+        ],
     )
     def test_submit_changes_rejects_invalid_changes_without_side_effects(
         self,
