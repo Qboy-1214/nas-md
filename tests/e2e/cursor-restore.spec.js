@@ -1,17 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { deleteAdminFile, getWritableAdminMount, putAdminFile } from './helpers/admin.js';
 
 async function ensureTestFile(page) {
-  await page.goto('/admin');
-  await page.waitForSelector('.mount-name', { timeout: 10000 });
-  await page.waitForFunction(() => window.state && window.state.mounts, { timeout: 10000 });
-
-  const mountInfo = await page.evaluate(() => {
-    const m = window.state.mounts.find((m) => !m.id.startsWith('builtin') && !m.readonly);
-    if (!m) return null;
-    return { id: m.id, name: m.name };
-  });
-  if (!mountInfo) return null;
-
+  const mountInfo = await getWritableAdminMount(page);
   const testFileName = '_cursor-test-' + Date.now() + '.md';
   let content = '# Scroll Test Document\n\n';
   for (let i = 1; i <= 80; i++) {
@@ -21,10 +12,7 @@ async function ensureTestFile(page) {
     }
   }
 
-  await page.request.put(
-    `/api/mounts/${mountInfo.id}/file?path=/${testFileName}`,
-    { body: content },
-  );
+  await putAdminFile(page, mountInfo.id, `/${testFileName}`, content);
 
   // Reload so tree picks up the file
   await page.reload();
@@ -70,18 +58,10 @@ async function getScrollTop(page) {
 
 test.describe('光标和滚动位置恢复', () => {
   test('刷新页面后恢复滚动位置', async ({ page }) => {
-    const setup = await ensureTestFile(page);
-    if (!setup) {
-      test.skip(true, 'No writable mount found');
-      return;
-    }
-    const { mountInfo, testFileName } = setup;
+    const { mountInfo, testFileName } = await ensureTestFile(page);
 
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
-    if ((await fileEl.count()) === 0) {
-      test.skip(true, 'Test file not visible');
-      return;
-    }
+    await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
     await page.waitForFunction(() => {
       const vd = window._vditor;
@@ -100,13 +80,7 @@ test.describe('光标和滚动位置恢复', () => {
     // Verify same file is opened (breadcrumb or editor content)
     const breadcrumb = page.locator('#breadcrumb');
     const breadcrumbText = await breadcrumb.textContent();
-    const hasFile = breadcrumbText.includes(testFileName);
-    if (!hasFile) {
-      // File might not auto-restore — just verify page loaded
-      await expect(page.locator('#vditor')).toBeVisible();
-      test.skip(true, 'File did not auto-restore after reload');
-      return;
-    }
+    expect(breadcrumbText, 'file auto-restored after reload').toContain(testFileName);
 
     // Check scroll position restored (if scrollable)
     const scrollAfter = await getScrollTop(page);
@@ -114,24 +88,14 @@ test.describe('光标和滚动位置恢复', () => {
       expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThan(200);
     }
 
-    await page.request.delete(
-      `/api/mounts/${mountInfo.id}/file?path=/${testFileName}`,
-    );
+    await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
 
   test('刷新页面后恢复标题位置', async ({ page }) => {
-    const setup = await ensureTestFile(page);
-    if (!setup) {
-      test.skip(true, 'No writable mount found');
-      return;
-    }
-    const { mountInfo, testFileName } = setup;
+    const { mountInfo, testFileName } = await ensureTestFile(page);
 
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
-    if ((await fileEl.count()) === 0) {
-      test.skip(true, 'Test file not visible');
-      return;
-    }
+    await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
     await page.waitForFunction(() => {
       const vd = window._vditor;
@@ -154,35 +118,21 @@ test.describe('光标和滚动位置恢复', () => {
     await page.waitForTimeout(3000);
 
     const breadcrumbText = await page.locator('#breadcrumb').textContent();
-    if (!breadcrumbText.includes(testFileName)) {
-      await expect(page.locator('#vditor')).toBeVisible();
-      test.skip(true, 'File did not auto-restore after reload');
-      return;
-    }
+    expect(breadcrumbText, 'file auto-restored after reload').toContain(testFileName);
 
     const scrollAfter = await getScrollTop(page);
     if (scrollBefore > 0) {
       expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThan(200);
     }
 
-    await page.request.delete(
-      `/api/mounts/${mountInfo.id}/file?path=/${testFileName}`,
-    );
+    await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
 
   test('切换文件时保存光标位置到 localStorage', async ({ page }) => {
-    const setup = await ensureTestFile(page);
-    if (!setup) {
-      test.skip(true, 'No writable mount found');
-      return;
-    }
-    const { mountInfo, testFileName } = setup;
+    const { mountInfo, testFileName } = await ensureTestFile(page);
 
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
-    if ((await fileEl.count()) === 0) {
-      test.skip(true, 'Test file not visible');
-      return;
-    }
+    await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
     await page.waitForFunction(() => {
       const vd = window._vditor;
@@ -209,24 +159,14 @@ test.describe('光标和滚动位置恢复', () => {
     expect(pos).toHaveProperty('scrollPercent');
     expect(pos).toHaveProperty('headingText');
 
-    await page.request.delete(
-      `/api/mounts/${mountInfo.id}/file?path=/${testFileName}`,
-    );
+    await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
 
   test('打开新文件时光标位于顶部', async ({ page }) => {
-    const setup = await ensureTestFile(page);
-    if (!setup) {
-      test.skip(true, 'No writable mount found');
-      return;
-    }
-    const { mountInfo, testFileName } = setup;
+    const { mountInfo, testFileName } = await ensureTestFile(page);
 
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
-    if ((await fileEl.count()) === 0) {
-      test.skip(true, 'Test file not visible');
-      return;
-    }
+    await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
     await page.waitForFunction(() => {
       const vd = window._vditor;
@@ -244,8 +184,6 @@ test.describe('光标和滚动位置恢复', () => {
     const scrollTop = await getScrollTop(page);
     expect(scrollTop).toBeLessThan(50);
 
-    await page.request.delete(
-      `/api/mounts/${mountInfo.id}/file?path=/${testFileName}`,
-    );
+    await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
 });
