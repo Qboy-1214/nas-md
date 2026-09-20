@@ -688,6 +688,55 @@ class TestSubmitChangesAPI:
         data = json.loads(body)
         assert data["applied"] is False
 
+    @pytest.mark.parametrize(
+        ("change", "expected_error"),
+        [
+            (
+                {"type": "replace", "paraIdx": -1, "content": "invalid"},
+                "Invalid changes: paraIdx must be nonnegative",
+            ),
+            (
+                {"type": "replace", "paraIdx": 1, "content": "invalid"},
+                "Invalid changes: replace/delete paraIdx exceeds base paragraph count",
+            ),
+        ],
+        ids=["negative-index", "current-version-index-out-of-range"],
+    )
+    def test_submit_changes_rejects_invalid_changes_without_side_effects(
+        self,
+        writable_server_url,
+        writable_dir,
+        monkeypatch,
+        change,
+        expected_error,
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver.file_version_store import get_store
+
+        path = os.path.join(writable_dir, "invalid-change.md")
+        original_bytes = b"original"
+        with open(path, "wb") as f:
+            f.write(original_bytes)
+
+        watcher = Mock()
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/invalid-change.md",
+            data={"baseVersion": 0, "changes": [change]},
+        )
+
+        assert status == 400
+        assert json.loads(body) == {"error": expected_error}
+        with open(path, "rb") as f:
+            assert f.read() == original_bytes
+        assert get_store().get_current_version("writable:/invalid-change.md") == 0
+        watcher.mark_expected.assert_not_called()
+        broadcast.assert_not_called()
+
     def test_submit_changes_readonly_mount_rejected(self, writable_server_url):
         """POST /changes on a readonly mount should return 403."""
         payload = {"baseVersion": 0, "changes": [{"type": "insert", "paraIdx": 0, "content": "x"}]}

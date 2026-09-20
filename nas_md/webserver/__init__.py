@@ -1711,7 +1711,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return self._send_error("changes must be a list", 400)
 
         from nas_md.webserver.file_version_store import get_store
-        from nas_md.webserver.paragraph_diff import apply_changes as apply_diff
 
         store = get_store()
         file_key = f"{mount_id}:{rel_path}"
@@ -1724,32 +1723,32 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             current_content = ""
         store.init_file(file_key, abs_path, current_content)
 
-        # Pre-mark expected write to file_watcher so our own write isn't flagged external
+        def mark_expected(content: str):
+            try:
+                from nas_md.webserver.file_watcher import get_watcher
+
+                get_watcher().mark_expected(mount_id, rel_path, content)
+            except Exception:
+                pass  # watcher optional
+
         try:
-            from nas_md.webserver.file_watcher import get_watcher
-
-            if client_content is not None and base_version == store.get_current_version(file_key):
-                expected_content = client_content
-            else:
-                expected_content = apply_diff(current_content, changes)
-            get_watcher().mark_expected(mount_id, rel_path, expected_content)
-        except Exception:
-            pass  # watcher optional
-
-        result = store.apply_changes(
-            file_key=file_key,
-            file_path=abs_path,
-            base_version=base_version,
-            changes=changes,
-            author_id=session_id,
-            author_name=author_name,
-            author_color=author_color,
-            client_ip=client_ip,
-            client_os=client_os,
-            client_browser=client_browser,
-            user_agent=user_agent,
-            client_content=client_content,
-        )
+            result = store.apply_changes(
+                file_key=file_key,
+                file_path=abs_path,
+                base_version=base_version,
+                changes=changes,
+                author_id=session_id,
+                author_name=author_name,
+                author_color=author_color,
+                client_ip=client_ip,
+                client_os=client_os,
+                client_browser=client_browser,
+                user_agent=user_agent,
+                client_content=client_content,
+                before_write=mark_expected,
+            )
+        except (TypeError, ValueError) as e:
+            return self._send_error(f"Invalid changes: {e}", 400)
 
         # Broadcast to other clients via SSE
         if result.get("applied"):

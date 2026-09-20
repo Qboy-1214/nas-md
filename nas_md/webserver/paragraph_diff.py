@@ -327,6 +327,40 @@ def merge_changes(existing: list, incoming: list) -> list:
     return result
 
 
+def validate_changes(
+    changes: list[dict], base_para_count: int, changes_name: str = "changes"
+) -> None:
+    """Validate a change batch against its pre-change paragraph count."""
+    if isinstance(base_para_count, bool) or not isinstance(base_para_count, int):
+        raise TypeError("base_para_count must be an integer")
+    if base_para_count < 0 or base_para_count > 2**53 - 1:
+        raise ValueError("base_para_count must be a nonnegative safe integer")
+
+    if not isinstance(changes, list):
+        raise TypeError(f"{changes_name} must be a list")
+    for change in changes:
+        if not isinstance(change, dict):
+            raise TypeError(f"each {changes_name} entry must be a dict")
+
+        change_type = change.get("type")
+        if change_type not in {"insert", "delete", "replace"}:
+            raise ValueError(f"invalid change type: {change_type!r}")
+
+        para_idx = change.get("paraIdx")
+        if isinstance(para_idx, bool) or not isinstance(para_idx, int):
+            raise TypeError("paraIdx must be an integer")
+        if para_idx < 0:
+            raise ValueError("paraIdx must be nonnegative")
+        if change_type == "insert":
+            if para_idx > base_para_count:
+                raise ValueError("insert paraIdx exceeds base paragraph count")
+        elif para_idx >= base_para_count:
+            raise ValueError("replace/delete paraIdx exceeds base paragraph count")
+
+        if change_type in {"insert", "replace"} and not isinstance(change.get("content"), str):
+            raise TypeError("insert/replace content must be a string")
+
+
 def transform_changes(
     incoming_changes: list[dict],
     accumulated_changes: list[dict],
@@ -337,38 +371,8 @@ def transform_changes(
     Maps paragraph indices from base_version coordinate space to current server
     content coordinate space using Operational Transformation (OT).
     """
-    if isinstance(base_para_count, bool) or not isinstance(base_para_count, int):
-        raise TypeError("base_para_count must be an integer")
-    if base_para_count < 0 or base_para_count > 2**53 - 1:
-        raise ValueError("base_para_count must be a nonnegative safe integer")
-
-    for changes_name, changes in (
-        ("incoming_changes", incoming_changes),
-        ("accumulated_changes", accumulated_changes),
-    ):
-        if not isinstance(changes, list):
-            raise TypeError(f"{changes_name} must be a list")
-        for change in changes:
-            if not isinstance(change, dict):
-                raise TypeError(f"each {changes_name} entry must be a dict")
-
-            change_type = change.get("type")
-            if change_type not in {"insert", "delete", "replace"}:
-                raise ValueError(f"invalid change type: {change_type!r}")
-
-            para_idx = change.get("paraIdx")
-            if isinstance(para_idx, bool) or not isinstance(para_idx, int):
-                raise TypeError("paraIdx must be an integer")
-            if para_idx < 0:
-                raise ValueError("paraIdx must be nonnegative")
-            if change_type == "insert":
-                if para_idx > base_para_count:
-                    raise ValueError("insert paraIdx exceeds base paragraph count")
-            elif para_idx >= base_para_count:
-                raise ValueError("replace/delete paraIdx exceeds base paragraph count")
-
-            if change_type in {"insert", "replace"} and not isinstance(change.get("content"), str):
-                raise TypeError("insert/replace content must be a string")
+    validate_changes(incoming_changes, base_para_count, "incoming_changes")
+    validate_changes(accumulated_changes, base_para_count, "accumulated_changes")
 
     if not accumulated_changes or not incoming_changes:
         return list(incoming_changes)

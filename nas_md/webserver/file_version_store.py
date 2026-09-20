@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from nas_md.webserver.paragraph_diff import (
@@ -29,6 +30,7 @@ from nas_md.webserver.paragraph_diff import (
     compute_diff,
     split_paragraphs,
     transform_changes,
+    validate_changes,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,7 @@ class FileVersionStore:
         client_browser: str = "",
         user_agent: str = "",
         client_content: str | None = None,
+        before_write: Callable[[str], None] | None = None,
     ) -> dict:
         """Apply changes with version-based optimistic locking.
 
@@ -123,10 +126,14 @@ class FileVersionStore:
 
             merged = False
             changes_to_apply = changes
+            current_para_count = len(split_paragraphs(fv.content))
 
             if base_version == fv.version:
                 # Fast path: no conflict
+                validate_changes(changes, current_para_count)
                 if client_content is not None:
+                    if not isinstance(client_content, str):
+                        raise TypeError("content must be a string")
                     new_content = client_content
                     # Compute canonical minimal changes between previous content and new content
                     changes_to_apply = compute_diff(fv.content, new_content)
@@ -134,24 +141,51 @@ class FileVersionStore:
                     new_content = apply_diff(fv.content, changes)
                     changes_to_apply = changes
             else:
-                # Stale base_version: transform incoming changes against accumulated changes
-                merged = True
-                accumulated_changes = []
-                for v in range(base_version + 1, fv.version + 1):
-                    prev = fv.changes_by_version.get(v, [])
-                    accumulated_changes.extend(prev)
+                # Every stored batch uses the coordinate space of its own
+                # pre-write version. Reconstruct those paragraph counts before
+                # walking the incoming batch forward version by version.
+                if base_version < 0 or base_version > fv.version:
+                    return self._resync_required(fv)
 
-                base_count = len(split_paragraphs(fv.content))
-                transformed_changes = transform_changes(
-                    incoming_changes=changes,
-                    accumulated_changes=accumulated_changes,
-                    base_para_count=base_count,
-                )
+                post_count = current_para_count
+                reverse_batches = []
+                for version in range(fv.version, base_version, -1):
+                    if version not in fv.changes_by_version:
+                        return self._resync_required(fv)
+                    historical_batch = fv.changes_by_version[version]
+                    try:
+                        insert_count, delete_count = self._change_counts(historical_batch)
+                        pre_count = post_count - insert_count + delete_count
+                        validate_changes(
+                            historical_batch,
+                            pre_count,
+                            f"changes_by_version[{version}]",
+                        )
+                    except (TypeError, ValueError):
+                        return self._resync_required(fv)
+                    reverse_batches.append((historical_batch, pre_count))
+                    post_count = pre_count
+
+                validate_changes(changes, post_count)
+                transformed_changes = list(changes)
+                try:
+                    for historical_batch, pre_count in reversed(reverse_batches):
+                        transformed_changes = transform_changes(
+                            incoming_changes=transformed_changes,
+                            accumulated_changes=historical_batch,
+                            base_para_count=pre_count,
+                        )
+                except (TypeError, ValueError):
+                    return self._resync_required(fv)
+
+                merged = True
                 new_content = apply_diff(fv.content, transformed_changes)
                 changes_to_apply = transformed_changes  # for history record
 
             # Write to disk
             try:
+                if before_write is not None:
+                    before_write(new_content)
                 os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(new_content)
@@ -196,6 +230,35 @@ class FileVersionStore:
                 "content": new_content,
                 "appliedChanges": changes_to_apply,
             }
+
+    @staticmethod
+    def _change_counts(changes: list) -> tuple[int, int]:
+        if not isinstance(changes, list):
+            raise TypeError("changes must be a list")
+
+        insert_count = 0
+        delete_count = 0
+        for change in changes:
+            if not isinstance(change, dict):
+                raise TypeError("each changes entry must be a dict")
+            change_type = change.get("type")
+            if change_type == "insert":
+                insert_count += 1
+            elif change_type == "delete":
+                delete_count += 1
+            elif change_type != "replace":
+                raise ValueError(f"invalid change type: {change_type!r}")
+        return insert_count, delete_count
+
+    @staticmethod
+    def _resync_required(fv: _FileVersion) -> dict:
+        return {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": fv.version,
+            "content": fv.content,
+        }
 
     def apply_external_change(self, file_key: str, file_path: str) -> dict:
         """Apply an external file modification (e.g., from watchdog).

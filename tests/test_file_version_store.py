@@ -1,4 +1,5 @@
 # tests/test_file_version_store.py
+import os
 import threading
 import pytest
 from nas_md.webserver.file_version_store import FileVersionStore
@@ -199,6 +200,174 @@ def test_apply_changes_3way_merge_with_shifting_indices(store, test_file):
     with open(test_file, encoding="utf-8") as f:
         disk_content = f.read()
     assert disk_content == "HEADER\n\nP0\n\nP1\n\nP2_EDITED"
+
+
+def test_stale_change_rebases_through_each_version_coordinate_space(store, test_file):
+    file_key = "mount-0:/test.md"
+    initial_content = "A\n\nB\n\nC"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(initial_content)
+    store.init_file(file_key, test_file, initial_content)
+
+    store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "insert", "paraIdx": 0, "content": "X"}],
+        author_id="user1",
+        author_name="User1",
+        author_color="#f00",
+    )
+    store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=1,
+        changes=[{"type": "insert", "paraIdx": 3, "content": "Y"}],
+        author_id="user2",
+        author_name="User2",
+        author_color="#0f0",
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 2, "content": "C-stale"}],
+        author_id="user3",
+        author_name="User3",
+        author_color="#00f",
+    )
+
+    expected = "X\n\nA\n\nB\n\nY\n\nC-stale"
+    assert result == {
+        "applied": True,
+        "merged": True,
+        "newVersion": 3,
+        "content": expected,
+        "appliedChanges": [{"type": "replace", "paraIdx": 4, "content": "C-stale"}],
+    }
+    assert store.get_current_content(file_key) == expected
+    with open(test_file, "rb") as f:
+        assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
+
+
+def test_stale_change_uses_pre_delete_paragraph_count(store, test_file):
+    file_key = "mount-0:/test.md"
+    initial_content = "A\n\nB\n\nC"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(initial_content)
+    store.init_file(file_key, test_file, initial_content)
+
+    store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "delete", "paraIdx": 2}],
+        author_id="user1",
+        author_name="User1",
+        author_color="#f00",
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 2, "content": "C-stale"}],
+        author_id="user2",
+        author_name="User2",
+        author_color="#0f0",
+    )
+
+    expected = "A\n\nB\n\nC-stale"
+    assert result == {
+        "applied": True,
+        "merged": True,
+        "newVersion": 2,
+        "content": expected,
+        "appliedChanges": [{"type": "insert", "paraIdx": 2, "content": "C-stale"}],
+    }
+    assert store.get_current_content(file_key) == expected
+    with open(test_file, "rb") as f:
+        assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
+
+
+def test_stale_change_requires_resync_when_history_version_is_missing(store, test_file):
+    file_key = "mount-0:/test.md"
+    initial_content = "A\n\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(initial_content)
+    store.init_file(file_key, test_file, initial_content)
+    first_result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "A1"}],
+        author_id="user1",
+        author_name="User1",
+        author_color="#f00",
+    )
+    del store._files[file_key].changes_by_version[1]
+    with open(test_file, "rb") as f:
+        disk_before = f.read()
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-stale"}],
+        author_id="user2",
+        author_name="User2",
+        author_color="#0f0",
+    )
+
+    expected = first_result["content"]
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": expected,
+    }
+    assert store.get_current_version(file_key) == 1
+    assert store.get_current_content(file_key) == expected
+    with open(test_file, "rb") as f:
+        assert f.read() == disk_before
+
+
+def test_stale_change_requires_resync_after_external_reload(store, test_file):
+    file_key = "mount-0:/test.md"
+    initial_content = "A\n\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(initial_content)
+    store.init_file(file_key, test_file, initial_content)
+    external_content = "external\n\ncontent"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(external_content)
+    store.apply_external_change(file_key=file_key, file_path=test_file)
+    with open(test_file, "rb") as f:
+        disk_before = f.read()
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-stale"}],
+        author_id="user2",
+        author_name="User2",
+        author_color="#0f0",
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": external_content,
+    }
+    assert store.get_current_version(file_key) == 1
+    assert store.get_current_content(file_key) == external_content
+    with open(test_file, "rb") as f:
+        assert f.read() == disk_before
 
 
 def test_get_current_version(store, test_file):
