@@ -3589,7 +3589,8 @@ function splitParagraphsWithDelims(text) {
         blankCount++;
         postIdx++;
       }
-      delimiters.push(blankCount > 0 ? '\n'.repeat(blankCount + 1) : '\n\n');
+      const hasFollowingContent = postIdx < lines.length;
+      delimiters.push('\n'.repeat(blankCount + (hasFollowingContent ? 1 : 0)));
       lines = lines.slice(postIdx);
     }
   }
@@ -3742,13 +3743,28 @@ function applyChangesLocally(text, changes) {
   const sortedInsertKeys = Object.keys(insertsByIdx)
     .map(Number)
     .sort((a, b) => a - b);
-  for (const idx of sortedInsertKeys) {
-    if (idx >= n) {
-      for (const c of insertsByIdx[idx]) {
-        resultParas.push(c);
-        resultDelims.push('\n\n');
-      }
+  const trailingIndices = sortedInsertKeys.filter((idx) => idx >= n);
+  if (
+    trailingIndices.length > 0 &&
+    resultDelims.length > 0 &&
+    (resultDelims[resultDelims.length - 1] === '' || resultDelims[resultDelims.length - 1] === '\n')
+  ) {
+    resultDelims[resultDelims.length - 1] = '\n\n';
+  }
+
+  for (const idx of trailingIndices) {
+    for (const c of insertsByIdx[idx]) {
+      resultParas.push(c);
+      resultDelims.push('\n\n');
     }
+  }
+
+  if (
+    trailingIndices.length > 0 &&
+    resultDelims.length > 0 &&
+    resultDelims[resultDelims.length - 1] === '\n\n'
+  ) {
+    resultDelims[resultDelims.length - 1] = '';
   }
 
   const resultParts = [];
@@ -3893,63 +3909,74 @@ function computeParagraphDiff(oldText, newText) {
 }
 
 function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
-  if (!accumulated.length || !incoming.length) return incoming.slice();
-
-  let maxIdx = Math.max(baseCount, 100);
-  for (const change of incoming) {
-    maxIdx = Math.max(maxIdx, (change.paraIdx || 0) + 1);
+  if (typeof baseCount !== 'number' || !Number.isInteger(baseCount)) {
+    throw new TypeError('baseCount must be an integer');
   }
-  for (const change of accumulated) {
-    maxIdx = Math.max(maxIdx, (change.paraIdx || 0) + 1);
+  if (baseCount < 0 || !Number.isSafeInteger(baseCount)) {
+    throw new RangeError('baseCount must be a nonnegative safe integer');
   }
-  maxIdx += 50;
 
-  const posMap = Array.from({ length: maxIdx }, (_, idx) => idx);
-  const deleted = new Set();
-
-  for (const change of accumulated) {
-    const type = change.type;
-    const idx = change.paraIdx || 0;
-    if (type === 'insert') {
-      for (let baseIdx = 0; baseIdx < maxIdx; baseIdx++) {
-        if (!deleted.has(baseIdx) && posMap[baseIdx] >= idx) {
-          posMap[baseIdx]++;
-        }
+  for (const [changesName, changes] of [
+    ['incoming', incoming],
+    ['accumulated', accumulated],
+  ]) {
+    if (!Array.isArray(changes)) throw new TypeError(`${changesName} must be an array`);
+    for (const change of changes) {
+      if (change === null || typeof change !== 'object' || Array.isArray(change)) {
+        throw new TypeError(`each ${changesName} entry must be an object`);
       }
-    } else if (type === 'delete') {
-      let deletedBaseIdx = null;
-      for (let baseIdx = 0; baseIdx < maxIdx; baseIdx++) {
-        if (!deleted.has(baseIdx) && posMap[baseIdx] === idx) {
-          deletedBaseIdx = baseIdx;
-          break;
-        }
+      if (!['insert', 'delete', 'replace'].includes(change.type)) {
+        throw new TypeError(`invalid change type: ${change.type}`);
       }
-      if (deletedBaseIdx !== null) deleted.add(deletedBaseIdx);
-      for (let baseIdx = 0; baseIdx < maxIdx; baseIdx++) {
-        if (!deleted.has(baseIdx) && posMap[baseIdx] > idx) {
-          posMap[baseIdx]--;
+      if (typeof change.paraIdx !== 'number' || !Number.isInteger(change.paraIdx)) {
+        throw new TypeError('paraIdx must be an integer');
+      }
+      if (change.paraIdx < 0 || !Number.isSafeInteger(change.paraIdx)) {
+        throw new RangeError('paraIdx must be a nonnegative safe integer');
+      }
+      if (change.type === 'insert') {
+        if (change.paraIdx > baseCount) {
+          throw new RangeError('insert paraIdx exceeds base paragraph count');
         }
+      } else if (change.paraIdx >= baseCount) {
+        throw new RangeError('replace/delete paraIdx exceeds base paragraph count');
+      }
+      if (
+        (change.type === 'insert' || change.type === 'replace') &&
+        typeof change.content !== 'string'
+      ) {
+        throw new TypeError('insert/replace content must be a string');
       }
     }
   }
+
+  if (!accumulated.length || !incoming.length) return incoming.slice();
+
+  const deleted = new Set(
+    accumulated.filter((change) => change.type === 'delete').map((change) => change.paraIdx),
+  );
+  const insertPositions = accumulated
+    .filter((change) => change.type === 'insert')
+    .map((change) => change.paraIdx);
+
+  const mapPosition = (baseIdx) => {
+    const deletesBefore = Array.from(deleted).filter((idx) => idx < baseIdx).length;
+    const insertsThrough = insertPositions.filter((idx) => idx <= baseIdx).length;
+    return baseIdx - deletesBefore + insertsThrough;
+  };
 
   const transformed = [];
   for (const change of incoming) {
     const type = change.type;
-    const idx = change.paraIdx || 0;
-    if (idx >= maxIdx) {
-      transformed.push({ ...change });
-      continue;
-    }
-
-    const targetIdx = posMap[idx];
+    const idx = change.paraIdx;
+    const targetIdx = mapPosition(idx);
     if (type === 'insert') {
-      transformed.push({ type: 'insert', paraIdx: targetIdx, content: change.content || '' });
+      transformed.push({ type: 'insert', paraIdx: targetIdx, content: change.content });
     } else if (type === 'replace') {
       transformed.push({
         type: deleted.has(idx) ? 'insert' : 'replace',
         paraIdx: targetIdx,
-        content: change.content || '',
+        content: change.content,
       });
     } else if (type === 'delete' && !deleted.has(idx)) {
       transformed.push({ type: 'delete', paraIdx: targetIdx });

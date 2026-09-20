@@ -2,17 +2,26 @@
   {
     "name": "frontmatter-without-blank-line",
     "text": "---\ntitle: Doc\n---\nBody",
-    "paragraphs": ["---\ntitle: Doc\n---", "Body"]
+    "paragraphs": ["---\ntitle: Doc\n---", "Body"],
+    "delimiters": ["\n", ""]
   },
   {
     "name": "frontmatter-dot-close-with-blank-line",
     "text": "---\ntitle: Doc\n...\n\nBody",
-    "paragraphs": ["---\ntitle: Doc\n...", "Body"]
+    "paragraphs": ["---\ntitle: Doc\n...", "Body"],
+    "delimiters": ["\n\n", ""]
   },
   {
     "name": "frontmatter-only",
     "text": "---\ntitle: Doc\n---",
-    "paragraphs": ["---\ntitle: Doc\n---"]
+    "paragraphs": ["---\ntitle: Doc\n---"],
+    "delimiters": [""]
+  },
+  {
+    "name": "frontmatter-only-with-trailing-newline",
+    "text": "---\ntitle: Doc\n---\n",
+    "paragraphs": ["---\ntitle: Doc\n---"],
+    "delimiters": ["\n"]
   },
   {
     "name": "fence-and-math-blank-lines",

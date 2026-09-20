@@ -4,16 +4,14 @@ from pathlib import Path
 import pytest
 from nas_md.webserver.paragraph_diff import (
     split_paragraphs,
+    split_paragraphs_with_delims,
     compute_diff,
     apply_changes,
     merge_changes,
 )
 
-
 PARAGRAPH_SPLIT_CASES = json.loads(
-    (Path(__file__).parent / "fixtures" / "paragraph_split_cases.json").read_text(
-        encoding="utf-8"
-    )
+    (Path(__file__).parent / "fixtures" / "paragraph_split_cases.json").read_text(encoding="utf-8")
 )
 
 
@@ -24,6 +22,22 @@ PARAGRAPH_SPLIT_CASES = json.loads(
 )
 def test_split_paragraphs_shared_contract(case):
     assert split_paragraphs(case["text"]) == case["paragraphs"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [case for case in PARAGRAPH_SPLIT_CASES if "delimiters" in case],
+    ids=[case["name"] for case in PARAGRAPH_SPLIT_CASES if "delimiters" in case],
+)
+def test_split_paragraphs_frontmatter_delimiters_round_trip(case):
+    paragraphs, delimiters = split_paragraphs_with_delims(case["text"])
+
+    assert paragraphs == case["paragraphs"]
+    assert delimiters == case["delimiters"]
+    assert (
+        "".join(paragraph + delimiters[idx] for idx, paragraph in enumerate(paragraphs))
+        == case["text"]
+    )
 
 
 def test_split_paragraphs_basic():
@@ -320,6 +334,111 @@ def test_transform_changes_concurrent_both_insert():
     server_content = "X\n\nA\n\nB"
     result = apply_changes(server_content, transformed)
     assert result == "X\n\nA\n\nY\n\nB"
+
+
+def test_transform_changes_batch_uses_base_coordinates_for_multiple_inserts():
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    incoming = [{"type": "replace", "paraIdx": 1, "content": "B-local"}]
+    accumulated = [
+        {"type": "insert", "paraIdx": 0, "content": "X"},
+        {"type": "insert", "paraIdx": 2, "content": "Y"},
+    ]
+
+    transformed = transform_changes(incoming, accumulated, base_para_count=3)
+
+    assert transformed == [{"type": "replace", "paraIdx": 2, "content": "B-local"}]
+    assert apply_changes("X\n\nA\n\nB\n\nY\n\nC", transformed) == ("X\n\nA\n\nB-local\n\nY\n\nC")
+
+
+def test_transform_changes_batch_handles_adjacent_remote_deletes():
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    incoming = [{"type": "replace", "paraIdx": 2, "content": "C-local"}]
+    accumulated = [
+        {"type": "delete", "paraIdx": 1},
+        {"type": "delete", "paraIdx": 2},
+    ]
+
+    transformed = transform_changes(incoming, accumulated, base_para_count=4)
+
+    assert transformed == [{"type": "insert", "paraIdx": 1, "content": "C-local"}]
+    assert apply_changes("A\n\nD", transformed) == "A\n\nC-local\n\nD"
+
+
+def test_transform_changes_batch_handles_mixed_remote_insert_and_delete():
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    incoming = [{"type": "replace", "paraIdx": 0, "content": "A-local"}]
+    accumulated = [
+        {"type": "insert", "paraIdx": 0, "content": "X"},
+        {"type": "delete", "paraIdx": 1},
+    ]
+
+    transformed = transform_changes(incoming, accumulated, base_para_count=4)
+
+    assert transformed == [{"type": "replace", "paraIdx": 1, "content": "A-local"}]
+    assert apply_changes("X\n\nA\n\nC\n\nD", transformed) == ("X\n\nA-local\n\nC\n\nD")
+
+
+def test_transform_changes_batch_orders_local_inserts_after_remote_inserts():
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    incoming = [
+        {"type": "insert", "paraIdx": 1, "content": "L1"},
+        {"type": "insert", "paraIdx": 1, "content": "L2"},
+    ]
+    accumulated = [
+        {"type": "insert", "paraIdx": 1, "content": "R1"},
+        {"type": "insert", "paraIdx": 1, "content": "R2"},
+    ]
+
+    transformed = transform_changes(incoming, accumulated, base_para_count=2)
+
+    assert transformed == [
+        {"type": "insert", "paraIdx": 3, "content": "L1"},
+        {"type": "insert", "paraIdx": 3, "content": "L2"},
+    ]
+    assert apply_changes("A\n\nR1\n\nR2\n\nB", transformed) == ("A\n\nR1\n\nR2\n\nL1\n\nL2\n\nB")
+
+
+@pytest.mark.parametrize(
+    "incoming,accumulated,base_count,error",
+    [
+        ([], [], "3", TypeError),
+        ([], [], -1, ValueError),
+        ([], [], 2**53, ValueError),
+        ([{"type": "replace", "paraIdx": -1, "content": "X"}], [], 1, ValueError),
+        ([{"type": "insert", "paraIdx": 2, "content": "X"}], [], 1, ValueError),
+        ([{"type": "replace", "paraIdx": 1, "content": "X"}], [], 1, ValueError),
+        ([{"type": "unknown", "paraIdx": 0}], [], 1, ValueError),
+        ([{"type": "insert", "paraIdx": 0, "content": 7}], [], 1, TypeError),
+        ([], [{"type": "delete", "paraIdx": -1}], 1, ValueError),
+        (
+            [{"type": "insert", "paraIdx": 2**53, "content": "X"}],
+            [],
+            2**53 - 1,
+            ValueError,
+        ),
+    ],
+    ids=[
+        "base-count-type",
+        "negative-base-count",
+        "unsafe-base-count",
+        "negative-index",
+        "insert-past-end",
+        "replace-at-end",
+        "unknown-type",
+        "non-string-content",
+        "invalid-accumulated-change",
+        "unsafe-change-index",
+    ],
+)
+def test_transform_changes_rejects_invalid_input(incoming, accumulated, base_count, error):
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    with pytest.raises(error):
+        transform_changes(incoming, accumulated, base_para_count=base_count)
 
 
 def test_apply_changes_preserves_multiline_blank_delimiters():

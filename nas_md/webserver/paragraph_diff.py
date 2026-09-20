@@ -38,7 +38,8 @@ def split_paragraphs_with_delims(text: str) -> tuple[list[str], list[str]]:
             while post_idx < len(lines) and lines[post_idx].strip() == "":
                 sep_count += 1
                 post_idx += 1
-            delimiters.append("\n" * (sep_count + 1) if sep_count > 0 else "\n\n")
+            has_following_content = post_idx < len(lines)
+            delimiters.append("\n" * (sep_count + (1 if has_following_content else 0)))
             lines = lines[post_idx:]
 
     i = 0
@@ -336,61 +337,66 @@ def transform_changes(
     Maps paragraph indices from base_version coordinate space to current server
     content coordinate space using Operational Transformation (OT).
     """
+    if isinstance(base_para_count, bool) or not isinstance(base_para_count, int):
+        raise TypeError("base_para_count must be an integer")
+    if base_para_count < 0 or base_para_count > 2**53 - 1:
+        raise ValueError("base_para_count must be a nonnegative safe integer")
+
+    for changes_name, changes in (
+        ("incoming_changes", incoming_changes),
+        ("accumulated_changes", accumulated_changes),
+    ):
+        if not isinstance(changes, list):
+            raise TypeError(f"{changes_name} must be a list")
+        for change in changes:
+            if not isinstance(change, dict):
+                raise TypeError(f"each {changes_name} entry must be a dict")
+
+            change_type = change.get("type")
+            if change_type not in {"insert", "delete", "replace"}:
+                raise ValueError(f"invalid change type: {change_type!r}")
+
+            para_idx = change.get("paraIdx")
+            if isinstance(para_idx, bool) or not isinstance(para_idx, int):
+                raise TypeError("paraIdx must be an integer")
+            if para_idx < 0:
+                raise ValueError("paraIdx must be nonnegative")
+            if change_type == "insert":
+                if para_idx > base_para_count:
+                    raise ValueError("insert paraIdx exceeds base paragraph count")
+            elif para_idx >= base_para_count:
+                raise ValueError("replace/delete paraIdx exceeds base paragraph count")
+
+            if change_type in {"insert", "replace"} and not isinstance(change.get("content"), str):
+                raise TypeError("insert/replace content must be a string")
+
     if not accumulated_changes or not incoming_changes:
         return list(incoming_changes)
 
-    max_idx = max(base_para_count, 100)
-    for ch in incoming_changes:
-        max_idx = max(max_idx, ch.get("paraIdx", 0) + 1)
-    for ch in accumulated_changes:
-        max_idx = max(max_idx, ch.get("paraIdx", 0) + 1)
-    max_idx += 50
+    deleted = {ch["paraIdx"] for ch in accumulated_changes if ch["type"] == "delete"}
+    insert_positions = [ch["paraIdx"] for ch in accumulated_changes if ch["type"] == "insert"]
 
-    # pos_map[base_idx] -> current_idx (or None if deleted)
-    pos_map = list(range(max_idx))
-    deleted = set()
-
-    for ch in accumulated_changes:
-        t = ch.get("type")
-        idx = ch.get("paraIdx", 0)
-        if t == "insert":
-            for b in range(max_idx):
-                if b not in deleted and pos_map[b] >= idx:
-                    pos_map[b] += 1
-        elif t == "delete":
-            del_base = None
-            for b in range(max_idx):
-                if b not in deleted and pos_map[b] == idx:
-                    del_base = b
-                    break
-            if del_base is not None:
-                deleted.add(del_base)
-            for b in range(max_idx):
-                if b not in deleted and pos_map[b] > idx:
-                    pos_map[b] -= 1
+    def map_position(base_idx: int) -> int:
+        deletes_before = sum(1 for idx in deleted if idx < base_idx)
+        inserts_through = sum(1 for idx in insert_positions if idx <= base_idx)
+        return base_idx - deletes_before + inserts_through
 
     transformed = []
     for ch in incoming_changes:
-        t = ch.get("type")
-        idx = ch.get("paraIdx", 0)
-        if idx >= max_idx:
-            transformed.append(dict(ch))
-            continue
-
-        target_idx = pos_map[idx]
+        t = ch["type"]
+        idx = ch["paraIdx"]
+        target_idx = map_position(idx)
         if t == "insert":
-            transformed.append(
-                {"type": "insert", "paraIdx": target_idx, "content": ch.get("content", "")}
-            )
+            transformed.append({"type": "insert", "paraIdx": target_idx, "content": ch["content"]})
         elif t == "replace":
             if idx in deleted:
                 # Target was deleted by another user: preserve content as insert
                 transformed.append(
-                    {"type": "insert", "paraIdx": target_idx, "content": ch.get("content", "")}
+                    {"type": "insert", "paraIdx": target_idx, "content": ch["content"]}
                 )
             else:
                 transformed.append(
-                    {"type": "replace", "paraIdx": target_idx, "content": ch.get("content", "")}
+                    {"type": "replace", "paraIdx": target_idx, "content": ch["content"]}
                 )
         elif t == "delete" and idx not in deleted:
             transformed.append({"type": "delete", "paraIdx": target_idx})
