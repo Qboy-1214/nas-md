@@ -1,0 +1,22 @@
+[
+  {
+    "name": "frontmatter-without-blank-line",
+    "text": "---\ntitle: Doc\n---\nBody",
+    "paragraphs": ["---\ntitle: Doc\n---", "Body"]
+  },
+  {
+    "name": "frontmatter-dot-close-with-blank-line",
+    "text": "---\ntitle: Doc\n...\n\nBody",
+    "paragraphs": ["---\ntitle: Doc\n...", "Body"]
+  },
+  {
+    "name": "frontmatter-only",
+    "text": "---\ntitle: Doc\n---",
+    "paragraphs": ["---\ntitle: Doc\n---"]
+  },
+  {
+    "name": "fence-and-math-blank-lines",
+    "text": "```js\na();\n\nb();\n```\n\n$$\na\n\nb\n$$",
+    "paragraphs": ["```js\na();\n\nb();\n```", "$$\na\n\nb\n$$"]
+  }
+]

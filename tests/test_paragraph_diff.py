@@ -1,4 +1,6 @@
-# tests/test_paragraph_diff.py
+import json
+from pathlib import Path
+
 import pytest
 from nas_md.webserver.paragraph_diff import (
     split_paragraphs,
@@ -6,6 +8,22 @@ from nas_md.webserver.paragraph_diff import (
     apply_changes,
     merge_changes,
 )
+
+
+PARAGRAPH_SPLIT_CASES = json.loads(
+    (Path(__file__).parent / "fixtures" / "paragraph_split_cases.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+@pytest.mark.parametrize(
+    "case",
+    PARAGRAPH_SPLIT_CASES,
+    ids=[case["name"] for case in PARAGRAPH_SPLIT_CASES],
+)
+def test_split_paragraphs_shared_contract(case):
+    assert split_paragraphs(case["text"]) == case["paragraphs"]
 
 
 def test_split_paragraphs_basic():

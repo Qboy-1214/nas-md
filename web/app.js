@@ -3570,12 +3570,28 @@ function splitParagraphsWithDelims(text) {
   var inFence = null;
   var fenceLen = 0;
   var inMath = false;
-  var inFrontmatter = false;
 
   if (lines.length > 0 && lines[0].trim() === '---') {
-    inFrontmatter = true;
-    currentLines.push(lines[0]);
-    lines = lines.slice(1);
+    let closingIdx = -1;
+    for (let idx = 1; idx < Math.min(50, lines.length); idx++) {
+      const marker = lines[idx].trim();
+      if (marker === '---' || marker === '...') {
+        closingIdx = idx;
+        break;
+      }
+      if (marker.startsWith('#') || marker.startsWith('```')) break;
+    }
+    if (closingIdx > 0) {
+      paragraphs.push(lines.slice(0, closingIdx + 1).join('\n'));
+      let postIdx = closingIdx + 1;
+      let blankCount = 0;
+      while (postIdx < lines.length && lines[postIdx].trim() === '') {
+        blankCount++;
+        postIdx++;
+      }
+      delimiters.push(blankCount > 0 ? '\n'.repeat(blankCount + 1) : '\n\n');
+      lines = lines.slice(postIdx);
+    }
   }
 
   var i = 0;
@@ -3583,15 +3599,6 @@ function splitParagraphsWithDelims(text) {
   while (i < numLines) {
     var line = lines[i];
     var stripped = line.trim();
-
-    if (inFrontmatter) {
-      currentLines.push(line);
-      if (stripped === '---' || stripped === '...') {
-        inFrontmatter = false;
-      }
-      i++;
-      continue;
-    }
 
     if (!inFence) {
       if (stripped.startsWith('```')) {
@@ -3885,11 +3892,91 @@ function computeParagraphDiff(oldText, newText) {
   return changes;
 }
 
+function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
+  if (!accumulated.length || !incoming.length) return incoming.slice();
+
+  let maxIdx = Math.max(baseCount, 100);
+  for (const change of incoming) {
+    maxIdx = Math.max(maxIdx, (change.paraIdx || 0) + 1);
+  }
+  for (const change of accumulated) {
+    maxIdx = Math.max(maxIdx, (change.paraIdx || 0) + 1);
+  }
+  maxIdx += 50;
+
+  const posMap = Array.from({ length: maxIdx }, (_, idx) => idx);
+  const deleted = new Set();
+
+  for (const change of accumulated) {
+    const type = change.type;
+    const idx = change.paraIdx || 0;
+    if (type === 'insert') {
+      for (let baseIdx = 0; baseIdx < maxIdx; baseIdx++) {
+        if (!deleted.has(baseIdx) && posMap[baseIdx] >= idx) {
+          posMap[baseIdx]++;
+        }
+      }
+    } else if (type === 'delete') {
+      let deletedBaseIdx = null;
+      for (let baseIdx = 0; baseIdx < maxIdx; baseIdx++) {
+        if (!deleted.has(baseIdx) && posMap[baseIdx] === idx) {
+          deletedBaseIdx = baseIdx;
+          break;
+        }
+      }
+      if (deletedBaseIdx !== null) deleted.add(deletedBaseIdx);
+      for (let baseIdx = 0; baseIdx < maxIdx; baseIdx++) {
+        if (!deleted.has(baseIdx) && posMap[baseIdx] > idx) {
+          posMap[baseIdx]--;
+        }
+      }
+    }
+  }
+
+  const transformed = [];
+  for (const change of incoming) {
+    const type = change.type;
+    const idx = change.paraIdx || 0;
+    if (idx >= maxIdx) {
+      transformed.push({ ...change });
+      continue;
+    }
+
+    const targetIdx = posMap[idx];
+    if (type === 'insert') {
+      transformed.push({ type: 'insert', paraIdx: targetIdx, content: change.content || '' });
+    } else if (type === 'replace') {
+      transformed.push({
+        type: deleted.has(idx) ? 'insert' : 'replace',
+        paraIdx: targetIdx,
+        content: change.content || '',
+      });
+    } else if (type === 'delete' && !deleted.has(idx)) {
+      transformed.push({ type: 'delete', paraIdx: targetIdx });
+    }
+  }
+
+  return transformed;
+}
+
+function rebaseContent(baseContent, localContent, remoteContent) {
+  const localChanges = computeParagraphDiff(baseContent, localContent);
+  const remoteChanges = computeParagraphDiff(baseContent, remoteContent);
+  const transformed = transformParagraphChanges(
+    localChanges,
+    remoteChanges,
+    splitParagraphs(baseContent).length,
+  );
+  return applyChangesLocally(remoteContent, transformed);
+}
+
 window.nasmdDiff = {
-  splitParagraphs: splitParagraphs,
-  splitParagraphsWithDelims: splitParagraphsWithDelims,
-  applyChangesLocally: applyChangesLocally,
-  computeParagraphDiff: computeParagraphDiff,
+  splitParagraphs,
+  splitParagraphsWithDelims,
+  applyChangesLocally,
+  computeParagraphDiff,
+  transformParagraphChanges,
+  rebaseContent,
 };
 
 function confirmNewFile() {
