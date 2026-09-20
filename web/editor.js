@@ -328,7 +328,7 @@ function fixMermaidNodeHeights() {
 }
 
 // State saved before mode switch, restored after reinit
-let _pendingRestore = null;
+window._pendingRestore = null;
 // { headingText, scrollPercent, cursorViewportOffset, svCursorPos }
 //   headingText: text of nearest heading above cursor (for cross-mode positioning)
 //   scrollPercent: scrollTop / maxScroll (fallback)
@@ -506,7 +506,7 @@ window._reinitEditor = (mode) => {
   teardownSVSync();
   teardownOutlineHighlight();
   _vditor.destroy();
-  _pendingRestore = restore;
+  window._pendingRestore = restore;
   initEditor(content, mode);
 };
 
@@ -722,13 +722,13 @@ function initEditor(content, mode, readonly) {
         });
       }
 
-      const needsRestore = _pendingRestore !== null;
+      const needsRestore = window._pendingRestore !== null;
 
       if (needsRestore) {
         const doRestore = () => {
           if (!_vditor) return;
           const mode = _vditor.getCurrentMode();
-          const r = _pendingRestore;
+          const r = window._pendingRestore;
           const scrollEl = _getScrollEl(_vditor.vditor, mode);
 
           if (mode === 'sv' && r.svCursorPos > 0) {
@@ -800,7 +800,7 @@ function initEditor(content, mode, readonly) {
 
         // Cleanup
         setTimeout(() => {
-          _pendingRestore = null;
+          window._pendingRestore = null;
         }, 2500);
       } else {
         setTimeout(() => {

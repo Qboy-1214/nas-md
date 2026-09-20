@@ -2860,15 +2860,20 @@ function saveCursorScrollToStorage() {
       const sel = window.getSelection();
       if (sel.rangeCount > 0) {
         const range = sel.getRangeAt(0);
+        const cursorNode = range.startContainer;
         const cursorRect = range.getBoundingClientRect();
         const scrollRect = scrollEl.getBoundingClientRect();
-        cursorViewportOffset = Math.max(0, cursorRect.top - scrollRect.top);
-        const editorEl = scrollEl;
-        const cursorNode = range.startContainer;
-        const heading = window._findHeadingAboveCursor
-          ? window._findHeadingAboveCursor(editorEl, cursorNode)
-          : null;
-        if (heading) headingText = (heading.innerText || heading.textContent).trim();
+        const cursorIsVisible =
+          scrollEl.contains(cursorNode) &&
+          cursorRect.bottom >= scrollRect.top &&
+          cursorRect.top <= scrollRect.bottom;
+        if (cursorIsVisible) {
+          cursorViewportOffset = Math.max(0, cursorRect.top - scrollRect.top);
+          const heading = window._findHeadingAboveCursor
+            ? window._findHeadingAboveCursor(scrollEl, cursorNode)
+            : null;
+          if (heading) headingText = (heading.innerText || heading.textContent).trim();
+        }
       }
     }
 
