@@ -186,4 +186,37 @@ test.describe('光标和滚动位置恢复', () => {
 
     await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
+
+  test('快速连续切换编辑模式不会运行过期恢复回调', async ({ page }) => {
+    const { mountInfo, testFileName } = await ensureTestFile(page);
+
+    try {
+      const fileEl = page.locator('.tree-item', { hasText: testFileName });
+      await expect(fileEl, 'test file visible in tree').toHaveCount(1);
+      await fileEl.click();
+      await page.waitForFunction(
+        () => {
+          const vd = window._vditor;
+          return vd && vd.getValue().length > 100;
+        },
+        { timeout: 10000 },
+      );
+
+      const pageErrors = [];
+      page.on('pageerror', (error) => pageErrors.push(error.message));
+
+      await page.evaluate(() => setEditorMode('wysiwyg'));
+      await page.waitForFunction(() => window._vditor?.getCurrentMode() === 'wysiwyg');
+      await page.waitForTimeout(800);
+
+      await page.evaluate(() => setEditorMode('ir'));
+      await page.waitForFunction(() => window._vditor?.getCurrentMode() === 'ir');
+      await page.waitForTimeout(2600);
+
+      expect(pageErrors, 'superseded restore callbacks must not touch the new editor').toEqual([]);
+      expect(await page.evaluate(() => window._vditor?.getCurrentMode())).toBe('ir');
+    } finally {
+      await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
+    }
+  });
 });

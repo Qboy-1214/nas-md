@@ -329,6 +329,7 @@ function fixMermaidNodeHeights() {
 
 // State saved before mode switch, restored after reinit
 window._pendingRestore = null;
+let _editorGeneration = 0;
 // { headingText, scrollPercent, cursorViewportOffset, svCursorPos }
 //   headingText: text of nearest heading above cursor (for cross-mode positioning)
 //   scrollPercent: scrollTop / maxScroll (fallback)
@@ -511,6 +512,9 @@ window._reinitEditor = (mode) => {
 };
 
 function initEditor(content, mode, readonly) {
+  const editorGeneration = ++_editorGeneration;
+  const restore = window._pendingRestore;
+  window._pendingRestore = null;
   _editorMode = mode || 'ir';
   _originalContent = content || '';
   const vditorEl = document.getElementById('vditor');
@@ -722,28 +726,27 @@ function initEditor(content, mode, readonly) {
         });
       }
 
-      const needsRestore = window._pendingRestore !== null;
+      const restoreEditor = _vditor;
 
-      if (needsRestore) {
+      if (restore !== null) {
         const doRestore = () => {
-          if (!_vditor) return;
-          const mode = _vditor.getCurrentMode();
-          const r = window._pendingRestore;
-          const scrollEl = _getScrollEl(_vditor.vditor, mode);
+          if (_editorGeneration !== editorGeneration || _vditor !== restoreEditor) return;
+          const mode = restoreEditor.getCurrentMode();
+          const scrollEl = _getScrollEl(restoreEditor.vditor, mode);
 
-          if (mode === 'sv' && r.svCursorPos > 0) {
+          if (mode === 'sv' && restore.svCursorPos > 0) {
             // SV mode: restore by character offset
-            const ta = _vditor.vditor.sv.element;
+            const ta = restoreEditor.vditor.sv.element;
             if (ta) {
               ta.focus({ preventScroll: true });
-              ta.setSelectionRange(r.svCursorPos, r.svCursorPos);
+              ta.setSelectionRange(restore.svCursorPos, restore.svCursorPos);
             }
             // Restore scroll by percentage
-            if (scrollEl && r.scrollPercent > 0) {
+            if (scrollEl && restore.scrollPercent > 0) {
               const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
-              if (maxScroll > 0) scrollEl.scrollTop = r.scrollPercent * maxScroll;
+              if (maxScroll > 0) scrollEl.scrollTop = restore.scrollPercent * maxScroll;
             }
-          } else if (r.headingText) {
+          } else if (restore.headingText) {
             // IR / WYSIWYG: find heading by text, position near it
             const editorEl = scrollEl;
             if (editorEl) {
@@ -751,7 +754,7 @@ function initEditor(content, mode, readonly) {
               let targetHeading = null;
               for (const h of headings) {
                 const hText = (h.innerText || h.textContent).trim();
-                if (hText === r.headingText) {
+                if (hText === restore.headingText) {
                   targetHeading = h;
                   break;
                 }
@@ -771,23 +774,23 @@ function initEditor(content, mode, readonly) {
                   const headingRect = targetHeading.getBoundingClientRect();
                   const scrollRect = scrollEl.getBoundingClientRect();
                   const currentOffset = headingRect.top - scrollRect.top;
-                  const diff = currentOffset - r.cursorViewportOffset;
+                  const diff = currentOffset - restore.cursorViewportOffset;
                   if (Math.abs(diff) > 1) {
                     scrollEl.scrollTop += diff;
                   }
                 }
               } else {
                 // Heading not found, fall back to scroll percentage
-                if (scrollEl && r.scrollPercent > 0) {
+                if (scrollEl && restore.scrollPercent > 0) {
                   const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
-                  if (maxScroll > 0) scrollEl.scrollTop = r.scrollPercent * maxScroll;
+                  if (maxScroll > 0) scrollEl.scrollTop = restore.scrollPercent * maxScroll;
                 }
               }
             }
-          } else if (scrollEl && r.scrollPercent > 0) {
+          } else if (scrollEl && restore.scrollPercent > 0) {
             // No heading, fall back to scroll percentage
             const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
-            if (maxScroll > 0) scrollEl.scrollTop = r.scrollPercent * maxScroll;
+            if (maxScroll > 0) scrollEl.scrollTop = restore.scrollPercent * maxScroll;
           }
         };
 
@@ -797,11 +800,6 @@ function initEditor(content, mode, readonly) {
         setTimeout(doRestore, 600);
         setTimeout(doRestore, 1200);
         setTimeout(doRestore, 2000);
-
-        // Cleanup
-        setTimeout(() => {
-          window._pendingRestore = null;
-        }, 2500);
       } else {
         setTimeout(() => {
           const el = getActiveEditorEl();
