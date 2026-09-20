@@ -1497,7 +1497,10 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         store.init_file(file_key, abs_path, old_content)
 
-        if old_content != new_text:
+        if not old_content and new_text:
+            # A full-content insert preserves exact delimiters when creating a file.
+            changes = [{"type": "insert", "paraIdx": 0, "content": new_text}]
+        elif old_content != new_text:
             changes = compute_diff(old_content, new_text)
             if not changes:
                 changes = [{"type": "replace", "paraIdx": 0, "content": new_text}]
@@ -1657,6 +1660,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         Request body JSON:
             {
                 "baseVersion": int,
+                "baseContent": str,
                 "changes": [{type, paraIdx, content}, ...],
                 "authorName": str,
                 "authorColor": str
@@ -1700,6 +1704,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         base_version = int(payload.get("baseVersion", 0))
         changes = payload.get("changes", [])
         client_content = payload.get("content")
+        base_content = payload.get("baseContent")
         author_name = payload.get("authorName") or self.headers.get("X-Client-Name", "Anonymous")
         author_color = payload.get("authorColor") or self.headers.get("X-Client-Color", "#3498db")
         client_os = payload.get("os", "Unknown OS")
@@ -1745,6 +1750,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 client_browser=client_browser,
                 user_agent=user_agent,
                 client_content=client_content,
+                base_content=base_content,
                 before_write=mark_expected,
             )
         except (TypeError, ValueError) as e:

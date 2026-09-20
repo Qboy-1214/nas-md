@@ -12,8 +12,9 @@ Each successful write:
 4. Returns the new version + content to the caller
 
 Conflict resolution (base_version mismatch):
-- Compute the incoming changes against the current server content
-- Merge with any pending changes since base_version (paragraph-level)
+- Validate the declared changes against the client's submitted base content
+- Compute both client and server changes from that common ancestor
+- Transform the client changes over the server changes (paragraph-level)
 - "Last write wins" for same-paragraph conflicts
 """
 
@@ -43,7 +44,7 @@ class _FileVersion:
     version: int = 0
     content: str = ""
     # changes_by_version: version -> list of changes that produced this version
-    # used for merging incoming changes that were based on older versions
+    # retained as a bounded record; stale merging uses submitted base content
     changes_by_version: dict = field(default_factory=dict)
 
 
@@ -94,6 +95,7 @@ class FileVersionStore:
         client_browser: str = "",
         user_agent: str = "",
         client_content: str | None = None,
+        base_content: str | None = None,
         before_write: Callable[[str], None] | None = None,
     ) -> dict:
         """Apply changes with version-based optimistic locking.
@@ -104,14 +106,6 @@ class FileVersionStore:
           newVersion: int
           content: str
         """
-        if not changes and client_content is None:
-            return {
-                "applied": False,
-                "merged": False,
-                "newVersion": self.get_current_version(file_key),
-                "content": self.get_current_content(file_key) or "",
-            }
-
         with self._lock:
             fv = self._files.get(file_key)
             if fv is None:
@@ -124,63 +118,52 @@ class FileVersionStore:
                 fv = _FileVersion(version=0, content=disk_content, changes_by_version={})
                 self._files[file_key] = fv
 
-            merged = False
-            changes_to_apply = changes
-            current_para_count = len(split_paragraphs(fv.content))
+            if base_version < 0 or base_version > fv.version:
+                return self._resync_result(fv)
 
-            if base_version == fv.version:
-                # Fast path: no conflict
-                validate_changes(changes, current_para_count)
-                if client_content is not None:
-                    if not isinstance(client_content, str):
-                        raise TypeError("content must be a string")
-                    new_content = client_content
-                    # Compute canonical minimal changes between previous content and new content
-                    changes_to_apply = compute_diff(fv.content, new_content)
-                else:
-                    new_content = apply_diff(fv.content, changes)
-                    changes_to_apply = changes
+            submitted_base = base_content
+            if submitted_base is None and base_version == fv.version:
+                submitted_base = fv.content
+            if submitted_base is None:
+                return self._resync_result(fv)
+            if not isinstance(submitted_base, str):
+                raise TypeError("baseContent must be a string")
+
+            validate_changes(changes, len(split_paragraphs(submitted_base)))
+            reconstructed_content = apply_diff(submitted_base, changes)
+
+            submitted_content = client_content
+            if submitted_content is None:
+                submitted_content = reconstructed_content
             else:
-                # Every stored batch uses the coordinate space of its own
-                # pre-write version. Reconstruct those paragraph counts before
-                # walking the incoming batch forward version by version.
-                if base_version < 0 or base_version > fv.version:
-                    return self._resync_required(fv)
+                if not isinstance(submitted_content, str):
+                    raise TypeError("content must be a string")
+                if reconstructed_content != submitted_content:
+                    return self._resync_result(fv)
 
-                post_count = current_para_count
-                reverse_batches = []
-                for version in range(fv.version, base_version, -1):
-                    if version not in fv.changes_by_version:
-                        return self._resync_required(fv)
-                    historical_batch = fv.changes_by_version[version]
-                    try:
-                        insert_count, delete_count = self._change_counts(historical_batch)
-                        pre_count = post_count - insert_count + delete_count
-                        validate_changes(
-                            historical_batch,
-                            pre_count,
-                            f"changes_by_version[{version}]",
-                        )
-                    except (TypeError, ValueError):
-                        return self._resync_required(fv)
-                    reverse_batches.append((historical_batch, pre_count))
-                    post_count = pre_count
+            canonical_changes = compute_diff(submitted_base, submitted_content)
+            merged = base_version != fv.version
+            if not merged and submitted_base != fv.content:
+                return self._resync_result(fv)
+            if not canonical_changes:
+                return {
+                    "applied": False,
+                    "merged": False,
+                    "newVersion": fv.version,
+                    "content": fv.content,
+                }
 
-                validate_changes(changes, post_count)
-                transformed_changes = list(changes)
-                try:
-                    for historical_batch, pre_count in reversed(reverse_batches):
-                        transformed_changes = transform_changes(
-                            incoming_changes=transformed_changes,
-                            accumulated_changes=historical_batch,
-                            base_para_count=pre_count,
-                        )
-                except (TypeError, ValueError):
-                    return self._resync_required(fv)
-
-                merged = True
-                new_content = apply_diff(fv.content, transformed_changes)
-                changes_to_apply = transformed_changes  # for history record
+            if not merged:
+                changes_to_apply = canonical_changes
+                new_content = submitted_content
+            else:
+                remote_changes = compute_diff(submitted_base, fv.content)
+                changes_to_apply = transform_changes(
+                    canonical_changes,
+                    remote_changes,
+                    len(split_paragraphs(submitted_base)),
+                )
+                new_content = apply_diff(fv.content, changes_to_apply)
 
             # Write to disk
             try:
@@ -232,26 +215,7 @@ class FileVersionStore:
             }
 
     @staticmethod
-    def _change_counts(changes: list) -> tuple[int, int]:
-        if not isinstance(changes, list):
-            raise TypeError("changes must be a list")
-
-        insert_count = 0
-        delete_count = 0
-        for change in changes:
-            if not isinstance(change, dict):
-                raise TypeError("each changes entry must be a dict")
-            change_type = change.get("type")
-            if change_type == "insert":
-                insert_count += 1
-            elif change_type == "delete":
-                delete_count += 1
-            elif change_type != "replace":
-                raise ValueError(f"invalid change type: {change_type!r}")
-        return insert_count, delete_count
-
-    @staticmethod
-    def _resync_required(fv: _FileVersion) -> dict:
+    def _resync_result(fv: _FileVersion) -> dict:
         return {
             "applied": False,
             "merged": False,

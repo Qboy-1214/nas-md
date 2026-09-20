@@ -65,7 +65,8 @@ def test_apply_changes_no_conflict(store, test_file):
 
 
 def test_apply_changes_with_merge(store, test_file):
-    store.init_file("mount-0:/test.md", test_file, "para one\n\npara two\n\npara three")
+    base = "para one\n\npara two\n\npara three"
+    store.init_file("mount-0:/test.md", test_file, base)
     store.apply_changes(
         file_key="mount-0:/test.md",
         file_path=test_file,
@@ -83,6 +84,8 @@ def test_apply_changes_with_merge(store, test_file):
         author_id="user2",
         author_name="B",
         author_color="#000",
+        client_content="para one\n\npara two\n\nC2",
+        base_content=base,
     )
     assert result["applied"] is True
     assert result["merged"] is True
@@ -92,7 +95,8 @@ def test_apply_changes_with_merge(store, test_file):
 
 
 def test_apply_changes_same_paragraph_overwrite(store, test_file):
-    store.init_file("mount-0:/test.md", test_file, "para one\n\npara two\n\npara three")
+    base = "para one\n\npara two\n\npara three"
+    store.init_file("mount-0:/test.md", test_file, base)
     store.apply_changes(
         file_key="mount-0:/test.md",
         file_path=test_file,
@@ -110,6 +114,8 @@ def test_apply_changes_same_paragraph_overwrite(store, test_file):
         author_id="userB",
         author_name="B",
         author_color="#000",
+        client_content="para one\n\nfrom_B\n\npara three",
+        base_content=base,
     )
     assert result["merged"] is True
     assert "from_B" in result["content"]
@@ -132,7 +138,8 @@ def test_apply_changes_empty_changes(store, test_file):
 
 
 def test_apply_changes_concurrent_thread_safety(store, test_file):
-    store.init_file("mount-0:/test.md", test_file, "para one\n\npara two\n\npara three")
+    base = "para one\n\npara two\n\npara three"
+    store.init_file("mount-0:/test.md", test_file, base)
     results = []
     lock = threading.Lock()
 
@@ -145,6 +152,8 @@ def test_apply_changes_concurrent_thread_safety(store, test_file):
             author_id=f"user{idx}",
             author_name=f"U{idx}",
             author_color="#fff",
+            client_content=f"insert_{idx}\n\n{base}",
+            base_content=base,
         )
         with lock:
             results.append(result)
@@ -167,7 +176,8 @@ def test_apply_changes_concurrent_thread_safety(store, test_file):
 def test_apply_changes_3way_merge_with_shifting_indices(store, test_file):
     """When a prior version inserts paragraphs, subsequent edits based on older base_version shift correctly."""
     # Seed document: P0, P1, P2 (version 0)
-    store.init_file("mount-0:/test.md", test_file, "P0\n\nP1\n\nP2")
+    base = "P0\n\nP1\n\nP2"
+    store.init_file("mount-0:/test.md", test_file, base)
 
     # User 1 inserts HEADER at index 0 -> version 1
     r1 = store.apply_changes(
@@ -191,6 +201,8 @@ def test_apply_changes_3way_merge_with_shifting_indices(store, test_file):
         author_id="user2",
         author_name="User2",
         author_color="#0f0",
+        client_content="P0\n\nP1\n\nP2_EDITED",
+        base_content=base,
     )
     assert r2["applied"] is True
     assert r2["merged"] is True
@@ -236,6 +248,8 @@ def test_stale_change_rebases_through_each_version_coordinate_space(store, test_
         author_id="user3",
         author_name="User3",
         author_color="#00f",
+        client_content="A\n\nB\n\nC-stale",
+        base_content=initial_content,
     )
 
     expected = "X\n\nA\n\nB\n\nY\n\nC-stale"
@@ -276,6 +290,8 @@ def test_stale_change_uses_pre_delete_paragraph_count(store, test_file):
         author_id="user2",
         author_name="User2",
         author_color="#0f0",
+        client_content="A\n\nB\n\nC-stale",
+        base_content=initial_content,
     )
 
     expected = "A\n\nB\n\nC-stale"
@@ -366,6 +382,147 @@ def test_stale_change_requires_resync_after_external_reload(store, test_file):
     }
     assert store.get_current_version(file_key) == 1
     assert store.get_current_content(file_key) == external_content
+    with open(test_file, "rb") as f:
+        assert f.read() == disk_before
+
+
+def test_restart_stale_client_three_way_merges(tmp_path, test_file):
+    key = "mount-0:/test.md"
+    base = "A\n\nB\n\nC"
+    first = FileVersionStore(storage_dir=str(tmp_path / ".version_history"))
+    first.init_file(key, test_file, base)
+    first.apply_changes(
+        key,
+        test_file,
+        0,
+        [{"type": "replace", "paraIdx": 0, "content": "A-remote"}],
+        "remote",
+        "Remote",
+        "#f00",
+        client_content="A-remote\n\nB\n\nC",
+        base_content=base,
+    )
+
+    restarted = FileVersionStore(storage_dir=str(tmp_path / ".version_history"))
+    restarted.init_file(key, test_file, "A-remote\n\nB\n\nC")
+    result = restarted.apply_changes(
+        key,
+        test_file,
+        0,
+        [{"type": "replace", "paraIdx": 2, "content": "C-local"}],
+        "local",
+        "Local",
+        "#0f0",
+        client_content="A\n\nB\n\nC-local",
+        base_content=base,
+    )
+
+    assert result["content"] == "A-remote\n\nB\n\nC-local"
+
+
+def test_ahead_version_returns_resync_without_writing(store, test_file):
+    key = "mount-0:/test.md"
+    base = "A\n\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    with open(test_file, "rb") as f:
+        disk_before = f.read()
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        1,
+        [{"type": "replace", "paraIdx": 1, "content": "B-local"}],
+        "local",
+        "Local",
+        "#0f0",
+        client_content="A\n\nB-local",
+        base_content=base,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 0,
+        "content": base,
+    }
+    with open(test_file, "rb") as f:
+        assert f.read() == disk_before
+
+
+def test_missing_stale_base_content_returns_resync_without_writing(store, test_file):
+    key = "mount-0:/test.md"
+    base = "A\n\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    first_result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        [{"type": "replace", "paraIdx": 0, "content": "A-remote"}],
+        "remote",
+        "Remote",
+        "#f00",
+        client_content="A-remote\n\nB",
+        base_content=base,
+    )
+    with open(test_file, "rb") as f:
+        disk_before = f.read()
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        [{"type": "replace", "paraIdx": 1, "content": "B-local"}],
+        "local",
+        "Local",
+        "#0f0",
+        client_content="A\n\nB-local",
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": first_result["content"],
+    }
+    with open(test_file, "rb") as f:
+        assert f.read() == disk_before
+
+
+def test_current_version_wrong_base_content_returns_resync_without_writing(store, test_file):
+    key = "mount-0:/test.md"
+    current = "A\n\nB"
+    submitted_base = "wrong base"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(current)
+    store.init_file(key, test_file, current)
+    with open(test_file, "rb") as f:
+        disk_before = f.read()
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        [],
+        "local",
+        "Local",
+        "#0f0",
+        client_content=submitted_base,
+        base_content=submitted_base,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 0,
+        "content": current,
+    }
     with open(test_file, "rb") as f:
         assert f.read() == disk_before
 
@@ -536,9 +693,14 @@ def test_safe_filename_hashing_and_compatibility(tmp_path):
     assert not os.path.exists(legacy_path)
 
 
-def test_apply_changes_with_client_content(store, test_file):
-    """apply_changes with client_content should write client content directly and compute canonical changes."""
-    store.init_file("mount-0:/test.md", test_file, "para one\n\npara two\n")
+def test_declared_changes_must_reconstruct_client_content(store, test_file):
+    base = "para one\n\npara two\n"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file("mount-0:/test.md", test_file, base)
+    with open(test_file, "rb") as f:
+        disk_before = f.read()
+
     result = store.apply_changes(
         file_key="mount-0:/test.md",
         file_path=test_file,
@@ -548,15 +710,15 @@ def test_apply_changes_with_client_content(store, test_file):
         author_name="Tester",
         author_color="#fff",
         client_content="para one edited\n\npara two\n",
+        base_content=base,
     )
-    assert result["applied"] is True
-    assert result["newVersion"] == 1
-    assert result["content"] == "para one edited\n\npara two\n"
-    # Verify disk content is exact
-    with open(test_file, encoding="utf-8") as f:
-        assert f.read() == "para one edited\n\npara two\n"
-    # Verify appliedChanges was computed canonically on server
-    assert len(result["appliedChanges"]) == 1
-    assert result["appliedChanges"][0]["type"] == "replace"
-    assert result["appliedChanges"][0]["paraIdx"] == 0
-    assert result["appliedChanges"][0]["content"] == "para one edited"
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 0,
+        "content": base,
+    }
+    with open(test_file, "rb") as f:
+        assert f.read() == disk_before

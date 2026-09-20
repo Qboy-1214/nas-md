@@ -148,6 +148,7 @@ const API = {
     authorColor,
     clientInfo,
     content,
+    baseContent,
   ) {
     const url = `/api/mounts/${mountId}/changes?path=${encodeURIComponent(path)}`;
     const payload = {
@@ -160,6 +161,9 @@ const API = {
     };
     if (content !== undefined && content !== null) {
       payload.content = content;
+    }
+    if (baseContent !== undefined && baseContent !== null) {
+      payload.baseContent = baseContent;
     }
     const body = JSON.stringify(payload);
     console.log('[submitChanges] sending POST:', {

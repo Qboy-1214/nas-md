@@ -651,12 +651,15 @@ class TestSubmitChangesAPI:
 
     def test_submit_changes_stale_base_merges(self, writable_server_url, writable_dir):
         """Stale baseVersion should still apply (merged=True) via last-write-wins."""
+        base = "orig"
         with open(os.path.join(writable_dir, "merge.md"), "w", encoding="utf-8") as f:
-            f.write("orig")
+            f.write(base)
         # Client A saves at baseVersion 0
         payload_a = {
             "baseVersion": 0,
             "changes": [{"type": "replace", "paraIdx": 0, "content": "A-wins"}],
+            "baseContent": base,
+            "content": "A-wins",
         }
         _post(
             f"{writable_server_url}/api/mounts/writable/changes?path=/merge.md",
@@ -666,6 +669,8 @@ class TestSubmitChangesAPI:
         payload_b = {
             "baseVersion": 0,
             "changes": [{"type": "replace", "paraIdx": 0, "content": "B-wins"}],
+            "baseContent": base,
+            "content": "B-wins",
         }
         _status, body = _post(
             f"{writable_server_url}/api/mounts/writable/changes?path=/merge.md",
@@ -675,6 +680,51 @@ class TestSubmitChangesAPI:
         assert data["applied"] is True
         assert data["merged"] is True
         assert data["content"] == "B-wins"
+
+    def test_submit_changes_stale_base_three_way_merges_after_store_restart(
+        self, writable_server_url, writable_dir
+    ):
+        from nas_md.webserver.file_version_store import get_store
+
+        base = "A\n\nB\n\nC"
+        path = os.path.join(writable_dir, "restart-merge.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/restart-merge.md",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": "A-remote\n\nB\n\nC",
+                "changes": [{"type": "replace", "paraIdx": 0, "content": "A-remote"}],
+            },
+        )
+        assert status == 200
+        assert json.loads(body)["applied"] is True
+
+        store = get_store()
+        with store._lock:
+            store._files.clear()
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/restart-merge.md",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": "A\n\nB\n\nC-local",
+                "changes": [{"type": "replace", "paraIdx": 2, "content": "C-local"}],
+            },
+        )
+
+        expected = "A-remote\n\nB\n\nC-local"
+        assert status == 200
+        data = json.loads(body)
+        assert data["applied"] is True
+        assert data["merged"] is True
+        assert data["content"] == expected
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == expected
 
     def test_submit_changes_empty_changes_not_applied(self, writable_server_url, writable_dir):
         """Empty changes list should return applied=False."""
