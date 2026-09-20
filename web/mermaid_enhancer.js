@@ -250,16 +250,31 @@
     state.preFullscreenView = null;
   }
 
-  function resetFullscreenView(state) {
+  function resetFullscreenView(id, state) {
+    var target = state.targetEl;
+    var svg = target && target.querySelector('svg');
+    if (!target || !svg) return;
+
+    svg.classList.remove('mme-animating');
+    clearTimeout(svg._mmeAnimTimer);
     state.zoom = 1;
     state.panX = 0;
     state.panY = 0;
-    var svg = state.targetEl && state.targetEl.querySelector('svg');
-    if (!svg) return;
-    svg.style.transform = 'translate3d(0px, 0px, 0px) scale(1)';
-    svg.style.transformOrigin = 'top left';
-  }
+    applyTransform(id, target);
 
+    var targetStyle = getComputedStyle(target);
+    var paddingX = parseFloat(targetStyle.paddingLeft) + parseFloat(targetStyle.paddingRight);
+    var paddingY = parseFloat(targetStyle.paddingTop) + parseFloat(targetStyle.paddingBottom);
+    var availableWidth = Math.max(1, target.clientWidth - paddingX);
+    var availableHeight = Math.max(1, target.clientHeight - paddingY);
+    var baseRect = svg.getBoundingClientRect();
+    var fitScale = Math.min(1, availableWidth / baseRect.width, availableHeight / baseRect.height);
+
+    state.zoom = Math.max(0.1, fitScale);
+    state.panX = Math.max(0, (availableWidth - baseRect.width * state.zoom) / 2);
+    state.panY = 0;
+    applyTransform(id, target);
+  }
   function markFullscreenElements(state, active) {
     var target = state.targetEl;
     var container = state.uiContainer;
@@ -310,7 +325,7 @@
         _fullscreenState.mode = 'native';
         state.fullscreenMode = 'native';
         markFullscreenElements(state, true);
-        resetFullscreenView(state);
+        resetFullscreenView(id, state);
         updateFullscreenButton(state);
         return;
       } catch (_error) {
@@ -322,7 +337,7 @@
     _fullscreenState.mode = 'app';
     state.fullscreenMode = 'app';
     markFullscreenElements(state, true);
-    resetFullscreenView(state);
+    resetFullscreenView(id, state);
     updateFullscreenButton(state);
   }
 
@@ -542,7 +557,8 @@
         setZoom(id, Math.min(state.zoom + 0.25, 3), chartEl, true);
         break;
       case 'zoomOut':
-        setZoom(id, Math.max(state.zoom - 0.25, 0.25), chartEl, true);
+        var minZoom = state.fullscreenMode ? 0.1 : 0.25;
+        setZoom(id, Math.max(state.zoom - 0.25, minZoom), chartEl, true);
         break;
       case 'toggleFullscreen':
         if (state.fullscreenMode) {
@@ -609,7 +625,8 @@
       e.preventDefault();
       e.stopPropagation();
       var delta = e.deltaY < 0 ? 0.1 : -0.1;
-      setZoom(id, Math.max(0.25, Math.min(3, state.zoom + delta)), chartEl, false);
+      var minZoom = state.fullscreenMode ? 0.1 : 0.25;
+      setZoom(id, Math.max(minZoom, Math.min(3, state.zoom + delta)), chartEl, false);
     });
 
     chartEl.style.cursor = 'grab';
@@ -667,8 +684,27 @@
     if (moonIcon) moonIcon.style.display = newTheme === 'dark' ? '' : 'none';
   }
 
+  function recenterZoom(state, chartEl, nextZoom) {
+    var svg = chartEl.querySelector('svg');
+    if (!svg || !state.zoom || state.zoom === nextZoom) return;
+
+    svg.classList.remove('mme-animating');
+    clearTimeout(svg._mmeAnimTimer);
+    var currentZoom = state.zoom;
+    var svgRect = svg.getBoundingClientRect();
+    var baseLeft = svgRect.left - (state.panX || 0);
+    var baseTop = svgRect.top - (state.panY || 0);
+    var ratio = nextZoom / currentZoom;
+    var currentCenterX = (svgRect.left + svgRect.right) / 2;
+    var currentCenterY = (svgRect.top + svgRect.bottom) / 2;
+    state.panX = currentCenterX - baseLeft - (svgRect.width * ratio) / 2;
+    state.panY = currentCenterY - baseTop - (svgRect.height * ratio) / 2;
+  }
+
   function setZoom(id, zoom, chartEl, animate) {
-    _blocks[id].zoom = zoom;
+    var state = _blocks[id];
+    recenterZoom(state, chartEl, zoom);
+    state.zoom = zoom;
     if (animate) {
       var svg = chartEl.querySelector('svg');
       if (svg) {

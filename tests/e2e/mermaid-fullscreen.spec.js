@@ -65,8 +65,15 @@ test('Mermaid fallback fullscreen keeps the chart and existing controls usable',
   await expect(codeArea).toBeVisible();
   await expect(fullscreenButton(page)).toHaveAttribute('title', '退出全屏');
   await page.locator('[data-action="showChart"]').first().click();
+  const fullscreenScaleBeforeZoom = await page.evaluate(() => {
+    const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
+    return Number(svg.style.transform.match(/scale\(([^)]+)\)/)[1]);
+  });
   await page.locator('[data-action="zoomIn"]').first().click();
-  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /scale\(1\.25\)/);
+  await expect.poll(async () => page.evaluate(() => {
+    const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
+    return Number(svg.style.transform.match(/scale\(([^)]+)\)/)[1]);
+  })).toBeGreaterThan(fullscreenScaleBeforeZoom);
   await page.locator('[data-action="toggleTheme"]').first().click();
   await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /invert/);
 
@@ -118,6 +125,23 @@ test('Mermaid fullscreen layout fits a mobile viewport', async ({ page }) => {
   await expect.poll(async () => page.locator('.mme-toolbar').first().boundingBox()).not.toBeNull();
   await expect.poll(async () => page.locator('.language-mermaid svg').last().boundingBox()).not.toBeNull();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+});
+
+test('Mermaid normal zoom keeps the chart center stable', async ({ page }) => {
+  await prepareEditor(page);
+
+  const centerBeforeZoom = await page.evaluate(() => {
+    const rect = document.querySelector('.language-mermaid[data-mme-enhanced] svg').getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  });
+  await page.locator('[data-action="zoomIn"]').first().click();
+  await page.waitForTimeout(300);
+  const centerAfterZoom = await page.evaluate(() => {
+    const rect = document.querySelector('.language-mermaid[data-mme-enhanced] svg').getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  });
+  expect(Math.abs(centerAfterZoom.x - centerBeforeZoom.x)).toBeLessThan(2);
+  expect(Math.abs(centerAfterZoom.y - centerBeforeZoom.y)).toBeLessThan(2);
 });
 
 test('Fullscreen does not pollute Mermaid Undo and Redo', async ({ page }) => {
@@ -216,11 +240,22 @@ test('Exiting fullscreen restores the chart transform from before fullscreen', a
 
   const chart = page.locator('.language-mermaid[data-mme-enhanced]').last();
   const box = await chart.boundingBox();
+  const beforeDrag = await page.evaluate(() => {
+    const transform = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').style.transform;
+    const match = transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px/);
+    return { x: Number(match[1]), y: Number(match[2]) };
+  });
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 450, box.y + box.height / 2 + 280, { steps: 5 });
   await page.mouse.up();
-  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /translate3d\(450px, 280px/);
+  const afterDrag = await page.evaluate(() => {
+    const transform = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').style.transform;
+    const match = transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px/);
+    return { x: Number(match[1]), y: Number(match[2]) };
+  });
+  expect(afterDrag.x).toBeCloseTo(beforeDrag.x + 450, 0);
+  expect(afterDrag.y).toBeCloseTo(beforeDrag.y + 280, 0);
 
   await fullscreenButton(page).click();
   await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
@@ -261,15 +296,38 @@ test('Entering fullscreen resets an existing normal chart transform', async ({ p
 
   await fullscreenButton(page).click();
   await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
-  await expect.poll(async () => page.locator('.language-mermaid svg').last().getAttribute('style')).toContain(
-    'translate3d(0px, 0px, 0px) scale(1)',
-  );
+  await expect.poll(async () => page.evaluate(() => {
+    const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
+    const match = svg?.style.transform.match(/scale\(([^)]+)\)/);
+    return match ? Number(match[1]) : NaN;
+  })).toBeLessThan(1);
+  await expect.poll(async () => page.evaluate(() => {
+    const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
+    const match = svg?.style.transform.match(/scale\(([^)]+)\)/);
+    return match ? Number(match[1]) : NaN;
+  })).toBeGreaterThan(0);
 
-  const fullscreenView = await page.evaluate(() => {
+  const initialFullscreenView = await page.evaluate(() => {
     const target = document.querySelector('.language-mermaid[data-mme-fullscreen="true"]');
     const svg = target.querySelector('svg');
     return { target: target.getBoundingClientRect().toJSON(), svg: svg.getBoundingClientRect().toJSON() };
   });
-  expect(fullscreenView.svg.left).toBeGreaterThanOrEqual(fullscreenView.target.left - 1);
-  expect(fullscreenView.svg.top).toBeGreaterThanOrEqual(fullscreenView.target.top - 1);
+  expect(initialFullscreenView.svg.left).toBeGreaterThanOrEqual(initialFullscreenView.target.left - 1);
+  expect(initialFullscreenView.svg.top).toBeGreaterThanOrEqual(initialFullscreenView.target.top - 1);
+  expect(initialFullscreenView.svg.right).toBeLessThanOrEqual(initialFullscreenView.target.right + 1);
+  expect(initialFullscreenView.svg.bottom).toBeLessThanOrEqual(initialFullscreenView.target.bottom + 1);
+
+  const centerBeforeZoom = await page.evaluate(() => {
+    const rect = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  });
+  await page.locator('[data-action="zoomIn"]').first().click();
+  await page.waitForTimeout(300);
+  const centerAfterZoom = await page.evaluate(() => {
+    const rect = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').getBoundingClientRect();
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+  });
+  expect(Math.abs(centerAfterZoom.x - centerBeforeZoom.x)).toBeLessThan(2);
+  expect(Math.abs(centerAfterZoom.y - centerBeforeZoom.y)).toBeLessThan(2);
+
 });
