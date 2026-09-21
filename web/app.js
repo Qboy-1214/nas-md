@@ -65,6 +65,7 @@ const state = {
   baseVersion: 0, // version number of the content currently loaded in editor
   baseContent: '', // content snapshot at baseVersion (for diff computation)
   fileVersions: {}, // "mountId:path" -> last known version
+  pendingRemoteVersion: null, // newest deferred remote version while local edits are dirty
   remoteFile: null, // { src, path, key } when in remote proxy mode
 };
 
@@ -247,6 +248,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
           setFileInfo(shareMountId, sharePath);
           state.dirty = false;
+          state.pendingRemoteVersion = null;
           startDirtyCheck();
           renderSidebar();
           startSidebarRefresh();
@@ -367,6 +369,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
           setFileInfo(mount.id, lastPath);
           state.dirty = false;
+          state.pendingRemoteVersion = null;
           startDirtyCheck();
           // Expand sidebar to show the current file
           if (!state.expandedMounts.includes(mount.id)) {
@@ -2947,6 +2950,7 @@ async function openRemoteFile(src, path, key) {
   window._originalContent = content;
 
   state.dirty = false;
+  state.pendingRemoteVersion = null;
   // Clear hash so refresh doesn't re-trigger
   history.replaceState(null, '', window.location.pathname);
 
@@ -3115,6 +3119,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
     // Note: window._originalContent is set by Vditor's after() callback
     // to match Vditor's normalized content (e.g. trailing newline handling)
     state.dirty = false;
+    state.pendingRemoteVersion = null;
     startDirtyCheck();
     renderSidebar();
     loadBacklinks(path);

@@ -241,6 +241,30 @@
     return resultParas.join('\n\n');
   }
 
+  function deferWhileDirty(data) {
+    if (!window.state || !state.dirty) return false;
+    state.pendingRemoteVersion = Math.max(
+      Number(state.pendingRemoteVersion) || 0,
+      Number(data && data.newVersion) || 0,
+    );
+    if (window.showToast) {
+      window.showToast('检测到远端更新，将在保存时自动合并', 'info');
+    }
+    return true;
+  }
+
+  function getBatchVersion(item) {
+    var version = item.newVersion !== undefined ? item.newVersion : item.version;
+    return version === undefined ? undefined : Number(version);
+  }
+
+  function getBatchKey(item) {
+    if (item.mountId !== undefined && item.path !== undefined) {
+      return item.mountId + ':' + item.path;
+    }
+    return item.versionKey;
+  }
+
   function applyBatchRemoteChanges(batch) {
     if (!window._vditor || !batch || batch.length === 0) return;
 
@@ -250,11 +274,11 @@
       var currentBatch = [];
       for (var itemIdx = 0; itemIdx < batch.length; itemIdx++) {
         var item = batch[itemIdx];
-        if (!item.versionKey || item.versionKey === currentKey) {
-          var itemVersion = Number(item.version);
+        var itemKey = getBatchKey(item);
+        var itemVersion = getBatchVersion(item);
+        if (!itemKey || itemKey === currentKey) {
           if (
-            item.versionKey === currentKey &&
-            item.version !== undefined &&
+            itemKey === currentKey &&
             Number.isFinite(itemVersion) &&
             itemVersion <= acknowledgedVersion
           ) {
@@ -262,9 +286,9 @@
           }
           currentBatch.push(item);
         } else if (state.fileVersions) {
-          state.fileVersions[item.versionKey] = Math.max(
-            Number(state.fileVersions[item.versionKey]) || 0,
-            Number(item.version) || 0,
+          state.fileVersions[itemKey] = Math.max(
+            Number(state.fileVersions[itemKey]) || 0,
+            Number(itemVersion) || 0,
           );
         }
       }
@@ -272,40 +296,41 @@
       if (batch.length === 0) return;
     }
 
-    if (window.state && state.dirty) {
-      state.pendingRemoteUpdate = true;
-      var dirtyKey = batch[batch.length - 1].versionKey;
+    var latest = batch[batch.length - 1];
+    if (deferWhileDirty(latest)) {
+      var dirtyKey = getBatchKey(latest);
       if (dirtyKey) _queuedVersions[dirtyKey] = Number(state.baseVersion) || 0;
-      if (window.showToast) {
-        window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
-      }
       return;
     }
 
     var currentContent = window._vditor.getValue();
-    var newContent = currentContent;
+    var newContent =
+      window.state && typeof state.baseContent === 'string' ? state.baseContent : currentContent;
     var batchIdx = 0;
     while (batchIdx < batch.length) {
-      var version = batch[batchIdx].version;
+      var version = getBatchVersion(batch[batchIdx]);
       var versionChanges = [];
-      while (batchIdx < batch.length && batch[batchIdx].version === version) {
+      while (batchIdx < batch.length && getBatchVersion(batch[batchIdx]) === version) {
         versionChanges.push(batch[batchIdx].change);
         batchIdx++;
       }
       newContent = applyChangesToContent(newContent, versionChanges);
     }
-    var latest = batch[batch.length - 1];
 
     function commitBaseline(content) {
       window._originalContent = content;
       window._lastSavedContent = content;
       if (window.state) {
+        var latestVersion = getBatchVersion(latest);
+        var latestKey = getBatchKey(latest);
         state.baseContent = content;
-        state.baseVersion = latest.version;
-        state.pendingRemoteUpdate = false;
-        if (state.fileVersions && latest.versionKey) {
-          state.fileVersions[latest.versionKey] = latest.version;
+        if (Number.isFinite(latestVersion)) {
+          state.baseVersion = latestVersion;
+          if (state.fileVersions && latestKey) {
+            state.fileVersions[latestKey] = latestVersion;
+          }
         }
+        state.pendingRemoteVersion = null;
       }
     }
 
@@ -369,18 +394,12 @@
     var versionKey = data.mountId + ':' + data.path;
 
     if (isCurrentFile) {
+      if (deferWhileDirty(data)) return;
       var myVersion = Math.max(
         Number(state.baseVersion) || 0,
         Number(_queuedVersions[versionKey]) || 0,
       );
       if (serverVersion <= myVersion) return;
-      if (state.dirty) {
-        state.pendingRemoteUpdate = true;
-        if (window.showToast) {
-          window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
-        }
-        return;
-      }
       if (serverVersion > myVersion + 1) {
         fetchFullContent(data.mountId, data.path, serverVersion);
         return;
@@ -406,7 +425,7 @@
 
     var deferVersion = false;
     for (var pendingIdx = 0; pendingIdx < _pendingUpdates.length; pendingIdx++) {
-      if (_pendingUpdates[pendingIdx].versionKey === versionKey) {
+      if (getBatchKey(_pendingUpdates[pendingIdx]) === versionKey) {
         deferVersion = true;
         break;
       }
@@ -432,8 +451,9 @@
       destination.push({
         change: data.changes[i],
         author: author,
-        version: serverVersion,
-        versionKey: versionKey,
+        newVersion: serverVersion,
+        mountId: data.mountId,
+        path: data.path,
       });
     }
 
@@ -462,6 +482,19 @@
 
         var resultVersion = Number(result.version);
         var requiredVersion = Number(_fullFetchRequiredVersions[key]) || 0;
+        if (state.currentMountId !== mountId || state.currentPath !== path) return;
+        if (
+          deferWhileDirty({
+            newVersion: Math.max(
+              requiredVersion,
+              Number(expectedVersion) || 0,
+              Number.isFinite(resultVersion) ? resultVersion : 0,
+            ),
+          })
+        ) {
+          return;
+        }
+
         var currentVersion = window.state ? Number(state.baseVersion) || 0 : 0;
         var queuedVersion = Number(_queuedVersions[key]) || 0;
         if (
@@ -472,15 +505,6 @@
         ) {
           return;
         }
-        if (state.currentMountId !== mountId || state.currentPath !== path) return;
-
-        if (window.state && window.state.dirty) {
-          state.pendingRemoteUpdate = true;
-          if (window.showToast) {
-            window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
-          }
-          return;
-        }
 
         if (_applyTimer) clearTimeout(_applyTimer);
         _applyTimer = null;
@@ -488,23 +512,18 @@
         _pendingUpdates = [];
         _queuedVersions[key] = resultVersion;
 
-        // Update version metadata
-        if (window.state) {
-          if (result.version !== undefined) {
-            state.baseVersion = result.version;
-            if (state.fileVersions) {
-              state.fileVersions[key] = result.version;
-            }
-          }
-        }
-
         _applyingRemote = true;
         window._vditor.setValue(result.content);
-        window._originalContent = result.content;
+        var appliedContent = window._vditor.getValue();
+        window._originalContent = appliedContent;
+        window._lastSavedContent = appliedContent;
         if (window.state) {
-          state.baseContent = result.content;
-          state.pendingRemoteUpdate = false;
-          window._lastSavedContent = result.content;
+          state.baseContent = appliedContent;
+          state.baseVersion = resultVersion;
+          if (state.fileVersions) {
+            state.fileVersions[key] = resultVersion;
+          }
+          state.pendingRemoteVersion = null;
         }
         setTimeout(function () {
           _applyingRemote = false;
@@ -524,6 +543,7 @@
     if (state.currentMountId !== data.mountId || state.currentPath !== data.path) {
       return;
     }
+    if (deferWhileDirty(data)) return;
 
     var key = data.mountId + ':' + data.path;
     var currentVersion = Math.max(
@@ -532,42 +552,33 @@
     );
     var serverVersion = Number(data.newVersion) || 0;
     if (serverVersion <= currentVersion) return;
-    if (state.dirty) {
-      state.pendingRemoteUpdate = true;
-      window.showToast('文件已被外部修改，你的未保存编辑将在下次保存时合并', 'info');
-      return;
-    }
     if (serverVersion > currentVersion + 1) {
       fetchFullContent(data.mountId, data.path, serverVersion);
       return;
     }
-
-    // Update version state regardless of whether we reload
-    if (serverVersion) {
-      state.baseVersion = serverVersion;
-      if (state.fileVersions) {
-        state.fileVersions[key] = serverVersion;
-      }
-    }
+    if (data.content === undefined || !window._vditor) return;
 
     // No unsaved edits — reload the editor with the new content
-    if (data.content !== undefined && window._vditor) {
-      if (_applyTimer) clearTimeout(_applyTimer);
-      _applyTimer = null;
-      _pendingBatch = [];
-      _pendingUpdates = [];
-      _queuedVersions[key] = serverVersion;
-      _applyingRemote = true;
-      window._vditor.setValue(data.content);
-      window._originalContent = data.content;
-      state.baseContent = data.content;
-      state.pendingRemoteUpdate = false;
-      window._lastSavedContent = data.content;
-      setTimeout(function () {
-        _applyingRemote = false;
-      }, 150);
-      window.showToast('文件已被外部修改，已自动重载');
+    if (_applyTimer) clearTimeout(_applyTimer);
+    _applyTimer = null;
+    _pendingBatch = [];
+    _pendingUpdates = [];
+    _queuedVersions[key] = serverVersion;
+    _applyingRemote = true;
+    window._vditor.setValue(data.content);
+    var appliedContent = window._vditor.getValue();
+    window._originalContent = appliedContent;
+    window._lastSavedContent = appliedContent;
+    state.baseContent = appliedContent;
+    state.baseVersion = serverVersion;
+    if (state.fileVersions) {
+      state.fileVersions[key] = serverVersion;
     }
+    state.pendingRemoteVersion = null;
+    setTimeout(function () {
+      _applyingRemote = false;
+    }, 150);
+    window.showToast('文件已被外部修改，已自动重载');
   }
 
   // === Initialization ===

@@ -361,6 +361,154 @@ test('paragraph diff rejects a 998787-pair match graph before allocating it', as
   });
 });
 
+test('dirty remote events preserve the acknowledged baseline and retain the version high-water', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const editor = {
+      value: 'local-dirty',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    Object.assign(window.state, {
+      currentMountId: 'mount-0',
+      currentPath: '/dirty-remote.md',
+      baseVersion: 7,
+      baseContent: 'confirmed-v7',
+      fileVersions: { 'mount-0:/dirty-remote.md': 7 },
+      pendingRemoteVersion: null,
+      autoSave: false,
+    });
+    window._vditor = editor;
+    window._originalContent = 'confirmed-v7';
+    window._lastSavedContent = 'confirmed-v7';
+    window.markDirty();
+
+    const acknowledged = () => ({
+      editor: editor.getValue(),
+      baseVersion: window.state.baseVersion,
+      baseContent: window.state.baseContent,
+      originalContent: window._originalContent,
+      fileVersion: window.state.fileVersions['mount-0:/dirty-remote.md'],
+    });
+    const before = acknowledged();
+
+    window.nasmdSync.handleRemoteEdit({
+      type: 'remote_edit',
+      mountId: 'mount-0',
+      path: '/dirty-remote.md',
+      newVersion: 9,
+      authorId: 'remote',
+      authorName: 'Remote',
+      authorColor: '#f00',
+      changes: [{ type: 'replace', paraIdx: 0, content: 'REMOTE' }],
+    });
+    window.nasmdSync.handleExternalReload({
+      type: 'external_reload',
+      mountId: 'mount-0',
+      path: '/dirty-remote.md',
+      newVersion: 8,
+      content: 'external-v8',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    return {
+      before,
+      after: acknowledged(),
+      pendingRemoteVersion: window.state.pendingRemoteVersion,
+    };
+  });
+
+  expect(result.after).toEqual(result.before);
+  expect(result.pendingRemoteVersion).toBe(9);
+});
+
+test('clean remote batching advances the editor and acknowledged baseline atomically', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const setValues = [];
+    const editor = {
+      value: 'transient-editor-value',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        setValues.push(value);
+        this.value = value;
+      },
+    };
+    Object.assign(window.state, {
+      currentMountId: 'mount-0',
+      currentPath: '/clean-remote.md',
+      baseVersion: 7,
+      baseContent: 'A\n\nB',
+      fileVersions: { 'mount-0:/clean-remote.md': 7 },
+      pendingRemoteVersion: 12,
+      dirty: false,
+    });
+    window._vditor = editor;
+    window._originalContent = 'A\n\nB';
+    window._lastSavedContent = 'A\n\nB';
+
+    window.nasmdSync.handleRemoteEdit({
+      type: 'remote_edit',
+      mountId: 'mount-0',
+      path: '/clean-remote.md',
+      newVersion: 8,
+      authorId: 'remote',
+      authorName: 'Remote',
+      authorColor: '#f00',
+      changes: [{ type: 'insert', paraIdx: 0, content: 'X' }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    return {
+      setValues,
+      editor: editor.getValue(),
+      baseVersion: window.state.baseVersion,
+      baseContent: window.state.baseContent,
+      originalContent: window._originalContent,
+      fileVersion: window.state.fileVersions['mount-0:/clean-remote.md'],
+      pendingRemoteVersion: window.state.pendingRemoteVersion,
+    };
+  });
+
+  expect(result).toEqual({
+    setValues: ['X\n\nA\n\nB'],
+    editor: 'X\n\nA\n\nB',
+    baseVersion: 8,
+    baseContent: 'X\n\nA\n\nB',
+    originalContent: 'X\n\nA\n\nB',
+    fileVersion: 8,
+    pendingRemoteVersion: null,
+  });
+});
+
+test('clean remote pending version starts empty and resets after an explicit file switch', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+  await page.waitForFunction(() => window.state?.mounts?.some((mount) => mount.id === 'mount-0'));
+
+  expect(await page.evaluate(() => window.state.pendingRemoteVersion)).toBeNull();
+  await page.evaluate(async () => {
+    window.state.pendingRemoteVersion = 99;
+    await window.openFile('/mermaid-fullscreen.md', 'mount-0');
+  });
+
+  expect(await page.evaluate(() => window.state.currentPath)).toBe('/mermaid-fullscreen.md');
+  expect(await page.evaluate(() => window.state.pendingRemoteVersion)).toBeNull();
+});
+
 test('save keeps an over-budget document dirty without submitting changes', async ({ page }) => {
   await page.goto('/admin');
 

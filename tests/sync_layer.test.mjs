@@ -37,6 +37,7 @@ function loadSyncLayer({
     baseVersion: version,
     baseContent: confirmedContent,
     fileVersions: { 'mount-0:/doc.md': version },
+    pendingRemoteVersion: null,
     dirty,
   };
   const editor = {
@@ -570,7 +571,8 @@ test('dirty clients defer exact remote and external events without changing base
   });
   await flushPromises();
   assert.deepEqual(snapshotClient(remote), remoteBefore);
-  assert.equal(remote.state.pendingRemoteUpdate, true);
+  assert.equal(remote.state.pendingRemoteVersion, 2);
+  assert.deepEqual(remote.toasts, [['检测到远端更新，将在保存时自动合并', 'info']]);
   assert.deepEqual(remote.apiCalls, []);
   assert.deepEqual(remote.consoleErrors, []);
 
@@ -590,7 +592,8 @@ test('dirty clients defer exact remote and external events without changing base
   });
   await flushPromises();
   assert.deepEqual(snapshotClient(external), externalBefore);
-  assert.equal(external.state.pendingRemoteUpdate, true);
+  assert.equal(external.state.pendingRemoteVersion, 2);
+  assert.deepEqual(external.toasts, [['检测到远端更新，将在保存时自动合并', 'info']]);
   assert.deepEqual(external.apiCalls, []);
   assert.deepEqual(external.consoleErrors, []);
 });
@@ -614,7 +617,7 @@ test('dirty version gaps do not fetch or change the confirmed baseline', async (
   await flushPromises();
 
   assert.deepEqual(snapshotClient(app), before);
-  assert.equal(app.state.pendingRemoteUpdate, true);
+  assert.equal(app.state.pendingRemoteVersion, 3);
   assert.deepEqual(app.apiCalls, []);
   assert.deepEqual(app.consoleErrors, []);
 });
@@ -640,8 +643,80 @@ test('a fetch resolving after the client becomes dirty leaves all content untouc
   await flushPromises();
 
   assert.deepEqual(snapshotClient(app), before);
-  assert.equal(app.state.pendingRemoteUpdate, true);
+  assert.equal(app.state.pendingRemoteVersion, 3);
   assert.deepEqual(app.consoleErrors, []);
+});
+
+test('a clean remote batch applies once from the acknowledged baseline', async () => {
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'transient-editor-value',
+    baseContent: 'A\n\nB',
+    manualTimers: true,
+  });
+  const appliedValues = [];
+  app.editor.setValue = function (value) {
+    appliedValues.push(value);
+    this.value = value;
+  };
+  app.state.pendingRemoteVersion = 8;
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'insert', paraIdx: 0, content: 'X' }],
+  });
+  app.runTimers(300);
+
+  assert.deepEqual(appliedValues, ['X\n\nA\n\nB']);
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'X\n\nA\n\nB',
+    baseVersion: 2,
+    editor: 'X\n\nA\n\nB',
+    fileVersion: 2,
+    lastSavedContent: 'X\n\nA\n\nB',
+    originalContent: 'X\n\nA\n\nB',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+});
+
+test('a clean remote batch that becomes dirty before debounce preserves its baseline', async () => {
+  const app = loadSyncLayer({ version: 1, content: 'confirmed-v1', manualTimers: true });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'remote-v2' }],
+  });
+  app.state.dirty = true;
+  app.editor.value = 'local-dirty';
+  const before = snapshotClient(app);
+
+  app.runTimers(300);
+
+  assert.deepEqual(snapshotClient(app), before);
+  assert.equal(app.state.pendingRemoteVersion, 2);
+  assert.deepEqual(app.toasts, [['检测到远端更新，将在保存时自动合并', 'info']]);
+});
+
+test('a clean external event without content cannot advance only the version metadata', async () => {
+  const app = loadSyncLayer({ version: 1, content: 'confirmed-v1' });
+  const before = snapshotClient(app);
+
+  app.context.window.nasmdSync.handleExternalReload({
+    type: 'external_reload',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+  });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(app), before);
+  assert.equal(app.state.pendingRemoteVersion, null);
 });
 
 test('an empty external reload clears a clean editor and advances its baseline', async () => {
