@@ -53,6 +53,7 @@ function loadSyncLayer({
   const consoleErrors = [];
   const toasts = [];
   const timers = new Map();
+  const intervals = [];
   const windowListeners = new Map();
   let nextTimerId = 1;
   let currentTime = 10000;
@@ -95,7 +96,10 @@ function loadSyncLayer({
     requestAnimationFrame(callback) {
       callback();
     },
-    setInterval() {},
+    setInterval(callback, delay) {
+      intervals.push({ callback, delay });
+      return intervals.length;
+    },
     setTimeout(callback, delay) {
       if (manualTimers) {
         const timerId = nextTimerId++;
@@ -133,6 +137,10 @@ function loadSyncLayer({
       for (const listener of windowListeners.get(type) || []) listener();
     },
     editor,
+    intervals,
+    listenerCount(type) {
+      return (windowListeners.get(type) || []).length;
+    },
     runTimers(delay) {
       const due = Array.from(timers.entries()).filter(([, timer]) => timer.delay === delay);
       for (const [timerId, timer] of due) {
@@ -160,6 +168,29 @@ function snapshotClient(app, versionKey = 'mount-0:/doc.md') {
     originalContent: app.context.window._originalContent,
   };
 }
+
+test('init registers polling and editor recovery hooks only once', () => {
+  const app = loadSyncLayer({ manualTimers: true });
+  let inputCalls = 0;
+  app.context.window.onEditorInput = () => {
+    inputCalls++;
+  };
+
+  app.context.window.nasmdSync.init();
+  const wrappedInput = app.context.window.onEditorInput;
+  app.context.window.nasmdSync.init();
+  app.runTimers(100);
+  app.runTimers(500);
+  app.runTimers(1500);
+
+  assert.equal(app.intervals.length, 1);
+  assert.equal(app.intervals[0].delay, 1000);
+  assert.equal(app.listenerCount('online'), 1);
+  assert.equal(app.context.window.onEditorInput, wrappedInput);
+
+  app.context.window.onEditorInput();
+  assert.equal(inputCalls, 1);
+});
 
 test('late v1 events cannot roll back current v2 state', async () => {
   const external = loadSyncLayer();
@@ -739,6 +770,55 @@ test('an offline draft blocks pending-version catch-up through reconnect', async
   });
 });
 
+test('offline draft protection is scoped by an explicit mount id', async () => {
+  function installDraft(app, draft) {
+    app.context.window.localStorage = {
+      getItem(key) {
+        return key === 'nasmd_draft_/doc.md' ? JSON.stringify(draft) : null;
+      },
+    };
+  }
+
+  function deliverVersionTwo(app, mountId) {
+    app.context.window.nasmdSync.handleRemoteEdit({
+      type: 'remote_edit',
+      mountId,
+      path: '/doc.md',
+      newVersion: 2,
+      changes: [{ type: 'replace', paraIdx: 0, content: 'remote-v2' }],
+    });
+    app.runTimers(300);
+  }
+
+  const otherMount = loadSyncLayer({ version: 1, content: 'confirmed-v1', manualTimers: true });
+  otherMount.state.currentMountId = 'mount-b';
+  otherMount.state.fileVersions = { 'mount-b:/doc.md': 1 };
+  installDraft(otherMount, { mountId: 'mount-a', content: 'draft-a' });
+  deliverVersionTwo(otherMount, 'mount-b');
+
+  assert.deepEqual(snapshotClient(otherMount, 'mount-b:/doc.md'), {
+    baseContent: 'remote-v2',
+    baseVersion: 2,
+    editor: 'remote-v2',
+    fileVersion: 2,
+    lastSavedContent: 'remote-v2',
+    originalContent: 'remote-v2',
+  });
+  assert.equal(otherMount.state.pendingRemoteVersion, null);
+
+  const sameMount = loadSyncLayer({ version: 1, content: 'draft-current', manualTimers: true });
+  installDraft(sameMount, { mountId: 'mount-0', content: 'draft-current' });
+  deliverVersionTwo(sameMount, 'mount-0');
+  assert.equal(sameMount.editor.value, 'draft-current');
+  assert.equal(sameMount.state.pendingRemoteVersion, 2);
+
+  const legacy = loadSyncLayer({ version: 1, content: 'legacy-draft', manualTimers: true });
+  installDraft(legacy, { content: 'legacy-draft' });
+  deliverVersionTwo(legacy, 'mount-0');
+  assert.equal(legacy.editor.value, 'legacy-draft');
+  assert.equal(legacy.state.pendingRemoteVersion, 2);
+});
+
 test('a current offline draft blocks queued and in-flight remote application', async () => {
   const queued = loadSyncLayer({ version: 1, content: 'confirmed-v1', manualTimers: true });
   queued.context.window.nasmdSync.handleRemoteEdit({
@@ -1011,6 +1091,57 @@ test('a null clean gap fetch retries once and a failed retry does not loop', asy
     ['mount-0', '/doc.md'],
   ]);
   assert.equal(app.consoleErrors.length, 1);
+});
+
+test('a stale clean gap response retains its high-water and retries once successfully', async () => {
+  let resolveRetryFetch;
+  const retryFetch = new Promise((resolve) => {
+    resolveRetryFetch = resolve;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'confirmed-v1',
+    fullPromises: [Promise.resolve({ content: 'stale-v2', version: 2, mtime: 0 }), retryFetch],
+    manualTimers: true,
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  await flushPromises();
+
+  assert.equal(app.state.pendingRemoteVersion, 3);
+  assert.equal(app.state.baseVersion, 1);
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+
+  app.runTimers(1000);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+
+  resolveRetryFetch({ content: 'full-v3', version: 3, mtime: 0 });
+  await flushPromises();
+  app.runTimers(1000);
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v3',
+    baseVersion: 3,
+    editor: 'full-v3',
+    fileVersion: 3,
+    lastSavedContent: 'full-v3',
+    originalContent: 'full-v3',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+  assert.deepEqual(app.consoleErrors, []);
 });
 
 test('a stale fulfilled catch-up response retries the pending high-water once', async () => {

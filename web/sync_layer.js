@@ -282,7 +282,18 @@
   function hasCurrentOfflineDraft() {
     if (!window.state || !state.currentPath || !window.localStorage) return false;
     try {
-      return window.localStorage.getItem('nasmd_draft_' + state.currentPath) !== null;
+      var storedDraft = window.localStorage.getItem('nasmd_draft_' + state.currentPath);
+      if (storedDraft === null) return false;
+      try {
+        var draft = JSON.parse(storedDraft);
+        if (draft && typeof draft.mountId === 'string' && draft.mountId.length > 0) {
+          return draft.mountId === state.currentMountId;
+        }
+      } catch (_parseError) {
+        return true;
+      }
+      // Legacy drafts without mount identity remain protected until draft migration handles them.
+      return true;
     } catch (_e) {
       return false;
     }
@@ -643,6 +654,7 @@
           resultVersion <= currentVersion ||
           resultVersion < queuedVersion
         ) {
+          recordFailedFetchHighWater(mountId, path, expectedVersion);
           schedulePendingFetchRetry(mountId, path);
           return;
         }
@@ -725,6 +737,7 @@
 
   var _hooked = false;
   var _onlineRecoveryHooked = false;
+  var _pendingUpdateInterval = null;
 
   function hookOnEditorInput() {
     if (_hooked) return;
@@ -764,15 +777,17 @@
     setTimeout(hookOnEditorInput, 1500);
 
     // Check for pending updates when cursor moves
-    setInterval(function () {
-      var newParaIdx = getCursorParagraphIndex();
-      if (newParaIdx !== _cursorParaIdx) {
-        _cursorParaIdx = newParaIdx;
-        applyPendingUpdates();
-      }
-      // Also clean up stale collaborators
-      renderCollaboratorBar();
-    }, 1000);
+    if (_pendingUpdateInterval === null) {
+      _pendingUpdateInterval = setInterval(function () {
+        var newParaIdx = getCursorParagraphIndex();
+        if (newParaIdx !== _cursorParaIdx) {
+          _cursorParaIdx = newParaIdx;
+          applyPendingUpdates();
+        }
+        // Also clean up stale collaborators
+        renderCollaboratorBar();
+      }, 1000);
+    }
 
     // Connect SSE and register handler
     if (window.nasmdSSE) {
