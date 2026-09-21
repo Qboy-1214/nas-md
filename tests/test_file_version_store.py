@@ -785,6 +785,56 @@ def test_stale_large_diff_preserves_remote_anchor_edit(store, test_file):
         assert f.read() == expected
 
 
+def test_stale_large_repeated_diff_preserves_remote_anchor_edit(store, test_file):
+    key = "mount-0:/test.md"
+    base_paragraphs = [f"old-{idx}" for idx in range(150)]
+    base_paragraphs += ["REPEAT-A", "REPEAT-B"] * 150
+    base_paragraphs += [f"old-tail-{idx}" for idx in range(150)]
+    base = "\n\n".join(base_paragraphs)
+    remote_paragraphs = list(base_paragraphs)
+    remote_paragraphs[300] = "REPEAT-A-REMOTE"
+    remote_content = "\n\n".join(remote_paragraphs)
+    local_paragraphs = [f"new-{idx}" for idx in range(150)]
+    local_paragraphs += ["REPEAT-A", "REPEAT-B"] * 150
+    local_paragraphs += [f"new-tail-{idx}" for idx in range(150)]
+    local_content = "\n\n".join(local_paragraphs)
+    expected_paragraphs = list(local_paragraphs)
+    expected_paragraphs[300] = "REPEAT-A-REMOTE"
+    expected = "\n\n".join(expected_paragraphs)
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, remote_content),
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=remote_content,
+        base_content=base,
+    )
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, local_content),
+        "local",
+        "Local",
+        "#0f0",
+        client_content=local_content,
+        base_content=base,
+    )
+
+    assert result["applied"] is True
+    assert result["merged"] is True
+    assert result["content"] == expected
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == expected
+
+
 def test_stale_exact_delimiter_edit_three_way_merges(store, test_file):
     key = "mount-0:/test.md"
     base = "A\n\nB\n\nC"

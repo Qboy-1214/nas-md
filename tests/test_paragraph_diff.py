@@ -409,6 +409,64 @@ def test_compute_diff_hirschberg_fallback_preserves_equal_anchor():
     assert apply_changes(old_text, changes) == new_text
 
 
+def test_compute_diff_reversed_fallback_has_deterministic_anchor_ordering():
+    old_paragraphs = [f"paragraph-{idx}" for idx in range(300)]
+    new_paragraphs = list(reversed(old_paragraphs))
+    old_text = "\n\n".join(old_paragraphs)
+    new_text = "\n\n".join(new_paragraphs)
+    expected = [{"type": "delete", "paraIdx": idx} for idx in range(299)]
+    expected += [{"type": "delimiter", "paraIdx": 299, "delimiter": "\n\n"}]
+    expected += [
+        {
+            "type": "insert",
+            "paraIdx": 300,
+            "content": new_paragraphs[idx],
+            "delimiter": "" if idx == 299 else "\n\n",
+        }
+        for idx in range(1, 300)
+    ]
+
+    changes = compute_diff(old_text, new_text)
+
+    assert changes == expected
+    assert compute_diff(old_text, new_text) == changes
+    assert apply_changes(old_text, changes) == new_text
+
+
+def test_compute_diff_repeated_fallback_preserves_all_shared_paragraphs():
+    old_paragraphs = [f"old-{idx}" for idx in range(150)]
+    old_paragraphs += ["REPEAT-A", "REPEAT-B"] * 150
+    old_paragraphs += [f"old-tail-{idx}" for idx in range(150)]
+    new_paragraphs = [f"new-{idx}" for idx in range(150)]
+    new_paragraphs += ["REPEAT-A", "REPEAT-B"] * 150
+    new_paragraphs += [f"new-tail-{idx}" for idx in range(150)]
+    old_text = "\n\n".join(old_paragraphs)
+    new_text = "\n\n".join(new_paragraphs)
+    expected = [
+        {
+            "type": "replace",
+            "paraIdx": idx,
+            "content": f"new-{idx}",
+            "fallbackDelimiter": "\n\n",
+        }
+        for idx in range(150)
+    ]
+    expected += [
+        {
+            "type": "replace",
+            "paraIdx": idx + 450,
+            "content": f"new-tail-{idx}",
+            "fallbackDelimiter": "" if idx == 149 else "\n\n",
+        }
+        for idx in range(150)
+    ]
+
+    changes = compute_diff(old_text, new_text)
+
+    assert changes == expected
+    assert apply_changes(old_text, changes) == new_text
+
+
 def test_apply_changes_does_not_rewrite_explicit_delimiter_before_trailing_insert():
     changes = [
         {"type": "delimiter", "paraIdx": 0, "delimiter": "\n"},

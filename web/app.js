@@ -3986,23 +3986,190 @@ function operationsFromMatches(oldLength, newLength, matches) {
   return operations;
 }
 
-function diffOperations(oldItems, newItems) {
-  if (!oldItems.length) return new Array(newItems.length).fill('insert');
-  if (!newItems.length) return new Array(oldItems.length).fill('delete');
-  const oldSet = new Set(oldItems);
-  if (!newItems.some((item) => oldSet.has(item))) {
-    return new Array(oldItems.length)
-      .fill('delete')
-      .concat(new Array(newItems.length).fill('insert'));
+const HIRSCHBERG_CELL_BUDGET = 65536;
+
+function increasingAnchors(candidates) {
+  if (!candidates.length) return [];
+
+  const tails = [];
+  const predecessors = new Array(candidates.length).fill(-1);
+  for (let candidateIdx = 0; candidateIdx < candidates.length; candidateIdx++) {
+    const newIdx = candidates[candidateIdx][1];
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const midpoint = Math.floor((low + high) / 2);
+      if (candidates[tails[midpoint]][1] < newIdx) {
+        low = midpoint + 1;
+      } else {
+        high = midpoint;
+      }
+    }
+    if (low > 0) predecessors[candidateIdx] = tails[low - 1];
+    if (low === tails.length) {
+      tails.push(candidateIdx);
+    } else {
+      tails[low] = candidateIdx;
+    }
   }
 
-  const operations = boundedMyersOperations(oldItems, newItems);
-  if (operations !== null) return operations;
-  return operationsFromMatches(
-    oldItems.length,
-    newItems.length,
-    hirschbergMatches(oldItems, newItems),
-  );
+  const result = [];
+  let candidateIdx = tails[tails.length - 1];
+  while (candidateIdx !== -1) {
+    result.push(candidates[candidateIdx]);
+    candidateIdx = predecessors[candidateIdx];
+  }
+  return result.reverse();
+}
+
+function positionsByValue(items, start, end) {
+  const positions = new Map();
+  for (let idx = start; idx < end; idx++) {
+    const valuePositions = positions.get(items[idx]);
+    if (valuePositions) {
+      valuePositions.push(idx);
+    } else {
+      positions.set(items[idx], [idx]);
+    }
+  }
+  return positions;
+}
+
+function patienceAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd) {
+  const oldPositions = positionsByValue(oldItems, oldStart, oldEnd);
+  const newPositions = positionsByValue(newItems, newStart, newEnd);
+  const candidates = [];
+  for (const [value, positions] of oldPositions) {
+    const matching = newPositions.get(value);
+    if (positions.length === 1 && matching?.length === 1) {
+      candidates.push([positions[0], matching[0]]);
+    }
+  }
+  return increasingAnchors(candidates);
+}
+
+function histogramAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd) {
+  const oldPositions = positionsByValue(oldItems, oldStart, oldEnd);
+  const newPositions = positionsByValue(newItems, newStart, newEnd);
+  let rarestWeight = null;
+  for (const [value, positions] of oldPositions) {
+    const matching = newPositions.get(value);
+    if (!matching) continue;
+    const weight = positions.length * matching.length;
+    if (rarestWeight === null || weight < rarestWeight) rarestWeight = weight;
+  }
+  if (rarestWeight === null) return [];
+
+  const candidates = [];
+  for (const [value, positions] of oldPositions) {
+    const matching = newPositions.get(value);
+    if (!matching || positions.length * matching.length !== rarestWeight) continue;
+    const pairCount = Math.min(positions.length, matching.length);
+    for (let idx = 0; idx < pairCount; idx++) {
+      candidates.push([positions[idx], matching[idx]]);
+    }
+  }
+  candidates.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  return increasingAnchors(candidates);
+}
+
+function diffOperations(oldItems, newItems) {
+  const operations = [];
+  const tasks = [['segment', 0, oldItems.length, 0, newItems.length]];
+
+  while (tasks.length) {
+    const task = tasks.pop();
+    if (task[0] === 'equal') {
+      for (let idx = 0; idx < task[1]; idx++) operations.push('equal');
+      continue;
+    }
+
+    let [, oldStart, oldEnd, newStart, newEnd] = task;
+    let prefixLength = 0;
+    while (
+      oldStart + prefixLength < oldEnd &&
+      newStart + prefixLength < newEnd &&
+      oldItems[oldStart + prefixLength] === newItems[newStart + prefixLength]
+    ) {
+      prefixLength++;
+    }
+    for (let idx = 0; idx < prefixLength; idx++) operations.push('equal');
+    oldStart += prefixLength;
+    newStart += prefixLength;
+
+    let suffixLength = 0;
+    while (
+      oldStart < oldEnd - suffixLength &&
+      newStart < newEnd - suffixLength &&
+      oldItems[oldEnd - 1 - suffixLength] === newItems[newEnd - 1 - suffixLength]
+    ) {
+      suffixLength++;
+    }
+    if (suffixLength) {
+      tasks.push(['equal', suffixLength]);
+      oldEnd -= suffixLength;
+      newEnd -= suffixLength;
+    }
+
+    const oldLength = oldEnd - oldStart;
+    const newLength = newEnd - newStart;
+    if (!oldLength) {
+      for (let idx = 0; idx < newLength; idx++) operations.push('insert');
+      continue;
+    }
+    if (!newLength) {
+      for (let idx = 0; idx < oldLength; idx++) operations.push('delete');
+      continue;
+    }
+
+    const oldSegment = oldItems.slice(oldStart, oldEnd);
+    const newSegment = newItems.slice(newStart, newEnd);
+    const oldSet = new Set(oldSegment);
+    if (!newSegment.some((item) => oldSet.has(item))) {
+      for (let idx = 0; idx < oldLength; idx++) operations.push('delete');
+      for (let idx = 0; idx < newLength; idx++) operations.push('insert');
+      continue;
+    }
+
+    const segmentOperations = boundedMyersOperations(oldSegment, newSegment);
+    if (segmentOperations !== null) {
+      for (const operation of segmentOperations) operations.push(operation);
+      continue;
+    }
+
+    let anchors = patienceAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd);
+    if (!anchors.length) {
+      anchors = histogramAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd);
+    }
+    if (anchors.length) {
+      const parts = [];
+      let oldCursor = oldStart;
+      let newCursor = newStart;
+      for (const [oldIdx, newIdx] of anchors) {
+        parts.push(['segment', oldCursor, oldIdx, newCursor, newIdx]);
+        parts.push(['equal', 1]);
+        oldCursor = oldIdx + 1;
+        newCursor = newIdx + 1;
+      }
+      parts.push(['segment', oldCursor, oldEnd, newCursor, newEnd]);
+      for (let idx = parts.length - 1; idx >= 0; idx--) tasks.push(parts[idx]);
+      continue;
+    }
+
+    if (oldLength * newLength <= HIRSCHBERG_CELL_BUDGET) {
+      const hirschbergOperations = operationsFromMatches(
+        oldLength,
+        newLength,
+        hirschbergMatches(oldSegment, newSegment),
+      );
+      for (const operation of hirschbergOperations) operations.push(operation);
+      continue;
+    }
+
+    throw new Error('diff anchor invariant violated');
+  }
+
+  return operations;
 }
 
 // 客户端段落级 diff 计算：对比 baseContent 与当前内容，输出 changes 列表。

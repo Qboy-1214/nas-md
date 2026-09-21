@@ -22,7 +22,7 @@ from nas_md.webserver import (
     _create_server,
     serve,
 )
-from nas_md.webserver.paragraph_diff import compute_diff
+from nas_md.webserver.paragraph_diff import apply_changes, compute_diff
 
 
 def _find_free_port() -> int:
@@ -73,6 +73,74 @@ def test_sparse_4000_paragraph_diff_completes_within_linear_edit_budget():
         },
     ]
     assert elapsed < 10
+
+
+def _one_shared_anchor_documents(size: int) -> tuple[str, str, int]:
+    anchor_idx = size // 2
+    old_paragraphs = [f"old-{idx}" for idx in range(size)]
+    new_paragraphs = [f"new-{idx}" for idx in range(size)]
+    old_paragraphs[anchor_idx] = "SHARED-ANCHOR"
+    new_paragraphs[anchor_idx] = "SHARED-ANCHOR"
+    return "\n\n".join(old_paragraphs), "\n\n".join(new_paragraphs), anchor_idx
+
+
+def test_large_fallback_diff_has_subquadratic_anchor_scaling():
+    timings = {}
+    for size in (1000, 2000, 4000):
+        old_text, new_text, anchor_idx = _one_shared_anchor_documents(size)
+
+        started = time.perf_counter()
+        changes = compute_diff(old_text, new_text)
+        timings[size] = time.perf_counter() - started
+
+        assert apply_changes(old_text, changes) == new_text
+        assert not any(
+            change.get("paraIdx") == anchor_idx and change["type"] in {"replace", "delete"}
+            for change in changes
+        )
+
+    assert timings[4000] < 2.5, timings
+    assert timings[4000] < max(0.5, timings[2000] * 3), timings
+
+
+def test_reversed_4000_paragraph_fallback_stays_within_bounded_work_budget():
+    old_paragraphs = [f"paragraph-{idx}" for idx in range(4000)]
+    new_paragraphs = list(reversed(old_paragraphs))
+    old_text = "\n\n".join(old_paragraphs)
+    new_text = "\n\n".join(new_paragraphs)
+
+    started = time.perf_counter()
+    changes = compute_diff(old_text, new_text)
+    elapsed = time.perf_counter() - started
+
+    changed_sources = {
+        change["paraIdx"] for change in changes if change["type"] in {"replace", "delete"}
+    }
+    assert apply_changes(old_text, changes) == new_text
+    assert len(changed_sources) == 3999
+    assert elapsed < 3.5, elapsed
+
+
+def test_repeated_4000_paragraph_fallback_has_no_quadratic_scan():
+    old_paragraphs = [f"old-{idx}" for idx in range(1000)]
+    old_paragraphs += ["REPEAT-A", "REPEAT-B"] * 1000
+    old_paragraphs += [f"old-tail-{idx}" for idx in range(1000)]
+    new_paragraphs = [f"new-{idx}" for idx in range(1000)]
+    new_paragraphs += ["REPEAT-A", "REPEAT-B"] * 1000
+    new_paragraphs += [f"new-tail-{idx}" for idx in range(1000)]
+    old_text = "\n\n".join(old_paragraphs)
+    new_text = "\n\n".join(new_paragraphs)
+
+    started = time.perf_counter()
+    changes = compute_diff(old_text, new_text)
+    elapsed = time.perf_counter() - started
+
+    changed_sources = {
+        change["paraIdx"] for change in changes if change["type"] in {"replace", "delete"}
+    }
+    assert apply_changes(old_text, changes) == new_text
+    assert changed_sources.isdisjoint(range(1000, 3000))
+    assert elapsed < 3.5, elapsed
 
 
 @pytest.fixture

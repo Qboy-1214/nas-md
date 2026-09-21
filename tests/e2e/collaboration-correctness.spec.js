@@ -180,6 +180,158 @@ test('paragraph diff adversarial operations match the backend contract', async (
   });
 });
 
+test('paragraph diff fallback operations match the backend anchor contract', async ({ page }) => {
+  await page.goto('/admin');
+
+  const results = await page.evaluate(() => {
+    const reversedOld = Array.from({ length: 300 }, (_, idx) => `paragraph-${idx}`);
+    const reversedNew = reversedOld.slice().reverse();
+    const repeatedOld = Array.from({ length: 150 }, (_, idx) => `old-${idx}`)
+      .concat(Array.from({ length: 300 }, (_, idx) => `REPEAT-${idx % 2 === 0 ? 'A' : 'B'}`))
+      .concat(Array.from({ length: 150 }, (_, idx) => `old-tail-${idx}`));
+    const repeatedNew = Array.from({ length: 150 }, (_, idx) => `new-${idx}`)
+      .concat(Array.from({ length: 300 }, (_, idx) => `REPEAT-${idx % 2 === 0 ? 'A' : 'B'}`))
+      .concat(Array.from({ length: 150 }, (_, idx) => `new-tail-${idx}`));
+    const reversedBase = reversedOld.join('\n\n');
+    const reversedTarget = reversedNew.join('\n\n');
+    const repeatedBase = repeatedOld.join('\n\n');
+    const repeatedTarget = repeatedNew.join('\n\n');
+    const reversedChanges = window.nasmdDiff.computeParagraphDiff(reversedBase, reversedTarget);
+    const repeatedChanges = window.nasmdDiff.computeParagraphDiff(repeatedBase, repeatedTarget);
+
+    return {
+      reversedChanges,
+      reversedApplied: window.nasmdDiff.applyChangesLocally(reversedBase, reversedChanges),
+      repeatedChanges,
+      repeatedApplied: window.nasmdDiff.applyChangesLocally(repeatedBase, repeatedChanges),
+    };
+  });
+  const reversedNew = Array.from({ length: 300 }, (_, idx) => `paragraph-${299 - idx}`);
+  const expectedReversed = Array.from({ length: 299 }, (_, idx) => ({
+    type: 'delete',
+    paraIdx: idx,
+  }))
+    .concat([{ type: 'delimiter', paraIdx: 299, delimiter: '\n\n' }])
+    .concat(
+      Array.from({ length: 299 }, (_, offset) => {
+        const idx = offset + 1;
+        return {
+          type: 'insert',
+          paraIdx: 300,
+          content: reversedNew[idx],
+          delimiter: idx === 299 ? '' : '\n\n',
+        };
+      }),
+    );
+  const expectedRepeated = Array.from({ length: 150 }, (_, idx) => ({
+    type: 'replace',
+    paraIdx: idx,
+    content: `new-${idx}`,
+    fallbackDelimiter: '\n\n',
+  })).concat(
+    Array.from({ length: 150 }, (_, idx) => ({
+      type: 'replace',
+      paraIdx: idx + 450,
+      content: `new-tail-${idx}`,
+      fallbackDelimiter: idx === 149 ? '' : '\n\n',
+    })),
+  );
+
+  expect(results.reversedChanges).toEqual(expectedReversed);
+  expect(results.reversedApplied).toBe(reversedNew.join('\n\n'));
+  expect(results.repeatedChanges).toEqual(expectedRepeated);
+  expect(results.repeatedApplied).toBe(
+    Array.from({ length: 150 }, (_, idx) => `new-${idx}`)
+      .concat(Array.from({ length: 300 }, (_, idx) => `REPEAT-${idx % 2 === 0 ? 'A' : 'B'}`))
+      .concat(Array.from({ length: 150 }, (_, idx) => `new-tail-${idx}`))
+      .join('\n\n'),
+  );
+});
+
+test('large paragraph fallback remains within the browser main-thread budget', async ({ page }) => {
+  await page.goto('/admin');
+
+  const results = await page.evaluate(() => {
+    const measureOneAnchor = (size) => {
+      const anchorIdx = Math.floor(size / 2);
+      const oldParagraphs = Array.from({ length: size }, (_, idx) => `old-${idx}`);
+      const newParagraphs = Array.from({ length: size }, (_, idx) => `new-${idx}`);
+      oldParagraphs[anchorIdx] = 'SHARED-ANCHOR';
+      newParagraphs[anchorIdx] = 'SHARED-ANCHOR';
+      const base = oldParagraphs.join('\n\n');
+      const target = newParagraphs.join('\n\n');
+      const started = performance.now();
+      const changes = window.nasmdDiff.computeParagraphDiff(base, target);
+      const elapsed = performance.now() - started;
+      return {
+        elapsed,
+        exact: window.nasmdDiff.applyChangesLocally(base, changes) === target,
+        anchorPreserved: !changes.some(
+          (change) =>
+            change.paraIdx === anchorIdx && (change.type === 'replace' || change.type === 'delete'),
+        ),
+      };
+    };
+
+    const reversedOld = Array.from({ length: 4000 }, (_, idx) => `paragraph-${idx}`);
+    const reversedNew = reversedOld.slice().reverse();
+    const reversedBase = reversedOld.join('\n\n');
+    const reversedTarget = reversedNew.join('\n\n');
+    let started = performance.now();
+    const reversedChanges = window.nasmdDiff.computeParagraphDiff(reversedBase, reversedTarget);
+    const reversedElapsed = performance.now() - started;
+    const reversedChangedSources = new Set(
+      reversedChanges
+        .filter((change) => change.type === 'replace' || change.type === 'delete')
+        .map((change) => change.paraIdx),
+    );
+
+    const repeatedOld = Array.from({ length: 1000 }, (_, idx) => `old-${idx}`)
+      .concat(Array.from({ length: 2000 }, (_, idx) => `REPEAT-${idx % 2 === 0 ? 'A' : 'B'}`))
+      .concat(Array.from({ length: 1000 }, (_, idx) => `old-tail-${idx}`));
+    const repeatedNew = Array.from({ length: 1000 }, (_, idx) => `new-${idx}`)
+      .concat(Array.from({ length: 2000 }, (_, idx) => `REPEAT-${idx % 2 === 0 ? 'A' : 'B'}`))
+      .concat(Array.from({ length: 1000 }, (_, idx) => `new-tail-${idx}`));
+    const repeatedBase = repeatedOld.join('\n\n');
+    const repeatedTarget = repeatedNew.join('\n\n');
+    started = performance.now();
+    const repeatedChanges = window.nasmdDiff.computeParagraphDiff(repeatedBase, repeatedTarget);
+    const repeatedElapsed = performance.now() - started;
+    const repeatedAnchorsPreserved = !repeatedChanges.some(
+      (change) =>
+        change.paraIdx >= 1000 &&
+        change.paraIdx < 3000 &&
+        (change.type === 'replace' || change.type === 'delete'),
+    );
+
+    return {
+      oneAnchor: [1000, 2000, 4000, 8000].map(measureOneAnchor),
+      reversed: {
+        elapsed: reversedElapsed,
+        exact:
+          window.nasmdDiff.applyChangesLocally(reversedBase, reversedChanges) === reversedTarget,
+        preservedCount: 4000 - reversedChangedSources.size,
+      },
+      repeated: {
+        elapsed: repeatedElapsed,
+        exact:
+          window.nasmdDiff.applyChangesLocally(repeatedBase, repeatedChanges) === repeatedTarget,
+        anchorsPreserved: repeatedAnchorsPreserved,
+      },
+    };
+  });
+
+  expect(results.oneAnchor.every((result) => result.exact && result.anchorPreserved)).toBe(true);
+  expect(results.reversed.exact).toBe(true);
+  expect(results.reversed.preservedCount).toBe(1);
+  expect(results.repeated.exact).toBe(true);
+  expect(results.repeated.anchorsPreserved).toBe(true);
+  expect(results.oneAnchor[3].elapsed).toBeLessThan(750);
+  expect(results.oneAnchor[3].elapsed).toBeLessThan(results.oneAnchor[2].elapsed * 3.5 + 100);
+  expect(results.reversed.elapsed).toBeLessThan(2000);
+  expect(results.repeated.elapsed).toBeLessThan(2000);
+});
+
 test('non-Markdown whitespace has stable diff coordinates', async ({ page }) => {
   await page.goto('/admin');
 

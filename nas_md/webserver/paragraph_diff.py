@@ -313,20 +313,182 @@ def _operations_from_matches(
     return operations
 
 
+_HIRSCHBERG_CELL_BUDGET = 65_536
+
+
+def _increasing_anchors(candidates: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Select a deterministic LIS by new index from old-index-ordered candidates."""
+    if not candidates:
+        return []
+
+    tails: list[int] = []
+    predecessors = [-1] * len(candidates)
+    for candidate_idx, (_, new_idx) in enumerate(candidates):
+        low = 0
+        high = len(tails)
+        while low < high:
+            midpoint = (low + high) // 2
+            if candidates[tails[midpoint]][1] < new_idx:
+                low = midpoint + 1
+            else:
+                high = midpoint
+        if low:
+            predecessors[candidate_idx] = tails[low - 1]
+        if low == len(tails):
+            tails.append(candidate_idx)
+        else:
+            tails[low] = candidate_idx
+
+    result = []
+    candidate_idx = tails[-1]
+    while candidate_idx != -1:
+        result.append(candidates[candidate_idx])
+        candidate_idx = predecessors[candidate_idx]
+    result.reverse()
+    return result
+
+
+def _positions_by_value(items: list[str], start: int, end: int) -> dict[str, list[int]]:
+    positions: dict[str, list[int]] = {}
+    for idx in range(start, end):
+        positions.setdefault(items[idx], []).append(idx)
+    return positions
+
+
+def _patience_anchors(
+    old_items: list[str],
+    new_items: list[str],
+    old_start: int,
+    old_end: int,
+    new_start: int,
+    new_end: int,
+) -> list[tuple[int, int]]:
+    """Find ordered values that occur exactly once in both ranges."""
+    old_positions = _positions_by_value(old_items, old_start, old_end)
+    new_positions = _positions_by_value(new_items, new_start, new_end)
+    candidates = [
+        (positions[0], new_positions[value][0])
+        for value, positions in old_positions.items()
+        if len(positions) == 1 and value in new_positions and len(new_positions[value]) == 1
+    ]
+    return _increasing_anchors(candidates)
+
+
+def _histogram_anchors(
+    old_items: list[str],
+    new_items: list[str],
+    old_start: int,
+    old_end: int,
+    new_start: int,
+    new_end: int,
+) -> list[tuple[int, int]]:
+    """Pair the rarest shared repeated values by occurrence rank, then take an LIS."""
+    old_positions = _positions_by_value(old_items, old_start, old_end)
+    new_positions = _positions_by_value(new_items, new_start, new_end)
+    rarest_weight: int | None = None
+    for value, positions in old_positions.items():
+        matching = new_positions.get(value)
+        if matching:
+            weight = len(positions) * len(matching)
+            if rarest_weight is None or weight < rarest_weight:
+                rarest_weight = weight
+    if rarest_weight is None:
+        return []
+
+    candidates = []
+    for value, positions in old_positions.items():
+        matching = new_positions.get(value)
+        if not matching or len(positions) * len(matching) != rarest_weight:
+            continue
+        candidates.extend(zip(positions, matching, strict=False))
+    candidates.sort()
+    return _increasing_anchors(candidates)
+
+
 def _diff_operations(old_items: list[str], new_items: list[str]) -> list[str]:
     """Build an exact deterministic edit script with bounded auxiliary memory."""
-    if not old_items:
-        return ["insert"] * len(new_items)
-    if not new_items:
-        return ["delete"] * len(old_items)
-    if set(old_items).isdisjoint(new_items):
-        return ["delete"] * len(old_items) + ["insert"] * len(new_items)
+    operations: list[str] = []
+    tasks: list[tuple] = [("segment", 0, len(old_items), 0, len(new_items))]
 
-    operations = _bounded_myers_operations(old_items, new_items)
-    if operations is not None:
-        return operations
-    matches = _hirschberg_matches(old_items, new_items)
-    return _operations_from_matches(len(old_items), len(new_items), matches)
+    while tasks:
+        task = tasks.pop()
+        if task[0] == "equal":
+            operations.extend("equal" for _ in range(task[1]))
+            continue
+
+        _, old_start, old_end, new_start, new_end = task
+        prefix_len = 0
+        while (
+            old_start + prefix_len < old_end
+            and new_start + prefix_len < new_end
+            and old_items[old_start + prefix_len] == new_items[new_start + prefix_len]
+        ):
+            prefix_len += 1
+        if prefix_len:
+            operations.extend("equal" for _ in range(prefix_len))
+            old_start += prefix_len
+            new_start += prefix_len
+
+        suffix_len = 0
+        while (
+            old_start < old_end - suffix_len
+            and new_start < new_end - suffix_len
+            and old_items[old_end - 1 - suffix_len] == new_items[new_end - 1 - suffix_len]
+        ):
+            suffix_len += 1
+        if suffix_len:
+            tasks.append(("equal", suffix_len))
+            old_end -= suffix_len
+            new_end -= suffix_len
+
+        old_len = old_end - old_start
+        new_len = new_end - new_start
+        if not old_len:
+            operations.extend("insert" for _ in range(new_len))
+            continue
+        if not new_len:
+            operations.extend("delete" for _ in range(old_len))
+            continue
+
+        old_segment = old_items[old_start:old_end]
+        new_segment = new_items[new_start:new_end]
+        if set(old_segment).isdisjoint(new_segment):
+            operations.extend("delete" for _ in range(old_len))
+            operations.extend("insert" for _ in range(new_len))
+            continue
+
+        segment_operations = _bounded_myers_operations(old_segment, new_segment)
+        if segment_operations is not None:
+            operations.extend(segment_operations)
+            continue
+
+        anchors = _patience_anchors(old_items, new_items, old_start, old_end, new_start, new_end)
+        if not anchors:
+            anchors = _histogram_anchors(
+                old_items, new_items, old_start, old_end, new_start, new_end
+            )
+        if anchors:
+            parts: list[tuple] = []
+            old_cursor = old_start
+            new_cursor = new_start
+            for old_idx, new_idx in anchors:
+                parts.append(("segment", old_cursor, old_idx, new_cursor, new_idx))
+                parts.append(("equal", 1))
+                old_cursor = old_idx + 1
+                new_cursor = new_idx + 1
+            parts.append(("segment", old_cursor, old_end, new_cursor, new_end))
+            tasks.extend(reversed(parts))
+            continue
+
+        if old_len * new_len <= _HIRSCHBERG_CELL_BUDGET:
+            matches = _hirschberg_matches(old_segment, new_segment)
+            operations.extend(_operations_from_matches(old_len, new_len, matches))
+            continue
+
+        # The disjoint check and histogram share the same equality relation.
+        raise RuntimeError("diff anchor invariant violated")
+
+    return operations
 
 
 def compute_diff(old_text: str, new_text: str) -> list[dict]:
