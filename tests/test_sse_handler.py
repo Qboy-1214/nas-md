@@ -1,4 +1,5 @@
 # tests/test_sse_handler.py
+import threading
 from unittest.mock import Mock
 
 import nas_md.webserver.sse_handler as sse_handler
@@ -85,6 +86,73 @@ def test_stale_flusher_cannot_release_new_owner():
     # otherwise its v2 delivery can complete before the newer owner's v1.
     assert claim(file_key) is None
     release(file_key, new_owner)
+
+
+def test_concurrent_flush_keeps_fifo_and_single_owner_during_stale_release(
+    monkeypatch,
+):
+    file_key = "mount1:concurrent-ownership.md"
+    v1_started = threading.Event()
+    release_v1 = threading.Event()
+    state_lock = threading.Lock()
+    delivered = []
+    active_broadcasters = 0
+    max_active_broadcasters = 0
+
+    def blocking_broadcast(file_key, exclude_id, event):
+        del file_key, exclude_id
+        nonlocal active_broadcasters, max_active_broadcasters
+        with state_lock:
+            active_broadcasters += 1
+            max_active_broadcasters = max(max_active_broadcasters, active_broadcasters)
+        try:
+            if event["newVersion"] == 1:
+                v1_started.set()
+                assert release_v1.wait(timeout=5)
+            with state_lock:
+                delivered.append(event["newVersion"])
+        finally:
+            with state_lock:
+                active_broadcasters -= 1
+
+    monkeypatch.setattr(sse_handler, "sse_broadcast", blocking_broadcast)
+
+    old_owner = sse_handler._claim_flusher(file_key)
+    assert old_owner is not None
+    sse_handler._release_flusher(file_key, old_owner)
+    sse_handler.queue_sse_event(file_key, None, {"newVersion": 1})
+
+    first_flusher = threading.Thread(target=sse_handler.flush_sse_events, args=(file_key,))
+    first_flusher.start()
+    try:
+        assert v1_started.wait(timeout=5)
+
+        stale_release = threading.Thread(
+            target=sse_handler._release_flusher,
+            args=(file_key, old_owner),
+        )
+        stale_release.start()
+        stale_release.join(timeout=5)
+        assert not stale_release.is_alive()
+
+        def queue_and_flush_v2():
+            sse_handler.queue_sse_event(file_key, None, {"newVersion": 2})
+            sse_handler.flush_sse_events(file_key)
+
+        second_flusher = threading.Thread(target=queue_and_flush_v2)
+        second_flusher.start()
+        second_flusher.join(timeout=5)
+        assert not second_flusher.is_alive()
+    finally:
+        release_v1.set()
+        first_flusher.join(timeout=5)
+        with sse_handler._publication_lock:
+            sse_handler._event_queues.pop(file_key, None)
+            sse_handler._flushing_files.pop(file_key, None)
+
+    assert not first_flusher.is_alive()
+    assert delivered == [1, 2]
+    assert max_active_broadcasters == 1
 
 
 def test_dead_client_cleanup_does_not_reenter_global_sse_lock():

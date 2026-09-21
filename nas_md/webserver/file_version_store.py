@@ -29,7 +29,8 @@ import secrets
 import stat
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from nas_md.webserver.paragraph_diff import (
@@ -185,6 +186,7 @@ def _exchange_target_windows(prepared_path: str, target_path: str) -> str:
     replace_file.restype = wintypes.BOOL
     directory = os.path.dirname(os.path.abspath(target_path)) or "."
     backup_path = _unused_recovery_path(directory)
+    _record_exchange_displaced_path(backup_path)
     if replace_file(target_path, prepared_path, backup_path, 0, None, None):
         return backup_path
     error_code = ctypes.get_last_error()
@@ -208,6 +210,7 @@ def _exchange_target_linux(prepared_path: str, target_path: str) -> str:
         ctypes.c_uint,
     )
     renameat2.restype = ctypes.c_int
+    _record_exchange_displaced_path(prepared_path)
     if (
         renameat2(
             -100,
@@ -231,6 +234,7 @@ def _exchange_target_macos(prepared_path: str, target_path: str) -> str:
     renamex_np = libc.renamex_np
     renamex_np.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
     renamex_np.restype = ctypes.c_int
+    _record_exchange_displaced_path(prepared_path)
     if renamex_np(os.fsencode(prepared_path), os.fsencode(target_path), 0x00000002) != 0:
         error_code = ctypes.get_errno()
         raise OSError(error_code, os.strerror(error_code), target_path)
@@ -401,6 +405,33 @@ class _ConditionalRollbackError(OSError):
         self.preserve_paths = preserve_paths
 
 
+@dataclass
+class _ExchangeAttempt:
+    token: object = field(default_factory=object)
+    displaced_path: str | None = None
+
+
+_exchange_attempt_context: ContextVar[_ExchangeAttempt | None] = ContextVar(
+    "nasmd_exchange_attempt", default=None
+)
+
+
+@contextlib.contextmanager
+def _track_exchange_attempt() -> Iterator[_ExchangeAttempt]:
+    attempt = _ExchangeAttempt()
+    context_token = _exchange_attempt_context.set(attempt)
+    try:
+        yield attempt
+    finally:
+        _exchange_attempt_context.reset(context_token)
+
+
+def _record_exchange_displaced_path(path: str) -> None:
+    attempt = _exchange_attempt_context.get()
+    if attempt is not None:
+        attempt.displaced_path = path
+
+
 def _read_disk_snapshot(file_path: str) -> _DiskSnapshot:
     with open(file_path, "rb") as f:
         data = f.read()
@@ -454,6 +485,22 @@ def _matches_reconciled_snapshot(actual: _DiskSnapshot, expected: _DiskSnapshot)
     )
 
 
+def _matches_content_and_metadata(actual: _DiskSnapshot, expected: _DiskSnapshot) -> bool:
+    return actual.digest == expected.digest and actual.metadata == expected.metadata
+
+
+def _recovery_paths(directory: str) -> set[str]:
+    try:
+        with os.scandir(directory) as entries:
+            return {
+                entry.path
+                for entry in entries
+                if entry.name.startswith(".nasmd-recovery-") and entry.name.endswith(".tmp")
+            }
+    except OSError:
+        return set()
+
+
 def _remove_transaction_file(path: str) -> None:
     try:
         os.remove(path)
@@ -478,10 +525,7 @@ def _rollback_conflicting_publish(
     except OSError as error:
         raise _ConditionalRollbackError((preserved_current_path,)) from error
 
-    if (
-        preserved_current.digest == prepared_snapshot.digest
-        and preserved_current.metadata == prepared_snapshot.metadata
-    ):
+    if _matches_content_and_metadata(preserved_current, prepared_snapshot):
         _remove_transaction_file(preserved_current_path)
         raise _ConditionalWriteConflict
 
@@ -498,16 +542,77 @@ def _rollback_conflicting_publish(
     raise _ConditionalWriteConflict((recovery_path,))
 
 
+def _recover_failed_initial_exchange(
+    prepared_path: str,
+    target_path: str,
+    expected_snapshot: _DiskSnapshot,
+    prepared_snapshot: _DiskSnapshot,
+    recovery_paths_before: set[str],
+    displaced_path_hint: str | None,
+    exchange_error: OSError,
+) -> None:
+    directory = os.path.dirname(os.path.abspath(target_path)) or "."
+    new_recovery_paths = _recovery_paths(directory) - recovery_paths_before
+    candidate_paths = []
+    if displaced_path_hint and os.path.lexists(displaced_path_hint):
+        candidate_paths.append(displaced_path_hint)
+    if os.path.lexists(prepared_path) and prepared_path not in candidate_paths:
+        candidate_paths.append(prepared_path)
+    known_candidate_paths = set(candidate_paths)
+    known_candidate_paths.add(prepared_path)
+    candidate_paths.extend(sorted(new_recovery_paths - known_candidate_paths))
+
+    try:
+        target_snapshot = _read_disk_snapshot(target_path)
+    except FileNotFoundError:
+        if os.path.lexists(prepared_path) and not new_recovery_paths:
+            raise _ConditionalWriteConflict from exchange_error
+        raise _ConditionalRollbackError(tuple(candidate_paths)) from exchange_error
+    except OSError as error:
+        raise _ConditionalRollbackError(tuple(candidate_paths)) from error
+
+    if _matches_reconciled_snapshot(target_snapshot, expected_snapshot):
+        raise exchange_error
+
+    if not _matches_content_and_metadata(target_snapshot, prepared_snapshot):
+        raise _ConditionalRollbackError(tuple(candidate_paths)) from exchange_error
+
+    displaced_candidates = []
+    for path in candidate_paths:
+        try:
+            snapshot = _read_disk_snapshot(path)
+        except OSError:
+            continue
+        if path == displaced_path_hint or snapshot.identity[:2] == expected_snapshot.identity[:2]:
+            displaced_candidates.append(path)
+
+    if not displaced_candidates:
+        raise _ConditionalRollbackError(tuple(candidate_paths)) from exchange_error
+
+    _rollback_conflicting_publish(displaced_candidates[0], target_path, prepared_snapshot)
+
+
 def _publish_existing_target(
     prepared_path: str,
     target_path: str,
     expected_snapshot: _DiskSnapshot,
     prepared_snapshot: _DiskSnapshot,
 ) -> None:
-    try:
-        displaced_path = _exchange_target(prepared_path, target_path)
-    except FileNotFoundError as error:
-        raise _ConditionalWriteConflict from error
+    directory = os.path.dirname(os.path.abspath(target_path)) or "."
+    recovery_paths_before = _recovery_paths(directory)
+    with _track_exchange_attempt() as attempt:
+        try:
+            displaced_path = _exchange_target(prepared_path, target_path)
+        except OSError as error:
+            _recover_failed_initial_exchange(
+                prepared_path,
+                target_path,
+                expected_snapshot,
+                prepared_snapshot,
+                recovery_paths_before,
+                attempt.displaced_path,
+                error,
+            )
     try:
         displaced_snapshot = _read_disk_snapshot(displaced_path)
     except OSError:

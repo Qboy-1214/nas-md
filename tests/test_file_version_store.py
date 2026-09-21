@@ -5,6 +5,7 @@ import os
 import stat
 import struct
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, call
 
@@ -507,6 +508,301 @@ def test_apply_changes_restores_external_write_arriving_at_publish_syscall(
         },
     }
     assert file_path.read_text(encoding="utf-8") == external
+    rollback.assert_called_once_with()
+
+
+def test_exchange_attempt_context_resets_after_publish_error(tmp_path, monkeypatch):
+    target_path = tmp_path / "target.md"
+    prepared_path = tmp_path / "prepared.tmp"
+    target_path.write_text("base", encoding="utf-8")
+    prepared_path.write_text("client", encoding="utf-8")
+    expected_snapshot = file_version_store_module._read_disk_snapshot(target_path)
+    prepared_snapshot = file_version_store_module._read_disk_snapshot(prepared_path)
+
+    def fail_exchange(_prepared_path, _target_path):
+        assert file_version_store_module._exchange_attempt_context.get() is not None
+        raise OSError("injected exchange failure")
+
+    monkeypatch.setattr(file_version_store_module, "_exchange_target", fail_exchange)
+
+    with pytest.raises(OSError, match="injected exchange failure"):
+        file_version_store_module._publish_existing_target(
+            str(prepared_path),
+            str(target_path),
+            expected_snapshot,
+            prepared_snapshot,
+        )
+
+    assert file_version_store_module._exchange_attempt_context.get() is None
+
+
+def test_exchange_attempt_context_does_not_reuse_same_thread_state():
+    with file_version_store_module._track_exchange_attempt() as first_attempt:
+        file_version_store_module._record_exchange_displaced_path("first-recovery")
+        first_token = first_attempt.token
+        assert first_attempt.displaced_path == "first-recovery"
+
+    assert file_version_store_module._exchange_attempt_context.get() is None
+
+    with file_version_store_module._track_exchange_attempt() as second_attempt:
+        assert second_attempt.token is not first_token
+        assert second_attempt.displaced_path is None
+        file_version_store_module._record_exchange_displaced_path("second-recovery")
+        assert second_attempt.displaced_path == "second-recovery"
+
+    assert file_version_store_module._exchange_attempt_context.get() is None
+
+
+def test_exchange_attempt_context_is_isolated_between_threads():
+    barrier = threading.Barrier(2)
+
+    def observe_attempt(displaced_path):
+        with file_version_store_module._track_exchange_attempt() as attempt:
+            file_version_store_module._record_exchange_displaced_path(displaced_path)
+            barrier.wait(timeout=5)
+            current_attempt = file_version_store_module._exchange_attempt_context.get()
+            inside = (
+                attempt.token,
+                current_attempt is attempt,
+                current_attempt.displaced_path,
+            )
+        return inside, file_version_store_module._exchange_attempt_context.get()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        observations = list(executor.map(observe_attempt, ("first-recovery", "second-recovery")))
+
+    first, second = observations
+    assert first[0][0] is not second[0][0]
+    assert first[0][1:] == (True, "first-recovery")
+    assert second[0][1:] == (True, "second-recovery")
+    assert first[1] is None
+    assert second[1] is None
+
+
+def test_apply_changes_restores_target_when_exchange_raises_after_publishing(
+    store, tmp_path, monkeypatch
+):
+    file_path = tmp_path / "post-exchange-failure.md"
+    file_key = "mount-0:/post-exchange-failure.md"
+    base = "A\n\nB"
+    client = "A\n\nB-client"
+    rollback = Mock()
+    file_path.write_text(base, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+    original_exchange = file_version_store_module._exchange_target
+    exchange_count = 0
+
+    def publish_then_fail(prepared_path, target_path):
+        nonlocal exchange_count
+        exchange_count += 1
+        displaced_path = original_exchange(prepared_path, target_path)
+        if exchange_count == 1:
+            raise OSError("exchange reported failure after publication")
+        return displaced_path
+
+    monkeypatch.setattr(file_version_store_module, "_exchange_target", publish_then_fail)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content=client,
+        base_content=base,
+        before_write=lambda _prepared_path: rollback,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 0,
+        "content": base,
+    }
+    assert file_path.read_text(encoding="utf-8") == base
+    assert store.get_current_snapshot(file_key) == {"version": 0, "content": base}
+    assert exchange_count == 2
+    rollback.assert_called_once_with()
+
+
+def test_partial_exchange_failure_restores_external_atomic_replacement(
+    store, tmp_path, monkeypatch
+):
+    file_path = tmp_path / "external-replacement-race.md"
+    replacement = tmp_path / "external-replacement.tmp"
+    file_key = "mount-0:/external-replacement-race.md"
+    base = "A\n\nB"
+    external = "A-external\n\nB"
+    client = "A\n\nB-client"
+    rollback = Mock()
+    file_path.write_text(base, encoding="utf-8")
+    replacement.write_text(external, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+    original_exchange = file_version_store_module._exchange_target
+    exchange_count = 0
+
+    def replace_publish_then_fail(prepared_path, target_path):
+        nonlocal exchange_count
+        exchange_count += 1
+        if exchange_count == 1:
+            os.replace(replacement, file_path)
+            original_exchange(prepared_path, target_path)
+            raise OSError("exchange reported failure after replacing a newer inode")
+        return original_exchange(prepared_path, target_path)
+
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_exchange_target",
+        replace_publish_then_fail,
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content=client,
+        base_content=base,
+        before_write=lambda _prepared_path: rollback,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": external,
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": external,
+        },
+    }
+    assert file_path.read_text(encoding="utf-8") == external
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": external}
+    assert exchange_count == 2
+    rollback.assert_called_once_with()
+
+
+def test_partial_exchange_failure_preserves_displaced_file_when_target_changes_again(
+    store, tmp_path, monkeypatch
+):
+    file_path = tmp_path / "ambiguous-post-exchange-failure.md"
+    file_key = "mount-0:/ambiguous-post-exchange-failure.md"
+    base = "A\n\nB"
+    client = "A\n\nB-client"
+    newest = "A-third-party\n\nB"
+    rollback = Mock()
+    file_path.write_text(base, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+    original_exchange = file_version_store_module._exchange_target
+
+    def publish_change_again_then_fail(prepared_path, target_path):
+        original_exchange(prepared_path, target_path)
+        file_path.write_text(newest, encoding="utf-8")
+        raise OSError("exchange outcome became ambiguous")
+
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_exchange_target",
+        publish_change_again_then_fail,
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content=client,
+        base_content=base,
+        before_write=lambda _prepared_path: rollback,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": newest,
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": newest,
+        },
+    }
+    assert file_path.read_text(encoding="utf-8") == newest
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": newest}
+    assert base in [
+        path.read_text(encoding="utf-8") for path in tmp_path.glob(".nasmd-recovery-*.tmp")
+    ]
+    rollback.assert_called_once_with()
+
+
+def test_partial_exchange_failure_never_restores_unrelated_recovery_file(
+    store, tmp_path, monkeypatch
+):
+    file_path = tmp_path / "unrelated-recovery.md"
+    file_key = "mount-0:/unrelated-recovery.md"
+    held_external = tmp_path / "held-external.bin"
+    unrelated_recovery = tmp_path / ".nasmd-recovery-unrelated.tmp"
+    base = "A\n\nB"
+    client = "A\n\nB-client"
+    unrelated = "UNRELATED"
+    rollback = Mock()
+    file_path.write_text(base, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+    original_exchange = file_version_store_module._exchange_target
+
+    def publish_hide_backup_add_unrelated_then_fail(prepared_path, target_path):
+        displaced_path = original_exchange(prepared_path, target_path)
+        os.replace(displaced_path, held_external)
+        unrelated_recovery.write_text(unrelated, encoding="utf-8")
+        raise OSError("exchange outcome lost its backup identity")
+
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_exchange_target",
+        publish_hide_backup_add_unrelated_then_fail,
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content=client,
+        base_content=base,
+        before_write=lambda _prepared_path: rollback,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": client,
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": client,
+        },
+    }
+    assert file_path.read_text(encoding="utf-8") == client
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": client}
+    assert held_external.read_text(encoding="utf-8") == base
+    assert unrelated_recovery.read_text(encoding="utf-8") == unrelated
     rollback.assert_called_once_with()
 
 
