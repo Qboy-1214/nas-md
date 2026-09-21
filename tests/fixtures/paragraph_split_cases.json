@@ -35,6 +35,41 @@
     "delimiters": [""]
   },
   {
+    "name": "leading-next-line-u0085-is-content",
+    "text": "\u0085\nA",
+    "prefix": "",
+    "paragraphs": ["\u0085\nA"],
+    "delimiters": [""]
+  },
+  {
+    "name": "leading-nbsp-is-content",
+    "text": "\u00a0\nA",
+    "prefix": "",
+    "paragraphs": ["\u00a0\nA"],
+    "delimiters": [""]
+  },
+  {
+    "name": "leading-vertical-tab-is-content",
+    "text": "\u000b\nA",
+    "prefix": "",
+    "paragraphs": ["\u000b\nA"],
+    "delimiters": [""]
+  },
+  {
+    "name": "leading-bom-is-content",
+    "text": "\ufeff\nA",
+    "prefix": "",
+    "paragraphs": ["\ufeff\nA"],
+    "delimiters": [""]
+  },
+  {
+    "name": "embedded-next-line-u0085-is-content",
+    "text": "A\n\u0085\nB",
+    "prefix": "",
+    "paragraphs": ["A\n\u0085\nB"],
+    "delimiters": [""]
+  },
+  {
     "name": "embedded-and-trailing-whitespace-lines",
     "text": " \nA\n \nB\n\t\n",
     "prefix": " \n",
@@ -46,6 +81,13 @@
     "text": " \n---\nx: y\n---\nA",
     "prefix": " \n",
     "paragraphs": ["---\nx: y\n---\nA"],
+    "delimiters": [""]
+  },
+  {
+    "name": "nbsp-does-not-pad-frontmatter-marker",
+    "text": "\u00a0---\u00a0\nx: y\n---\nA",
+    "prefix": "",
+    "paragraphs": ["\u00a0---\u00a0\nx: y\n---\nA"],
     "delimiters": [""]
   },
   {
@@ -81,6 +123,20 @@
     "text": "```js\na();\n\nb();\n```\n\n$$\na\n\nb\n$$",
     "prefix": "",
     "paragraphs": ["```js\na();\n\nb();\n```", "$$\na\n\nb\n$$"],
+    "delimiters": ["\n\n", ""]
+  },
+  {
+    "name": "nbsp-does-not-pad-fence-marker",
+    "text": "\u00a0```\nA\n\nB\n```\u00a0",
+    "prefix": "",
+    "paragraphs": ["\u00a0```\nA", "B\n```\u00a0"],
+    "delimiters": ["\n\n", ""]
+  },
+  {
+    "name": "nbsp-does-not-pad-math-marker",
+    "text": "\u00a0$$\nA\n\nB\n$$\u00a0",
+    "prefix": "",
+    "paragraphs": ["\u00a0$$\nA", "B\n$$\u00a0"],
     "delimiters": ["\n\n", ""]
   }
 ]

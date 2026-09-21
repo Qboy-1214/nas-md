@@ -117,6 +117,33 @@ def test_compute_diff_apply_round_trips_exact_content(base, target):
     assert apply_changes(base, changes) == target
 
 
+@pytest.mark.parametrize(
+    ("name", "character"),
+    [
+        ("next-line", "\u0085"),
+        ("no-break-space", "\u00a0"),
+        ("vertical-tab", "\u000b"),
+        ("byte-order-mark", "\ufeff"),
+    ],
+)
+def test_non_markdown_line_whitespace_has_stable_diff_coordinates(name, character):
+    base = f"{character}\nA"
+    target = f"{character}\nB"
+    expected = [
+        {
+            "type": "replace",
+            "paraIdx": 0,
+            "content": target,
+            "delimiter": "",
+        }
+    ]
+
+    changes = compute_diff(base, target)
+
+    assert changes == expected, name
+    assert apply_changes(base, changes) == target
+
+
 def test_compute_diff_replace():
     old = "para one\n\npara two\n\npara three"
     new = "para one\n\nCHANGED\n\npara three"

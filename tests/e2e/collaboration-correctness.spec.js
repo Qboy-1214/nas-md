@@ -94,6 +94,42 @@ test('paragraph diff operations match the backend contract', async ({ page }) =>
   });
 });
 
+test('non-Markdown whitespace has stable diff coordinates', async ({ page }) => {
+  await page.goto('/admin');
+
+  const cases = [
+    ['next-line', '\u0085'],
+    ['no-break-space', '\u00a0'],
+    ['vertical-tab', '\u000b'],
+    ['byte-order-mark', '\ufeff'],
+  ];
+  const results = await page.evaluate((whitespaceCases) => {
+    return whitespaceCases.map(([name, character]) => {
+      const base = `${character}\nA`;
+      const target = `${character}\nB`;
+      const changes = window.nasmdDiff.computeParagraphDiff(base, target);
+      return {
+        name,
+        target,
+        changes,
+        applied: window.nasmdDiff.applyChangesLocally(base, changes),
+      };
+    });
+  }, cases);
+
+  expect(results).toEqual(
+    cases.map(([name, character]) => {
+      const target = `${character}\nB`;
+      return {
+        name,
+        target,
+        changes: [{ type: 'replace', paraIdx: 0, content: target, delimiter: '' }],
+        applied: target,
+      };
+    }),
+  );
+});
+
 test.describe('rebase', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/admin');

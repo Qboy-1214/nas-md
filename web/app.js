@@ -3558,6 +3558,10 @@ async function saveFile({ silent = false } = {}) {
 }
 
 // Markdown 块级段落切分：保留段落与其原始分隔空白符
+function trimMarkdownLineWhitespace(line) {
+  return line.replace(/^[ \t]+|[ \t]+$/g, '');
+}
+
 function parseDocument(text) {
   const textNorm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   if (!textNorm) return { prefix: '', paragraphs: [], delimiters: [] };
@@ -3578,7 +3582,7 @@ function parseDocument(text) {
   }
 
   let firstContent = 0;
-  while (firstContent < lines.length && !lines[firstContent].content.trim()) {
+  while (firstContent < lines.length && !trimMarkdownLineWhitespace(lines[firstContent].content)) {
     firstContent++;
   }
 
@@ -3596,10 +3600,10 @@ function parseDocument(text) {
   let fenceLen = 0;
   let inMath = false;
 
-  if (!prefix && lines[0].content.trim() === '---') {
+  if (!prefix && trimMarkdownLineWhitespace(lines[0].content) === '---') {
     let closingIdx = -1;
     for (let idx = 1; idx < Math.min(50, lines.length); idx++) {
-      const marker = lines[idx].content.trim();
+      const marker = trimMarkdownLineWhitespace(lines[idx].content);
       if (marker === '---' || marker === '...') {
         closingIdx = idx;
         break;
@@ -3610,7 +3614,7 @@ function parseDocument(text) {
       const paragraphEnd = lines[closingIdx].contentEnd;
       paragraphs.push(textNorm.slice(0, paragraphEnd));
       i = closingIdx + 1;
-      while (i < lines.length && !lines[i].content.trim()) {
+      while (i < lines.length && !trimMarkdownLineWhitespace(lines[i].content)) {
         i++;
       }
       const delimiterEnd = i < lines.length ? lines[i].start : textNorm.length;
@@ -3622,7 +3626,7 @@ function parseDocument(text) {
   let currentEnd = null;
   while (i < lines.length) {
     const line = lines[i].content;
-    const stripped = line.trim();
+    const stripped = trimMarkdownLineWhitespace(line);
 
     if (!inFence) {
       if (stripped.startsWith('```')) {
@@ -3680,7 +3684,7 @@ function parseDocument(text) {
         const paragraphEnd = lines[currentEnd].contentEnd;
         paragraphs.push(textNorm.slice(paragraphStart, paragraphEnd));
         i++;
-        while (i < lines.length && !lines[i].content.trim()) {
+        while (i < lines.length && !trimMarkdownLineWhitespace(lines[i].content)) {
           i++;
         }
         const delimiterEnd = i < lines.length ? lines[i].start : textNorm.length;

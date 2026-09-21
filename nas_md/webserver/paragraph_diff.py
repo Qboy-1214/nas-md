@@ -10,6 +10,11 @@ class _ParsedDocument:
     delimiters: list[str]
 
 
+def _trim_markdown_line_whitespace(line: str) -> str:
+    """Trim only the space and tab characters Markdown ignores on a line."""
+    return line.strip(" \t")
+
+
 def _parse_document(text: str) -> _ParsedDocument:
     """Parse normalized text without discarding non-paragraph whitespace."""
     text_norm = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -32,7 +37,9 @@ def _parse_document(text: str) -> _ParsedDocument:
 
     line_count = len(lines)
     first_content = 0
-    while first_content < line_count and not lines[first_content][3].strip():
+    while first_content < line_count and not _trim_markdown_line_whitespace(
+        lines[first_content][3]
+    ):
         first_content += 1
 
     if first_content == line_count:
@@ -46,10 +53,10 @@ def _parse_document(text: str) -> _ParsedDocument:
 
     # Preserve the established rule: frontmatter is special only at the actual
     # beginning of the document. Leading prefix whitespace does not opt in.
-    if not prefix and lines[0][3].strip() == "---":
+    if not prefix and _trim_markdown_line_whitespace(lines[0][3]) == "---":
         closing_idx = -1
         for idx in range(1, min(50, line_count)):
-            marker = lines[idx][3].strip()
+            marker = _trim_markdown_line_whitespace(lines[idx][3])
             if marker in ("---", "..."):
                 closing_idx = idx
                 break
@@ -59,7 +66,7 @@ def _parse_document(text: str) -> _ParsedDocument:
             paragraph_end = lines[closing_idx][1]
             paragraphs.append(text_norm[:paragraph_end])
             i = closing_idx + 1
-            while i < line_count and not lines[i][3].strip():
+            while i < line_count and not _trim_markdown_line_whitespace(lines[i][3]):
                 i += 1
             delimiter_end = lines[i][0] if i < line_count else len(text_norm)
             delimiters.append(text_norm[paragraph_end:delimiter_end])
@@ -72,7 +79,7 @@ def _parse_document(text: str) -> _ParsedDocument:
 
     while i < line_count:
         line = lines[i][3]
-        stripped = line.strip()
+        stripped = _trim_markdown_line_whitespace(line)
 
         if in_fence is None:
             if stripped.startswith("```"):
@@ -126,7 +133,7 @@ def _parse_document(text: str) -> _ParsedDocument:
                 paragraph_end = lines[current_end][1]
                 paragraphs.append(text_norm[paragraph_start:paragraph_end])
                 i += 1
-                while i < line_count and not lines[i][3].strip():
+                while i < line_count and not _trim_markdown_line_whitespace(lines[i][3]):
                     i += 1
                 delimiter_end = lines[i][0] if i < line_count else len(text_norm)
                 delimiters.append(text_norm[paragraph_end:delimiter_end])
