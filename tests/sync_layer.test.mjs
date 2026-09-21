@@ -378,6 +378,7 @@ test('a failed newer gap fetch does not invalidate an older sufficient response'
     version: 1,
     content: 'A-v1',
     fullPromises: [olderFetch, newerFetch],
+    manualTimers: true,
   });
 
   app.context.window.nasmdSync.handleRemoteEdit({
@@ -399,6 +400,7 @@ test('a failed newer gap fetch does not invalidate an older sufficient response'
   await flushPromises();
   resolveOlderFetch({ content: 'A-v4', version: 4, mtime: 0 });
   await flushPromises();
+  app.runTimers(1000);
 
   assert.deepEqual(snapshotClient(app), {
     baseContent: 'A-v4',
@@ -408,6 +410,10 @@ test('a failed newer gap fetch does not invalidate an older sufficient response'
     lastSavedContent: 'A-v4',
     originalContent: 'A-v4',
   });
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
   assert.equal(app.consoleErrors.length, 1);
 });
 
@@ -900,6 +906,111 @@ test('a failed clean pending-version catch-up retries once without looping', asy
   ]);
   assert.equal(app.state.pendingRemoteVersion, 2);
   assert.equal(app.consoleErrors.length, 2);
+});
+
+test('a rejected clean gap fetch retains its high-water and retries once successfully', async () => {
+  let rejectGapFetch;
+  let resolveRetryFetch;
+  const gapFetch = new Promise((_resolve, reject) => {
+    rejectGapFetch = reject;
+  });
+  const retryFetch = new Promise((resolve) => {
+    resolveRetryFetch = resolve;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'confirmed-v1',
+    fullPromises: [gapFetch, retryFetch],
+    manualTimers: true,
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  rejectGapFetch(new Error('temporary gap failure'));
+  await flushPromises();
+
+  assert.equal(app.state.pendingRemoteVersion, 3);
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+
+  app.runTimers(1000);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+
+  resolveRetryFetch({ content: 'full-v3', version: 3, mtime: 0 });
+  await flushPromises();
+  app.runTimers(1000);
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v3',
+    baseVersion: 3,
+    editor: 'full-v3',
+    fileVersion: 3,
+    lastSavedContent: 'full-v3',
+    originalContent: 'full-v3',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+  assert.equal(app.consoleErrors.length, 1);
+});
+
+test('a null clean gap fetch retries once and a failed retry does not loop', async () => {
+  let rejectRetryFetch;
+  const retryFetch = new Promise((_resolve, reject) => {
+    rejectRetryFetch = reject;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'confirmed-v1',
+    fullPromises: [Promise.resolve(null), retryFetch],
+    manualTimers: true,
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  await flushPromises();
+
+  assert.equal(app.state.pendingRemoteVersion, 3);
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+
+  app.runTimers(1000);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+
+  rejectRetryFetch(new Error('retry also failed'));
+  await flushPromises();
+  app.runTimers(1000);
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'confirmed-v1',
+    baseVersion: 1,
+    editor: 'confirmed-v1',
+    fileVersion: 1,
+    lastSavedContent: 'confirmed-v1',
+    originalContent: 'confirmed-v1',
+  });
+  assert.equal(app.state.pendingRemoteVersion, 3);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+  assert.equal(app.consoleErrors.length, 1);
 });
 
 test('a stale fulfilled catch-up response retries the pending high-water once', async () => {

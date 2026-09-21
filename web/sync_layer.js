@@ -587,17 +587,21 @@
     }, 1000);
   }
 
-  function preserveFailedFetchHighWater(mountId, path, expectedVersion) {
+  function recordFailedFetchHighWater(mountId, path, expectedVersion) {
     if (!window.state || state.currentMountId !== mountId || state.currentPath !== path) {
       return;
     }
     var key = mountId + ':' + path;
-    deferWhileDirty({
-      newVersion: Math.max(
-        Number(_fullFetchRequiredVersions[key]) || 0,
-        Number(expectedVersion) || 0,
-      ),
-    });
+    var requiredVersion = Math.max(
+      Number(_fullFetchRequiredVersions[key]) || 0,
+      Number(expectedVersion) || 0,
+    );
+    if (requiredVersion > (Number(state.baseVersion) || 0)) {
+      state.pendingRemoteVersion = Math.max(
+        Number(state.pendingRemoteVersion) || 0,
+        requiredVersion,
+      );
+    }
   }
 
   function fetchFullContent(mountId, path, expectedVersion, isRetry) {
@@ -611,7 +615,7 @@
     API.getFile(mountId, path)
       .then(function (result) {
         if (!result || result.content === undefined) {
-          preserveFailedFetchHighWater(mountId, path, expectedVersion);
+          recordFailedFetchHighWater(mountId, path, expectedVersion);
           schedulePendingFetchRetry(mountId, path);
           return;
         }
@@ -668,7 +672,7 @@
       })
       .catch(function (_e) {
         console.error('Failed to fetch full content for sync:', _e);
-        preserveFailedFetchHighWater(mountId, path, expectedVersion);
+        recordFailedFetchHighWater(mountId, path, expectedVersion);
         schedulePendingFetchRetry(mountId, path);
       });
   }
