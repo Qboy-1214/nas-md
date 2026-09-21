@@ -1481,7 +1481,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         new_text = body.decode("utf-8", errors="replace")
 
-        from nas_md.webserver.file_version_store import _write_text_atomically, get_store
+        from nas_md.webserver.file_version_store import get_store
         from nas_md.webserver.paragraph_diff import DiffWorkLimitExceeded, compute_diff
 
         store = get_store()
@@ -1535,23 +1535,23 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         if not file_existed and not new_text:
             try:
-                _write_text_atomically(abs_path, new_text, mark_expected)
+                new_version = store.create_empty_file(file_key, abs_path, mark_expected)
             except OSError:
                 logger.exception("Failed to write file %s", abs_path)
+                snapshot = store.get_current_snapshot(file_key)
                 result = {
                     "applied": False,
                     "merged": False,
-                    "newVersion": store.get_current_version(file_key),
-                    "content": new_text,
+                    "newVersion": snapshot["version"],
+                    "content": snapshot["content"],
                     "errorCode": "write_failed",
                     "message": "Unable to save file",
                 }
             else:
-                store.init_file(file_key, abs_path, new_text, persisted=True)
                 result = {
                     "applied": False,
                     "merged": False,
-                    "newVersion": store.get_current_version(file_key),
+                    "newVersion": new_version,
                     "content": new_text,
                 }
         else:

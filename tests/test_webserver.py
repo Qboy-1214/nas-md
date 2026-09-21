@@ -644,6 +644,102 @@ class TestWriteFileAPI:
         assert status == 200
         assert json.loads(body)["content"] == "external\n\nupdated"
 
+    def test_missing_empty_put_serializes_with_changes_for_same_file(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        import nas_md.webserver.file_version_store as file_version_store_module
+        from nas_md.webserver.file_version_store import FileVersionStore, get_store
+
+        name = f"empty-race-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        normalized_target = os.path.normcase(os.path.abspath(path))
+        original_replace = os.replace
+        original_init_file = FileVersionStore.init_file
+        empty_at_replace = threading.Event()
+        release_empty_replace = threading.Event()
+        post_at_init = threading.Event()
+        post_finished = threading.Event()
+        empty_result = {}
+        post_result = {}
+        errors = []
+        first_target_replace = True
+
+        def pause_empty_replace(src, dst):
+            nonlocal first_target_replace
+            if first_target_replace and os.path.normcase(os.path.abspath(dst)) == normalized_target:
+                first_target_replace = False
+                empty_at_replace.set()
+                if not release_empty_replace.wait(timeout=5):
+                    raise TimeoutError("empty PUT was not released")
+            return original_replace(src, dst)
+
+        def observe_init_file(self, *args, **kwargs):
+            if args[0] == file_key and empty_at_replace.is_set():
+                post_at_init.set()
+            return original_init_file(self, *args, **kwargs)
+
+        def run_empty_put():
+            try:
+                empty_result["response"] = _put(
+                    f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+                    data=b"",
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        def run_post():
+            try:
+                post_result["response"] = _post(
+                    f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+                    data={
+                        "baseVersion": 0,
+                        "baseContent": "",
+                        "content": "B",
+                        "changes": [{"type": "insert", "paraIdx": 0, "content": "B"}],
+                    },
+                )
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                post_finished.set()
+
+        monkeypatch.setattr(file_version_store_module, "_replace_target", pause_empty_replace)
+        monkeypatch.setattr(FileVersionStore, "init_file", observe_init_file)
+
+        empty_thread = threading.Thread(target=run_empty_put, daemon=True)
+        post_thread = threading.Thread(target=run_post, daemon=True)
+        lock_was_available = None
+        try:
+            empty_thread.start()
+            assert empty_at_replace.wait(timeout=5)
+            fv = get_store()._files[file_key]
+
+            post_thread.start()
+            assert post_at_init.wait(timeout=5)
+            lock_was_available = fv.lock.acquire(blocking=False)
+            if lock_was_available:
+                fv.lock.release()
+
+            if lock_was_available:
+                assert post_finished.wait(timeout=5)
+        finally:
+            release_empty_replace.set()
+            empty_thread.join(timeout=5)
+            post_thread.join(timeout=5)
+
+        assert not empty_thread.is_alive()
+        assert not post_thread.is_alive()
+        assert errors == []
+        assert lock_was_available is False
+        assert empty_result["response"][0] == 200
+        assert post_result["response"][0] == 200
+        assert json.loads(post_result["response"][1])["content"] == "B"
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "B"
+        assert get_store().get_current_snapshot(file_key) == {"version": 1, "content": "B"}
+
     def test_write_file_existing_empty_markdown_remains_side_effect_free(
         self, writable_server_url, writable_dir, monkeypatch
     ):

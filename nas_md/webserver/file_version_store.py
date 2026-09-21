@@ -345,6 +345,21 @@ class FileVersionStore:
         with self._lock:
             return self._files.setdefault(file_key, candidate)
 
+    def create_empty_file(
+        self,
+        file_key: str,
+        file_path: str,
+        before_write: Callable[[str], Callable[[], None] | None] | None = None,
+    ) -> int:
+        """Persist an empty new file while serialized with versioned edits."""
+        fv = self._get_or_load_file(file_key, file_path)
+        with fv.lock:
+            self._refresh_unpersisted(fv, file_path)
+            _write_text_atomically(file_path, "", before_write)
+            fv.content = ""
+            fv.persisted = True
+            return fv.version
+
     def apply_changes(
         self,
         file_key: str,
