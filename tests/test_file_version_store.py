@@ -3,10 +3,11 @@ import os
 import threading
 from unittest.mock import Mock
 
+import nas_md.webserver.file_version_store as file_version_store_module
 import pytest
+from nas_md.webserver import paragraph_diff, version_history
 from nas_md.webserver.file_version_store import FileVersionStore
 from nas_md.webserver.paragraph_diff import compute_diff
-from nas_md.webserver import version_history
 
 
 @pytest.fixture(autouse=True)
@@ -178,6 +179,61 @@ def test_apply_changes_concurrent_thread_safety(store, test_file):
         final_content = f.read()
     for i in range(5):
         assert f"insert_{i}" in final_content
+
+
+def test_large_diff_for_one_file_does_not_block_another_file_query(store, tmp_path, monkeypatch):
+    file_a = tmp_path / "a.md"
+    file_b = tmp_path / "b.md"
+    base_a = "A\n\nB"
+    target_a = "A-local\n\nB"
+    base_b = "B-current"
+    file_a.write_text(base_a, encoding="utf-8")
+    file_b.write_text(base_b, encoding="utf-8")
+    store.init_file("mount-0:/a.md", str(file_a), base_a)
+    store.init_file("mount-0:/b.md", str(file_b), base_b)
+    diff_started = threading.Event()
+    release_diff = threading.Event()
+    query_done = threading.Event()
+    original_compute_diff = file_version_store_module.compute_diff
+
+    def controlled_compute_diff(old_text, new_text):
+        if old_text == base_a and new_text == target_a:
+            diff_started.set()
+            assert release_diff.wait(timeout=5)
+        return original_compute_diff(old_text, new_text)
+
+    monkeypatch.setattr(file_version_store_module, "compute_diff", controlled_compute_diff)
+    apply_thread = threading.Thread(
+        target=lambda: store.apply_changes(
+            "mount-0:/a.md",
+            str(file_a),
+            0,
+            compute_diff(base_a, target_a),
+            "local",
+            "Local",
+            "#0f0",
+            client_content=target_a,
+            base_content=base_a,
+        )
+    )
+    query_result = {}
+
+    def query_other_file():
+        query_result["version"] = store.get_current_version("mount-0:/b.md")
+        query_result["content"] = store.get_current_content("mount-0:/b.md")
+        query_done.set()
+
+    apply_thread.start()
+    assert diff_started.wait(timeout=5)
+    query_thread = threading.Thread(target=query_other_file)
+    query_thread.start()
+    completed_while_diff_blocked = query_done.wait(timeout=0.5)
+    release_diff.set()
+    apply_thread.join(timeout=5)
+    query_thread.join(timeout=5)
+
+    assert completed_while_diff_blocked
+    assert query_result == {"version": 0, "content": base_b}
 
 
 def test_apply_changes_3way_merge_with_shifting_indices(store, test_file):
@@ -833,6 +889,95 @@ def test_stale_large_repeated_diff_preserves_remote_anchor_edit(store, test_file
     assert result["content"] == expected
     with open(test_file, encoding="utf-8") as f:
         assert f.read() == expected
+
+
+def test_stale_repeated_rotation_preserves_remote_edit_in_longest_common_block(store, test_file):
+    key = "mount-0:/test.md"
+    base_paragraphs = ["A"] * 300 + ["B"] * 129
+    base = "\n\n".join(base_paragraphs)
+    remote_paragraphs = list(base_paragraphs)
+    remote_paragraphs[150] = "A-REMOTE"
+    remote_content = "\n\n".join(remote_paragraphs)
+    local_paragraphs = ["B"] * 129 + ["A"] * 300
+    local_content = "\n\n".join(local_paragraphs)
+    expected_paragraphs = list(local_paragraphs)
+    expected_paragraphs[279] = "A-REMOTE"
+    expected = "\n\n".join(expected_paragraphs)
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, remote_content),
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=remote_content,
+        base_content=base,
+    )
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, local_content),
+        "local",
+        "Local",
+        "#0f0",
+        client_content=local_content,
+        base_content=base,
+    )
+
+    assert result["applied"] is True
+    assert result["merged"] is True
+    assert result["content"] == expected
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == expected
+
+
+def test_diff_work_limit_returns_resync_without_side_effects(store, test_file, monkeypatch):
+    key = "mount-0:/test.md"
+    base = "A\n\nB"
+    target = "A-local\n\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    history_before = _history_count(store, key)
+    before_write = Mock()
+
+    def exhaust_diff(_old_text, _new_text):
+        raise paragraph_diff.DiffWorkLimitExceeded
+
+    monkeypatch.setattr(file_version_store_module, "compute_diff", exhaust_diff)
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        [{"type": "replace", "paraIdx": 0, "content": "A-local"}],
+        "local",
+        "Local",
+        "#0f0",
+        client_content=target,
+        base_content=base,
+        before_write=before_write,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 0,
+        "content": base,
+    }
+    assert store.get_current_version(key) == 0
+    assert store.get_current_content(key) == base
+    assert _history_count(store, key) == history_before
+    before_write.assert_not_called()
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == base
 
 
 def test_stale_exact_delimiter_edit_three_way_merges(store, test_file):

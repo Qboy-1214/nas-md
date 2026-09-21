@@ -467,6 +467,35 @@ def test_compute_diff_repeated_fallback_preserves_all_shared_paragraphs():
     assert apply_changes(old_text, changes) == new_text
 
 
+def test_compute_diff_repeated_rotation_preserves_the_longest_common_block():
+    old_paragraphs = ["A"] * 300 + ["B"] * 129
+    new_paragraphs = ["B"] * 129 + ["A"] * 300
+    old_text = "\n\n".join(old_paragraphs)
+    new_text = "\n\n".join(new_paragraphs)
+    expected = [
+        {"type": "insert", "paraIdx": 0, "content": "B", "delimiter": "\n\n"} for _ in range(129)
+    ]
+    expected += [{"type": "delimiter", "paraIdx": 299, "delimiter": ""}]
+    expected += [{"type": "delete", "paraIdx": idx} for idx in range(300, 429)]
+
+    changes = compute_diff(old_text, new_text)
+
+    assert changes == expected
+    assert compute_diff(old_text, new_text) == changes
+    assert not any(
+        change["type"] in {"replace", "delete"} and change["paraIdx"] < 300 for change in changes
+    )
+    assert apply_changes(old_text, changes) == new_text
+
+
+def test_compute_diff_raises_typed_error_when_exact_work_budget_is_exhausted():
+    old_paragraphs = ["A"] * 600 + ["B"] * 600 + ["C"] * 600
+    new_paragraphs = ["B"] * 600 + ["C"] * 600 + ["A"] * 600
+
+    with pytest.raises(paragraph_diff.DiffWorkLimitExceeded):
+        compute_diff("\n\n".join(old_paragraphs), "\n\n".join(new_paragraphs))
+
+
 def test_apply_changes_does_not_rewrite_explicit_delimiter_before_trailing_insert():
     changes = [
         {"type": "delimiter", "paraIdx": 0, "delimiter": "\n"},

@@ -3504,6 +3504,10 @@ async function saveFile({ silent = false } = {}) {
 
         if (!resp || !resp.applied) {
           console.log('[saveFile] changes not applied', resp);
+          if (resp && resp.resyncRequired) {
+            markDirty();
+            saveToLocalStorage(state.currentPath, content);
+          }
           if (resp && resp.error) {
             throw new Error(resp.error);
           }
@@ -3540,6 +3544,7 @@ async function saveFile({ silent = false } = {}) {
         }
       }
     } catch (e) {
+      if (e instanceof DiffWorkLimitError) markDirty();
       saveToLocalStorage(state.currentPath, content);
       if (!silent) showToast('保存失败，已缓存到本地');
       else showToast('自动保存失败');
@@ -3869,15 +3874,20 @@ function backtrackMyers(trace, oldLength, newLength) {
   return operations.reverse();
 }
 
-function boundedMyersOperations(oldItems, newItems, maxDistance = 256) {
+const MYERS_WORK_BUDGET = 262144;
+
+function boundedMyersOperations(oldItems, newItems, workBudget = MYERS_WORK_BUDGET) {
   const oldLength = oldItems.length;
   const newLength = newItems.length;
   let previous = new Map([[1, 0]]);
   const trace = [];
+  let work = 0;
 
-  for (let distance = 0; distance <= Math.min(maxDistance, oldLength + newLength); distance++) {
+  for (let distance = 0; distance <= oldLength + newLength; distance++) {
     const current = new Map();
     for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      work++;
+      if (work > workBudget) return null;
       const left = previous.has(diagonal - 1) ? previous.get(diagonal - 1) : -1;
       const right = previous.has(diagonal + 1) ? previous.get(diagonal + 1) : -1;
       let oldIdx;
@@ -3888,6 +3898,8 @@ function boundedMyersOperations(oldItems, newItems, maxDistance = 256) {
       }
       let newIdx = oldIdx - diagonal;
       while (oldIdx < oldLength && newIdx < newLength && oldItems[oldIdx] === newItems[newIdx]) {
+        work++;
+        if (work > workBudget) return null;
         oldIdx++;
         newIdx++;
       }
@@ -3901,67 +3913,6 @@ function boundedMyersOperations(oldItems, newItems, maxDistance = 256) {
     previous = current;
   }
   return null;
-}
-
-function lcsLengths(oldItems, newItems) {
-  let previous = new Array(newItems.length + 1).fill(0);
-  for (const oldItem of oldItems) {
-    const current = [0];
-    for (let newIdx = 1; newIdx <= newItems.length; newIdx++) {
-      if (oldItem === newItems[newIdx - 1]) {
-        current.push(previous[newIdx - 1] + 1);
-      } else {
-        current.push(Math.max(previous[newIdx], current[current.length - 1]));
-      }
-    }
-    previous = current;
-  }
-  return previous;
-}
-
-function hirschbergMatches(oldItems, newItems, oldOffset = 0, newOffset = 0) {
-  if (!oldItems.length || !newItems.length) return [];
-  if (oldItems.length === 1) {
-    for (let newIdx = newItems.length - 1; newIdx >= 0; newIdx--) {
-      if (oldItems[0] === newItems[newIdx]) return [[oldOffset, newOffset + newIdx]];
-    }
-    return [];
-  }
-  if (newItems.length === 1) {
-    for (let oldIdx = oldItems.length - 1; oldIdx >= 0; oldIdx--) {
-      if (oldItems[oldIdx] === newItems[0]) return [[oldOffset + oldIdx, newOffset]];
-    }
-    return [];
-  }
-
-  const oldMidpoint = Math.floor(oldItems.length / 2);
-  const leftLengths = lcsLengths(oldItems.slice(0, oldMidpoint), newItems);
-  const rightLengths = lcsLengths(
-    oldItems.slice(oldMidpoint).reverse(),
-    newItems.slice().reverse(),
-  );
-  let newMidpoint = 0;
-  let bestLength = -1;
-  for (let idx = 0; idx <= newItems.length; idx++) {
-    const length = leftLengths[idx] + rightLengths[newItems.length - idx];
-    if (length > bestLength) {
-      bestLength = length;
-      newMidpoint = idx;
-    }
-  }
-  return hirschbergMatches(
-    oldItems.slice(0, oldMidpoint),
-    newItems.slice(0, newMidpoint),
-    oldOffset,
-    newOffset,
-  ).concat(
-    hirschbergMatches(
-      oldItems.slice(oldMidpoint),
-      newItems.slice(newMidpoint),
-      oldOffset + oldMidpoint,
-      newOffset + newMidpoint,
-    ),
-  );
 }
 
 function operationsFromMatches(oldLength, newLength, matches) {
@@ -3985,8 +3936,6 @@ function operationsFromMatches(oldLength, newLength, matches) {
   while (newCursor++ < newLength) operations.push('insert');
   return operations;
 }
-
-const HIRSCHBERG_CELL_BUDGET = 65536;
 
 function increasingAnchors(candidates) {
   if (!candidates.length) return [];
@@ -4035,42 +3984,82 @@ function positionsByValue(items, start, end) {
   return positions;
 }
 
-function patienceAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd) {
-  const oldPositions = positionsByValue(oldItems, oldStart, oldEnd);
-  const newPositions = positionsByValue(newItems, newStart, newEnd);
-  const candidates = [];
-  for (const [value, positions] of oldPositions) {
-    const matching = newPositions.get(value);
-    if (positions.length === 1 && matching?.length === 1) {
-      candidates.push([positions[0], matching[0]]);
-    }
+const MATCH_PAIR_WORK_BUDGET = 1000000;
+
+class DiffWorkLimitError extends Error {
+  constructor() {
+    super('exact paragraph diff work limit exceeded');
+    this.name = 'DiffWorkLimitError';
+    this.code = 'DIFF_WORK_LIMIT_EXCEEDED';
   }
-  return increasingAnchors(candidates);
 }
 
-function histogramAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd) {
-  const oldPositions = positionsByValue(oldItems, oldStart, oldEnd);
-  const newPositions = positionsByValue(newItems, newStart, newEnd);
-  let rarestWeight = null;
+function huntSzymanskiMatches(oldItems, newPositions) {
+  const candidates = [];
+  const predecessors = [];
+  const tails = [];
+
+  for (let oldIdx = 0; oldIdx < oldItems.length; oldIdx++) {
+    const matching = newPositions.get(oldItems[oldIdx]) || [];
+    for (let matchingIdx = matching.length - 1; matchingIdx >= 0; matchingIdx--) {
+      const newIdx = matching[matchingIdx];
+      const candidateIdx = candidates.length;
+      let low = 0;
+      let high = tails.length;
+      while (low < high) {
+        const midpoint = Math.floor((low + high) / 2);
+        if (candidates[tails[midpoint]][1] < newIdx) {
+          low = midpoint + 1;
+        } else {
+          high = midpoint;
+        }
+      }
+      candidates.push([oldIdx, newIdx]);
+      predecessors.push(low ? tails[low - 1] : -1);
+      if (low === tails.length) {
+        tails.push(candidateIdx);
+      } else {
+        tails[low] = candidateIdx;
+      }
+    }
+  }
+
+  const matches = [];
+  let candidateIdx = tails[tails.length - 1];
+  while (candidateIdx !== -1) {
+    matches.push(candidates[candidateIdx]);
+    candidateIdx = predecessors[candidateIdx];
+  }
+  return matches.reverse();
+}
+
+function exactLcsMatches(oldItems, newItems) {
+  const oldPositions = positionsByValue(oldItems, 0, oldItems.length);
+  const newPositions = positionsByValue(newItems, 0, newItems.length);
+  const rankCandidates = [];
+  let commonCountUpperBound = 0;
+  let matchPairCount = 0;
+
   for (const [value, positions] of oldPositions) {
     const matching = newPositions.get(value);
     if (!matching) continue;
-    const weight = positions.length * matching.length;
-    if (rarestWeight === null || weight < rarestWeight) rarestWeight = weight;
-  }
-  if (rarestWeight === null) return [];
-
-  const candidates = [];
-  for (const [value, positions] of oldPositions) {
-    const matching = newPositions.get(value);
-    if (!matching || positions.length * matching.length !== rarestWeight) continue;
+    commonCountUpperBound += Math.min(positions.length, matching.length);
+    matchPairCount += positions.length * matching.length;
     const pairCount = Math.min(positions.length, matching.length);
     for (let idx = 0; idx < pairCount; idx++) {
-      candidates.push([positions[idx], matching[idx]]);
+      rankCandidates.push([positions[idx], matching[idx]]);
     }
   }
-  candidates.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
-  return increasingAnchors(candidates);
+
+  rankCandidates.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  const rankMatches = increasingAnchors(rankCandidates);
+  // A subsequence cannot use a value more often than its lower occurrence count.
+  if (rankMatches.length === commonCountUpperBound || matchPairCount === rankCandidates.length) {
+    return rankMatches;
+  }
+
+  if (matchPairCount > MATCH_PAIR_WORK_BUDGET) throw new DiffWorkLimitError();
+  return huntSzymanskiMatches(oldItems, newPositions);
 }
 
 function diffOperations(oldItems, newItems) {
@@ -4137,36 +4126,12 @@ function diffOperations(oldItems, newItems) {
       continue;
     }
 
-    let anchors = patienceAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd);
-    if (!anchors.length) {
-      anchors = histogramAnchors(oldItems, newItems, oldStart, oldEnd, newStart, newEnd);
-    }
-    if (anchors.length) {
-      const parts = [];
-      let oldCursor = oldStart;
-      let newCursor = newStart;
-      for (const [oldIdx, newIdx] of anchors) {
-        parts.push(['segment', oldCursor, oldIdx, newCursor, newIdx]);
-        parts.push(['equal', 1]);
-        oldCursor = oldIdx + 1;
-        newCursor = newIdx + 1;
-      }
-      parts.push(['segment', oldCursor, oldEnd, newCursor, newEnd]);
-      for (let idx = parts.length - 1; idx >= 0; idx--) tasks.push(parts[idx]);
-      continue;
-    }
-
-    if (oldLength * newLength <= HIRSCHBERG_CELL_BUDGET) {
-      const hirschbergOperations = operationsFromMatches(
-        oldLength,
-        newLength,
-        hirschbergMatches(oldSegment, newSegment),
-      );
-      for (const operation of hirschbergOperations) operations.push(operation);
-      continue;
-    }
-
-    throw new Error('diff anchor invariant violated');
+    const exactOperations = operationsFromMatches(
+      oldLength,
+      newLength,
+      exactLcsMatches(oldSegment, newSegment),
+    );
+    for (const operation of exactOperations) operations.push(operation);
   }
 
   return operations;
@@ -4467,6 +4432,7 @@ function rebaseContent(baseContent, localContent, remoteContent) {
 }
 
 window.nasmdDiff = {
+  DiffWorkLimitError,
   parseDocument,
   splitParagraphs,
   splitParagraphsWithDelims,

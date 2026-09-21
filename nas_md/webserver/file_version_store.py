@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from nas_md.webserver.paragraph_diff import (
+    DiffWorkLimitExceeded,
     apply_changes as apply_diff,
     compute_diff,
     split_paragraphs,
@@ -46,6 +47,7 @@ class _FileVersion:
     # changes_by_version: version -> list of changes that produced this version
     # retained as a bounded record; stale merging uses submitted base content
     changes_by_version: dict = field(default_factory=dict)
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
 class FileVersionStore:
@@ -62,24 +64,42 @@ class FileVersionStore:
         Returns the current version number.
         """
         with self._lock:
-            if file_key in self._files:
-                return self._files[file_key].version
+            fv = self._files.get(file_key)
+        if fv is not None:
+            with fv.lock:
+                return fv.version
 
-            # Check if there is existing persisted history to maintain version monotonicity
+        # Check if there is existing persisted history to maintain version monotonicity
+        base_version = 0
+        try:
+            from nas_md.webserver.version_history import _load
+
+            hist = _load(file_key, storage_dir=self._storage_dir)
+            if hist and hist.versions:
+                base_version = max((v.version for v in hist.versions), default=0)
+        except Exception:
             base_version = 0
-            try:
-                from nas_md.webserver.version_history import _load
 
-                hist = _load(file_key, storage_dir=self._storage_dir)
-                if hist and hist.versions:
-                    base_version = max((v.version for v in hist.versions), default=0)
-            except Exception:
-                base_version = 0
+        candidate = _FileVersion(version=base_version, content=content, changes_by_version={})
+        with self._lock:
+            fv = self._files.setdefault(file_key, candidate)
+        with fv.lock:
+            return fv.version
 
-            self._files[file_key] = _FileVersion(
-                version=base_version, content=content, changes_by_version={}
-            )
-            return base_version
+    def _get_or_load_file(self, file_key: str, file_path: str) -> _FileVersion:
+        with self._lock:
+            fv = self._files.get(file_key)
+        if fv is not None:
+            return fv
+
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                disk_content = f.read()
+        except OSError:
+            disk_content = ""
+        candidate = _FileVersion(version=0, content=disk_content, changes_by_version={})
+        with self._lock:
+            return self._files.setdefault(file_key, candidate)
 
     def apply_changes(
         self,
@@ -106,18 +126,8 @@ class FileVersionStore:
           newVersion: int
           content: str
         """
-        with self._lock:
-            fv = self._files.get(file_key)
-            if fv is None:
-                # Lazy load from disk
-                try:
-                    with open(file_path, encoding="utf-8") as f:
-                        disk_content = f.read()
-                except OSError:
-                    disk_content = ""
-                fv = _FileVersion(version=0, content=disk_content, changes_by_version={})
-                self._files[file_key] = fv
-
+        fv = self._get_or_load_file(file_key, file_path)
+        with fv.lock:
             if base_version < 0 or base_version > fv.version:
                 return self._resync_result(fv)
 
@@ -146,7 +156,10 @@ class FileVersionStore:
                     # the authoritative compatible representation.
                     submitted_content = reconstructed_content
 
-            canonical_changes = compute_diff(submitted_base, submitted_content)
+            try:
+                canonical_changes = compute_diff(submitted_base, submitted_content)
+            except DiffWorkLimitExceeded:
+                return self._resync_result(fv)
             merged = base_version != fv.version
             if not merged and submitted_base != fv.content:
                 return self._resync_result(fv)
@@ -162,7 +175,10 @@ class FileVersionStore:
                 changes_to_apply = canonical_changes
                 new_content = submitted_content
             else:
-                remote_changes = compute_diff(submitted_base, fv.content)
+                try:
+                    remote_changes = compute_diff(submitted_base, fv.content)
+                except DiffWorkLimitExceeded:
+                    return self._resync_result(fv)
                 changes_to_apply = transform_changes(
                     canonical_changes,
                     remote_changes,
@@ -245,17 +261,8 @@ class FileVersionStore:
 
         Returns dict with applied/newVersion/content.
         """
-        with self._lock:
-            fv = self._files.get(file_key)
-            if fv is None:
-                try:
-                    with open(file_path, encoding="utf-8") as f:
-                        disk_content = f.read()
-                except OSError:
-                    disk_content = ""
-                fv = _FileVersion(version=0, content=disk_content, changes_by_version={})
-                self._files[file_key] = fv
-
+        fv = self._get_or_load_file(file_key, file_path)
+        with fv.lock:
             try:
                 with open(file_path, encoding="utf-8") as f:
                     new_content = f.read()
@@ -305,12 +312,18 @@ class FileVersionStore:
     def get_current_version(self, file_key: str) -> int:
         with self._lock:
             fv = self._files.get(file_key)
-            return fv.version if fv else 0
+        if fv is None:
+            return 0
+        with fv.lock:
+            return fv.version
 
     def get_current_content(self, file_key: str) -> str | None:
         with self._lock:
             fv = self._files.get(file_key)
-            return fv.content if fv else None
+        if fv is None:
+            return None
+        with fv.lock:
+            return fv.content
 
     def _prune_changes_history(self, fv: _FileVersion, keep: int = 50):
         """Keep only the most recent `keep` versions of changes_by_version."""

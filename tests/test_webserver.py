@@ -759,6 +759,33 @@ class TestWriteFileAPI:
         ) as resp:
             assert resp.read() == payload
 
+    def test_write_markdown_work_limit_returns_resync_without_overwriting(
+        self, writable_server_url, writable_dir
+    ):
+        path = os.path.join(writable_dir, "work-limit.md")
+        old_paragraphs = ["A"] * 600 + ["B"] * 600 + ["C"] * 600
+        new_paragraphs = ["B"] * 600 + ["C"] * 600 + ["A"] * 600
+        old_content = "\n\n".join(old_paragraphs)
+        new_content = "\n\n".join(new_paragraphs)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(old_content)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/work-limit.md",
+            data=new_content.encode("utf-8"),
+        )
+
+        assert status == 409
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 0,
+            "content": old_content,
+        }
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == old_content
+
 
 class TestSubmitChangesAPI:
     """Integration tests for POST /api/mounts/{id}/changes — version-driven paragraph merge."""

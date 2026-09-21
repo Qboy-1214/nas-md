@@ -248,6 +248,140 @@ test('paragraph diff fallback operations match the backend anchor contract', asy
   );
 });
 
+test('repeated rotation preserves the longest common block and remote edits', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(() => {
+    const oldParagraphs = new Array(300).fill('A').concat(new Array(129).fill('B'));
+    const newParagraphs = new Array(129).fill('B').concat(new Array(300).fill('A'));
+    const remoteParagraphs = oldParagraphs.slice();
+    remoteParagraphs[150] = 'A-REMOTE';
+    const base = oldParagraphs.join('\n\n');
+    const target = newParagraphs.join('\n\n');
+    const remote = remoteParagraphs.join('\n\n');
+    const changes = window.nasmdDiff.computeParagraphDiff(base, target);
+    return {
+      changes,
+      applied: window.nasmdDiff.applyChangesLocally(base, changes),
+      rebased: window.nasmdDiff.rebaseContent(base, target, remote),
+    };
+  });
+  const expectedChanges = Array.from({ length: 129 }, () => ({
+    type: 'insert',
+    paraIdx: 0,
+    content: 'B',
+    delimiter: '\n\n',
+  }))
+    .concat([{ type: 'delimiter', paraIdx: 299, delimiter: '' }])
+    .concat(
+      Array.from({ length: 129 }, (_, offset) => ({ type: 'delete', paraIdx: offset + 300 })),
+    );
+  const expectedRebase = new Array(129)
+    .fill('B')
+    .concat(new Array(150).fill('A'))
+    .concat(['A-REMOTE'])
+    .concat(new Array(149).fill('A'))
+    .join('\n\n');
+
+  expect(result.changes).toEqual(expectedChanges);
+  expect(result.applied).toBe(
+    new Array(129).fill('B').concat(new Array(300).fill('A')).join('\n\n'),
+  );
+  expect(result.rebased).toBe(expectedRebase);
+});
+
+test('paragraph diff reports typed work-limit exhaustion', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(() => {
+    const oldParagraphs = new Array(600)
+      .fill('A')
+      .concat(new Array(600).fill('B'))
+      .concat(new Array(600).fill('C'));
+    const newParagraphs = new Array(600)
+      .fill('B')
+      .concat(new Array(600).fill('C'))
+      .concat(new Array(600).fill('A'));
+    try {
+      window.nasmdDiff.computeParagraphDiff(oldParagraphs.join('\n\n'), newParagraphs.join('\n\n'));
+      return { threw: false };
+    } catch (error) {
+      return {
+        threw: true,
+        name: error.name,
+        code: error.code,
+        typed: error instanceof window.nasmdDiff.DiffWorkLimitError,
+      };
+    }
+  });
+
+  expect(result).toEqual({
+    threw: true,
+    name: 'DiffWorkLimitError',
+    code: 'DIFF_WORK_LIMIT_EXCEEDED',
+    typed: true,
+  });
+});
+
+test('save keeps an over-budget document dirty without submitting changes', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const baseParagraphs = new Array(600)
+      .fill('A')
+      .concat(new Array(600).fill('B'))
+      .concat(new Array(600).fill('C'));
+    const localParagraphs = new Array(600)
+      .fill('B')
+      .concat(new Array(600).fill('C'))
+      .concat(new Array(600).fill('A'));
+    const base = baseParagraphs.join('\n\n');
+    const local = localParagraphs.join('\n\n');
+    const path = '/work-limit.md';
+    let submitCalls = 0;
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async () => {
+      submitCalls++;
+      return { applied: true, newVersion: 8, content: local };
+    };
+    localStorage.removeItem(`nasmd_draft_${path}`);
+    Object.assign(window.state, {
+      currentMountId: 'work-limit',
+      currentPath: path,
+      mounts: [{ id: 'work-limit', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 7,
+      baseContent: base,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = base;
+    window._vditor = { getValue: () => local };
+
+    try {
+      await window.saveFile();
+      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${path}`));
+      return {
+        submitCalls,
+        dirty: window.state.dirty,
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        editorContent: window._vditor.getValue(),
+        draftContent: draft?.content,
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+    }
+  });
+
+  expect(result.submitCalls).toBe(0);
+  expect(result.dirty).toBe(true);
+  expect(result.baseVersion).toBe(7);
+  expect(result.baseContent).not.toBe(result.editorContent);
+  expect(result.draftContent).toBe(result.editorContent);
+});
+
 test('large paragraph fallback remains within the browser main-thread budget', async ({ page }) => {
   await page.goto('/admin');
 

@@ -3,6 +3,10 @@
 from dataclasses import dataclass
 
 
+class DiffWorkLimitExceeded(RuntimeError):
+    """Raised when an exact paragraph diff would exceed its bounded work budget."""
+
+
 @dataclass(frozen=True)
 class _ParsedDocument:
     prefix: str
@@ -206,18 +210,25 @@ def _backtrack_myers(trace: list[dict[int, int]], old_len: int, new_len: int) ->
     return operations
 
 
+_MYERS_WORK_BUDGET = 262_144
+
+
 def _bounded_myers_operations(
-    old_items: list[str], new_items: list[str], max_distance: int = 256
+    old_items: list[str], new_items: list[str], work_budget: int = _MYERS_WORK_BUDGET
 ) -> list[str] | None:
-    """Return a shortest edit script when its edit distance is reasonably small."""
+    """Return a shortest edit script when Myers completes within the work budget."""
     old_len = len(old_items)
     new_len = len(new_items)
     previous = {1: 0}
     trace: list[dict[int, int]] = []
+    work = 0
 
-    for distance in range(min(max_distance, old_len + new_len) + 1):
+    for distance in range(old_len + new_len + 1):
         current: dict[int, int] = {}
         for diagonal in range(-distance, distance + 1, 2):
+            work += 1
+            if work > work_budget:
+                return None
             if diagonal == -distance or (
                 diagonal != distance
                 and previous.get(diagonal - 1, -1) < previous.get(diagonal + 1, -1)
@@ -229,6 +240,9 @@ def _bounded_myers_operations(
             while (
                 old_idx < old_len and new_idx < new_len and old_items[old_idx] == new_items[new_idx]
             ):
+                work += 1
+                if work > work_budget:
+                    return None
                 old_idx += 1
                 new_idx += 1
             current[diagonal] = old_idx
@@ -238,62 +252,6 @@ def _bounded_myers_operations(
         trace.append(current)
         previous = current
     return None
-
-
-def _lcs_lengths(old_items: list[str], new_items: list[str]) -> list[int]:
-    """Compute one LCS row using space linear in the second input."""
-    previous = [0] * (len(new_items) + 1)
-    for old_item in old_items:
-        current = [0]
-        for new_idx, new_item in enumerate(new_items, start=1):
-            if old_item == new_item:
-                current.append(previous[new_idx - 1] + 1)
-            else:
-                current.append(max(previous[new_idx], current[-1]))
-        previous = current
-    return previous
-
-
-def _hirschberg_matches(
-    old_items: list[str],
-    new_items: list[str],
-    old_offset: int = 0,
-    new_offset: int = 0,
-) -> list[tuple[int, int]]:
-    """Find deterministic LCS anchors without allocating a quadratic matrix."""
-    if not old_items or not new_items:
-        return []
-    if len(old_items) == 1:
-        for new_idx in range(len(new_items) - 1, -1, -1):
-            if old_items[0] == new_items[new_idx]:
-                return [(old_offset, new_offset + new_idx)]
-        return []
-    if len(new_items) == 1:
-        for old_idx in range(len(old_items) - 1, -1, -1):
-            if old_items[old_idx] == new_items[0]:
-                return [(old_offset + old_idx, new_offset)]
-        return []
-
-    old_midpoint = len(old_items) // 2
-    left_lengths = _lcs_lengths(old_items[:old_midpoint], new_items)
-    right_lengths = _lcs_lengths(
-        list(reversed(old_items[old_midpoint:])), list(reversed(new_items))
-    )
-    new_midpoint = max(
-        range(len(new_items) + 1),
-        key=lambda idx: left_lengths[idx] + right_lengths[len(new_items) - idx],
-    )
-    return _hirschberg_matches(
-        old_items[:old_midpoint],
-        new_items[:new_midpoint],
-        old_offset,
-        new_offset,
-    ) + _hirschberg_matches(
-        old_items[old_midpoint:],
-        new_items[new_midpoint:],
-        old_offset + old_midpoint,
-        new_offset + new_midpoint,
-    )
 
 
 def _operations_from_matches(
@@ -311,9 +269,6 @@ def _operations_from_matches(
     operations.extend("delete" for _ in range(old_len - old_cursor))
     operations.extend("insert" for _ in range(new_len - new_cursor))
     return operations
-
-
-_HIRSCHBERG_CELL_BUDGET = 65_536
 
 
 def _increasing_anchors(candidates: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -355,54 +310,71 @@ def _positions_by_value(items: list[str], start: int, end: int) -> dict[str, lis
     return positions
 
 
-def _patience_anchors(
-    old_items: list[str],
-    new_items: list[str],
-    old_start: int,
-    old_end: int,
-    new_start: int,
-    new_end: int,
-) -> list[tuple[int, int]]:
-    """Find ordered values that occur exactly once in both ranges."""
-    old_positions = _positions_by_value(old_items, old_start, old_end)
-    new_positions = _positions_by_value(new_items, new_start, new_end)
-    candidates = [
-        (positions[0], new_positions[value][0])
-        for value, positions in old_positions.items()
-        if len(positions) == 1 and value in new_positions and len(new_positions[value]) == 1
-    ]
-    return _increasing_anchors(candidates)
+_MATCH_PAIR_WORK_BUDGET = 1_000_000
 
 
-def _histogram_anchors(
-    old_items: list[str],
-    new_items: list[str],
-    old_start: int,
-    old_end: int,
-    new_start: int,
-    new_end: int,
+def _hunt_szymanski_matches(
+    old_items: list[str], new_positions: dict[str, list[int]]
 ) -> list[tuple[int, int]]:
-    """Pair the rarest shared repeated values by occurrence rank, then take an LIS."""
-    old_positions = _positions_by_value(old_items, old_start, old_end)
-    new_positions = _positions_by_value(new_items, new_start, new_end)
-    rarest_weight: int | None = None
+    """Compute an exact deterministic LCS from all equal-position pairs."""
+    candidates: list[tuple[int, int]] = []
+    predecessors: list[int] = []
+    tails: list[int] = []
+
+    for old_idx, value in enumerate(old_items):
+        for new_idx in reversed(new_positions.get(value, [])):
+            candidate_idx = len(candidates)
+            low = 0
+            high = len(tails)
+            while low < high:
+                midpoint = (low + high) // 2
+                if candidates[tails[midpoint]][1] < new_idx:
+                    low = midpoint + 1
+                else:
+                    high = midpoint
+            candidates.append((old_idx, new_idx))
+            predecessors.append(tails[low - 1] if low else -1)
+            if low == len(tails):
+                tails.append(candidate_idx)
+            else:
+                tails[low] = candidate_idx
+
+    matches = []
+    candidate_idx = tails[-1]
+    while candidate_idx != -1:
+        matches.append(candidates[candidate_idx])
+        candidate_idx = predecessors[candidate_idx]
+    matches.reverse()
+    return matches
+
+
+def _exact_lcs_matches(old_items: list[str], new_items: list[str]) -> list[tuple[int, int]]:
+    """Return exact LCS matches or raise before expanding an excessive match graph."""
+    old_positions = _positions_by_value(old_items, 0, len(old_items))
+    new_positions = _positions_by_value(new_items, 0, len(new_items))
+    rank_candidates: list[tuple[int, int]] = []
+    common_count_upper_bound = 0
+    match_pair_count = 0
+
     for value, positions in old_positions.items():
         matching = new_positions.get(value)
-        if matching:
-            weight = len(positions) * len(matching)
-            if rarest_weight is None or weight < rarest_weight:
-                rarest_weight = weight
-    if rarest_weight is None:
-        return []
-
-    candidates = []
-    for value, positions in old_positions.items():
-        matching = new_positions.get(value)
-        if not matching or len(positions) * len(matching) != rarest_weight:
+        if not matching:
             continue
-        candidates.extend(zip(positions, matching, strict=False))
-    candidates.sort()
-    return _increasing_anchors(candidates)
+        common_count_upper_bound += min(len(positions), len(matching))
+        match_pair_count += len(positions) * len(matching)
+        rank_candidates.extend(zip(positions, matching, strict=False))
+
+    rank_candidates.sort()
+    rank_matches = _increasing_anchors(rank_candidates)
+    # A common subsequence cannot use a value more often than its lower
+    # occurrence count. Reaching that summed bound proves this LIS is an LCS.
+    if len(rank_matches) == common_count_upper_bound or match_pair_count == len(rank_candidates):
+        return rank_matches
+
+    if match_pair_count > _MATCH_PAIR_WORK_BUDGET:
+        raise DiffWorkLimitExceeded("exact paragraph diff work limit exceeded")
+
+    return _hunt_szymanski_matches(old_items, new_positions)
 
 
 def _diff_operations(old_items: list[str], new_items: list[str]) -> list[str]:
@@ -462,31 +434,8 @@ def _diff_operations(old_items: list[str], new_items: list[str]) -> list[str]:
             operations.extend(segment_operations)
             continue
 
-        anchors = _patience_anchors(old_items, new_items, old_start, old_end, new_start, new_end)
-        if not anchors:
-            anchors = _histogram_anchors(
-                old_items, new_items, old_start, old_end, new_start, new_end
-            )
-        if anchors:
-            parts: list[tuple] = []
-            old_cursor = old_start
-            new_cursor = new_start
-            for old_idx, new_idx in anchors:
-                parts.append(("segment", old_cursor, old_idx, new_cursor, new_idx))
-                parts.append(("equal", 1))
-                old_cursor = old_idx + 1
-                new_cursor = new_idx + 1
-            parts.append(("segment", old_cursor, old_end, new_cursor, new_end))
-            tasks.extend(reversed(parts))
-            continue
-
-        if old_len * new_len <= _HIRSCHBERG_CELL_BUDGET:
-            matches = _hirschberg_matches(old_segment, new_segment)
-            operations.extend(_operations_from_matches(old_len, new_len, matches))
-            continue
-
-        # The disjoint check and histogram share the same equality relation.
-        raise RuntimeError("diff anchor invariant violated")
+        matches = _exact_lcs_matches(old_segment, new_segment)
+        operations.extend(_operations_from_matches(old_len, new_len, matches))
 
     return operations
 

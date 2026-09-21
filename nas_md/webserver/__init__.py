@@ -1482,7 +1482,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         new_text = body.decode("utf-8", errors="replace")
 
         from nas_md.webserver.file_version_store import get_store
-        from nas_md.webserver.paragraph_diff import compute_diff
+        from nas_md.webserver.paragraph_diff import DiffWorkLimitExceeded, compute_diff
 
         store = get_store()
         file_key = f"{mount_id}:{rel_path}"
@@ -1498,7 +1498,19 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         store.init_file(file_key, abs_path, old_content)
 
-        changes = compute_diff(old_content, new_text) if old_content != new_text else []
+        try:
+            changes = compute_diff(old_content, new_text) if old_content != new_text else []
+        except DiffWorkLimitExceeded:
+            return self._send_json(
+                {
+                    "applied": False,
+                    "merged": False,
+                    "resyncRequired": True,
+                    "newVersion": store.get_current_version(file_key),
+                    "content": store.get_current_content(file_key),
+                },
+                409,
+            )
 
         author_name = self.headers.get("X-Client-Name", "Anonymous")
         author_color = self.headers.get("X-Client-Color", "#3498db")
