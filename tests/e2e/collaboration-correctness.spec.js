@@ -429,6 +429,89 @@ test('dirty remote events preserve the acknowledged baseline and retain the vers
   expect(result.pendingRemoteVersion).toBe(9);
 });
 
+test('undoing dirty local edits catches up to a deferred remote version', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const setValues = [];
+    const fetchCalls = [];
+    const editor = {
+      value: 'local-dirty',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        setValues.push(value);
+        this.value = value;
+      },
+    };
+    const originalGetFile = API.getFile;
+    API.getFile = async (mountId, path) => {
+      fetchCalls.push([mountId, path]);
+      return { content: 'remote-v2', version: 2, mtime: 0 };
+    };
+    Object.assign(window.state, {
+      currentMountId: 'mount-0',
+      currentPath: '/dirty-undo.md',
+      baseVersion: 1,
+      baseContent: 'confirmed-v1',
+      fileVersions: { 'mount-0:/dirty-undo.md': 1 },
+      pendingRemoteVersion: null,
+      autoSave: false,
+    });
+    window._vditor = editor;
+    window._originalContent = 'confirmed-v1';
+    window._lastSavedContent = 'confirmed-v1';
+    window.markDirty();
+
+    try {
+      window.nasmdSync.handleRemoteEdit({
+        type: 'remote_edit',
+        mountId: 'mount-0',
+        path: '/dirty-undo.md',
+        newVersion: 2,
+        authorId: 'remote',
+        authorName: 'Remote',
+        authorColor: '#f00',
+        changes: [{ type: 'replace', paraIdx: 0, content: 'remote-v2' }],
+      });
+      const pendingBeforeUndo = window.state.pendingRemoteVersion;
+
+      editor.value = 'confirmed-v1';
+      window.onEditorInput();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      return {
+        pendingBeforeUndo,
+        fetchCalls,
+        setValues,
+        dirty: window.state.dirty,
+        editor: editor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+        fileVersion: window.state.fileVersions['mount-0:/dirty-undo.md'],
+        pendingRemoteVersion: window.state.pendingRemoteVersion,
+      };
+    } finally {
+      API.getFile = originalGetFile;
+    }
+  });
+
+  expect(result).toEqual({
+    pendingBeforeUndo: 2,
+    fetchCalls: [['mount-0', '/dirty-undo.md']],
+    setValues: ['remote-v2'],
+    dirty: false,
+    editor: 'remote-v2',
+    baseVersion: 2,
+    baseContent: 'remote-v2',
+    originalContent: 'remote-v2',
+    fileVersion: 2,
+    pendingRemoteVersion: null,
+  });
+});
+
 test('clean remote batching advances the editor and acknowledged baseline atomically', async ({
   page,
 }) => {
@@ -436,6 +519,7 @@ test('clean remote batching advances the editor and acknowledged baseline atomic
 
   const result = await page.evaluate(async () => {
     const setValues = [];
+    const fetchCalls = [];
     const editor = {
       value: 'transient-editor-value',
       getValue() {
@@ -459,37 +543,49 @@ test('clean remote batching advances the editor and acknowledged baseline atomic
     window._originalContent = 'A\n\nB';
     window._lastSavedContent = 'A\n\nB';
 
-    window.nasmdSync.handleRemoteEdit({
-      type: 'remote_edit',
-      mountId: 'mount-0',
-      path: '/clean-remote.md',
-      newVersion: 8,
-      authorId: 'remote',
-      authorName: 'Remote',
-      authorColor: '#f00',
-      changes: [{ type: 'insert', paraIdx: 0, content: 'X' }],
-    });
-    await new Promise((resolve) => setTimeout(resolve, 400));
-
-    return {
-      setValues,
-      editor: editor.getValue(),
-      baseVersion: window.state.baseVersion,
-      baseContent: window.state.baseContent,
-      originalContent: window._originalContent,
-      fileVersion: window.state.fileVersions['mount-0:/clean-remote.md'],
-      pendingRemoteVersion: window.state.pendingRemoteVersion,
+    const originalGetFile = API.getFile;
+    API.getFile = (mountId, path) => {
+      fetchCalls.push([mountId, path]);
+      return new Promise(() => {});
     };
+
+    try {
+      window.nasmdSync.handleRemoteEdit({
+        type: 'remote_edit',
+        mountId: 'mount-0',
+        path: '/clean-remote.md',
+        newVersion: 8,
+        authorId: 'remote',
+        authorName: 'Remote',
+        authorColor: '#f00',
+        changes: [{ type: 'insert', paraIdx: 0, content: 'X' }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      return {
+        fetchCalls,
+        setValues,
+        editor: editor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+        fileVersion: window.state.fileVersions['mount-0:/clean-remote.md'],
+        pendingRemoteVersion: window.state.pendingRemoteVersion,
+      };
+    } finally {
+      API.getFile = originalGetFile;
+    }
   });
 
   expect(result).toEqual({
+    fetchCalls: [['mount-0', '/clean-remote.md']],
     setValues: ['X\n\nA\n\nB'],
     editor: 'X\n\nA\n\nB',
     baseVersion: 8,
     baseContent: 'X\n\nA\n\nB',
     originalContent: 'X\n\nA\n\nB',
     fileVersion: 8,
-    pendingRemoteVersion: null,
+    pendingRemoteVersion: 12,
   });
 });
 

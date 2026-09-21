@@ -53,6 +53,7 @@ function loadSyncLayer({
   const consoleErrors = [];
   const toasts = [];
   const timers = new Map();
+  const windowListeners = new Map();
   let nextTimerId = 1;
   let currentTime = 10000;
   const documentBody = makeElement();
@@ -109,6 +110,11 @@ function loadSyncLayer({
       _lastSavedContent: confirmedContent,
       _originalContent: confirmedContent,
       _vditor: editor,
+      addEventListener(type, listener) {
+        const listeners = windowListeners.get(type) || [];
+        listeners.push(listener);
+        windowListeners.set(type, listeners);
+      },
       showToast(...args) {
         toasts.push(args);
       },
@@ -123,6 +129,9 @@ function loadSyncLayer({
     apiCalls,
     consoleErrors,
     context,
+    dispatchWindowEvent(type) {
+      for (const listener of windowListeners.get(type) || []) listener();
+    },
     editor,
     runTimers(delay) {
       const due = Array.from(timers.entries()).filter(([, timer]) => timer.delay === delay);
@@ -554,6 +563,54 @@ test('a delayed remote batch cannot mutate a newly opened file', async () => {
   assert.deepEqual(app.consoleErrors, []);
 });
 
+test('a batch dropped after an A to B switch does not suppress A when it is reopened', async () => {
+  const app = loadSyncLayer({ version: 1, content: 'file-a-v1', manualTimers: true });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'file-a-v2' }],
+  });
+
+  app.state.currentPath = '/other.md';
+  app.state.baseVersion = 7;
+  app.state.baseContent = 'file-b-v7';
+  app.state.fileVersions['mount-0:/other.md'] = 7;
+  app.editor.value = 'file-b-v7';
+  app.context.window._originalContent = 'file-b-v7';
+  app.context.window._lastSavedContent = 'file-b-v7';
+  app.runTimers(300);
+
+  app.state.currentPath = '/doc.md';
+  app.state.baseVersion = 1;
+  app.state.baseContent = 'file-a-v1';
+  app.state.fileVersions['mount-0:/doc.md'] = 1;
+  app.editor.value = 'file-a-v1';
+  app.context.window._originalContent = 'file-a-v1';
+  app.context.window._lastSavedContent = 'file-a-v1';
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'file-a-v2' }],
+  });
+  app.runTimers(300);
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'file-a-v2',
+    baseVersion: 2,
+    editor: 'file-a-v2',
+    fileVersion: 2,
+    lastSavedContent: 'file-a-v2',
+    originalContent: 'file-a-v2',
+  });
+  assert.deepEqual(app.consoleErrors, []);
+});
+
 test('dirty clients defer exact remote and external events without changing baseline', async () => {
   const remote = loadSyncLayer({
     version: 1,
@@ -596,6 +653,356 @@ test('dirty clients defer exact remote and external events without changing base
   assert.deepEqual(external.toasts, [['检测到远端更新，将在保存时自动合并', 'info']]);
   assert.deepEqual(external.apiCalls, []);
   assert.deepEqual(external.consoleErrors, []);
+});
+
+test('becoming clean catches up to an exact remote version deferred while dirty', async () => {
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'local-dirty',
+    baseContent: 'confirmed-v1',
+    dirty: true,
+    fullResult: { content: 'full-v2', version: 2, mtime: 0 },
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v2' }],
+  });
+  assert.equal(app.state.pendingRemoteVersion, 2);
+  assert.deepEqual(app.apiCalls, []);
+
+  app.state.dirty = false;
+  app.editor.value = 'confirmed-v1';
+  app.context.window.nasmdSync.handleDirtyStateChange(false);
+  await flushPromises();
+
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v2',
+    baseVersion: 2,
+    editor: 'full-v2',
+    fileVersion: 2,
+    lastSavedContent: 'full-v2',
+    originalContent: 'full-v2',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+  assert.deepEqual(app.consoleErrors, []);
+});
+
+test('an offline draft blocks pending-version catch-up through reconnect', async () => {
+  const neverResolvingFetch = new Promise(() => {});
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'offline-draft',
+    baseContent: 'confirmed-v1',
+    dirty: true,
+    fullPromise: neverResolvingFetch,
+  });
+  app.context.window.navigator = { onLine: false };
+  app.context.window.localStorage = {
+    getItem(key) {
+      return key === 'nasmd_draft_/doc.md' ? '{"content":"offline-draft"}' : null;
+    },
+  };
+  app.context.window.nasmdSync.init();
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v2' }],
+  });
+  app.state.dirty = false;
+  app.context.window.nasmdSync.handleDirtyStateChange(false);
+  app.context.window.navigator.onLine = true;
+  app.dispatchWindowEvent('online');
+
+  assert.deepEqual(app.apiCalls, []);
+  assert.equal(app.state.pendingRemoteVersion, 2);
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'confirmed-v1',
+    baseVersion: 1,
+    editor: 'offline-draft',
+    fileVersion: 1,
+    lastSavedContent: 'confirmed-v1',
+    originalContent: 'confirmed-v1',
+  });
+});
+
+test('a current offline draft blocks queued and in-flight remote application', async () => {
+  const queued = loadSyncLayer({ version: 1, content: 'confirmed-v1', manualTimers: true });
+  queued.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'remote-v2' }],
+  });
+  queued.editor.value = 'offline-draft';
+  queued.context.window.localStorage = {
+    getItem(key) {
+      return key === 'nasmd_draft_/doc.md' ? '{"content":"offline-draft"}' : null;
+    },
+  };
+  queued.runTimers(300);
+
+  assert.deepEqual(snapshotClient(queued), {
+    baseContent: 'confirmed-v1',
+    baseVersion: 1,
+    editor: 'offline-draft',
+    fileVersion: 1,
+    lastSavedContent: 'confirmed-v1',
+    originalContent: 'confirmed-v1',
+  });
+  assert.equal(queued.state.pendingRemoteVersion, 2);
+
+  let resolveFetch;
+  const fullPromise = new Promise((resolve) => {
+    resolveFetch = resolve;
+  });
+  const inFlight = loadSyncLayer({ version: 1, content: 'confirmed-v1', fullPromise });
+  inFlight.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  inFlight.editor.value = 'offline-draft';
+  inFlight.context.window.localStorage = queued.context.window.localStorage;
+  resolveFetch({ content: 'full-v3', version: 3, mtime: 0 });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(inFlight), {
+    baseContent: 'confirmed-v1',
+    baseVersion: 1,
+    editor: 'offline-draft',
+    fileVersion: 1,
+    lastSavedContent: 'confirmed-v1',
+    originalContent: 'confirmed-v1',
+  });
+  assert.equal(inFlight.state.pendingRemoteVersion, 3);
+});
+
+test('connectivity restoration retries a failed clean pending-version catch-up', async () => {
+  let rejectInitialFetch;
+  let resolveRetryFetch;
+  const initialFetch = new Promise((_resolve, reject) => {
+    rejectInitialFetch = reject;
+  });
+  const retryFetch = new Promise((resolve) => {
+    resolveRetryFetch = resolve;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'local-dirty',
+    baseContent: 'confirmed-v1',
+    dirty: true,
+    fullPromises: [initialFetch, retryFetch],
+    manualTimers: true,
+  });
+  app.context.window.nasmdSync.init();
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v2' }],
+  });
+  app.state.dirty = false;
+  app.editor.value = 'confirmed-v1';
+  app.context.window.nasmdSync.handleDirtyStateChange(false);
+  rejectInitialFetch(new Error('offline'));
+  await flushPromises();
+
+  assert.equal(app.state.pendingRemoteVersion, 2);
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+
+  app.dispatchWindowEvent('online');
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+  resolveRetryFetch({ content: 'full-v2', version: 2, mtime: 0 });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v2',
+    baseVersion: 2,
+    editor: 'full-v2',
+    fileVersion: 2,
+    lastSavedContent: 'full-v2',
+    originalContent: 'full-v2',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+  assert.equal(app.consoleErrors.length, 1);
+});
+
+test('a failed clean pending-version catch-up retries once without looping', async () => {
+  let rejectInitialFetch;
+  let rejectRetryFetch;
+  const initialFetch = new Promise((_resolve, reject) => {
+    rejectInitialFetch = reject;
+  });
+  const retryFetch = new Promise((_resolve, reject) => {
+    rejectRetryFetch = reject;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'local-dirty',
+    baseContent: 'confirmed-v1',
+    dirty: true,
+    fullPromises: [initialFetch, retryFetch],
+    manualTimers: true,
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v2' }],
+  });
+  app.state.dirty = false;
+  app.editor.value = 'confirmed-v1';
+  app.context.window.nasmdSync.handleDirtyStateChange(false);
+  rejectInitialFetch(new Error('temporary server failure'));
+  await flushPromises();
+
+  assert.equal(app.state.pendingRemoteVersion, 2);
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+
+  app.runTimers(1000);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+  rejectRetryFetch(new Error('retry also failed'));
+  await flushPromises();
+  app.runTimers(1000);
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'confirmed-v1',
+    baseVersion: 1,
+    editor: 'confirmed-v1',
+    fileVersion: 1,
+    lastSavedContent: 'confirmed-v1',
+    originalContent: 'confirmed-v1',
+  });
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+  assert.equal(app.state.pendingRemoteVersion, 2);
+  assert.equal(app.consoleErrors.length, 2);
+});
+
+test('a stale fulfilled catch-up response retries the pending high-water once', async () => {
+  let resolveRetryFetch;
+  const retryFetch = new Promise((resolve) => {
+    resolveRetryFetch = resolve;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'local-dirty',
+    baseContent: 'confirmed-v1',
+    dirty: true,
+    fullPromises: [Promise.resolve({ content: 'stale-v2', version: 2, mtime: 0 }), retryFetch],
+    manualTimers: true,
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  app.state.dirty = false;
+  app.editor.value = 'confirmed-v1';
+  app.context.window.nasmdSync.handleDirtyStateChange(false);
+  await flushPromises();
+
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+  assert.equal(app.state.pendingRemoteVersion, 3);
+  assert.equal(app.state.baseVersion, 1);
+
+  app.runTimers(1000);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+  resolveRetryFetch({ content: 'full-v3', version: 3, mtime: 0 });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v3',
+    baseVersion: 3,
+    editor: 'full-v3',
+    fileVersion: 3,
+    lastSavedContent: 'full-v3',
+    originalContent: 'full-v3',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+  assert.deepEqual(app.consoleErrors, []);
+});
+
+test('a gap fetch failing after the client becomes dirty catches up when clean again', async () => {
+  let rejectGapFetch;
+  let resolveCatchUpFetch;
+  const gapFetch = new Promise((_resolve, reject) => {
+    rejectGapFetch = reject;
+  });
+  const catchUpFetch = new Promise((resolve) => {
+    resolveCatchUpFetch = resolve;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'confirmed-v1',
+    fullPromises: [gapFetch, catchUpFetch],
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  app.state.dirty = true;
+  app.editor.value = 'local-dirty';
+  rejectGapFetch(new Error('temporary failure'));
+  await flushPromises();
+
+  assert.equal(app.state.pendingRemoteVersion, 3);
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
+
+  app.state.dirty = false;
+  app.editor.value = 'confirmed-v1';
+  app.context.window.nasmdSync.handleDirtyStateChange(false);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+
+  resolveCatchUpFetch({ content: 'full-v3', version: 3, mtime: 0 });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v3',
+    baseVersion: 3,
+    editor: 'full-v3',
+    fileVersion: 3,
+    lastSavedContent: 'full-v3',
+    originalContent: 'full-v3',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+  assert.equal(app.consoleErrors.length, 1);
 });
 
 test('dirty version gaps do not fetch or change the confirmed baseline', async () => {
@@ -647,11 +1054,77 @@ test('a fetch resolving after the client becomes dirty leaves all content untouc
   assert.deepEqual(app.consoleErrors, []);
 });
 
-test('a clean remote batch applies once from the acknowledged baseline', async () => {
+test('an older fetch response preserves and catches up to a pending remote high-water', async () => {
+  let resolveOlderFetch;
+  let resolvePendingFetch;
+  const olderFetch = new Promise((resolve) => {
+    resolveOlderFetch = resolve;
+  });
+  const pendingFetch = new Promise((resolve) => {
+    resolvePendingFetch = resolve;
+  });
+  const app = loadSyncLayer({
+    version: 7,
+    content: 'confirmed-v7',
+    fullPromises: [olderFetch, pendingFetch],
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 9,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v9' }],
+  });
+  app.state.dirty = true;
+  app.editor.value = 'local-dirty';
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 10,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v10' }],
+  });
+  app.state.dirty = false;
+
+  resolveOlderFetch({ content: 'full-v9', version: 9, mtime: 0 });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v9',
+    baseVersion: 9,
+    editor: 'full-v9',
+    fileVersion: 9,
+    lastSavedContent: 'full-v9',
+    originalContent: 'full-v9',
+  });
+  assert.equal(app.state.pendingRemoteVersion, 10);
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+
+  resolvePendingFetch({ content: 'full-v10', version: 10, mtime: 0 });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'full-v10',
+    baseVersion: 10,
+    editor: 'full-v10',
+    fileVersion: 10,
+    lastSavedContent: 'full-v10',
+    originalContent: 'full-v10',
+  });
+  assert.equal(app.state.pendingRemoteVersion, null);
+  assert.deepEqual(app.consoleErrors, []);
+});
+
+test('a clean remote batch applies then adopts the higher pending snapshot', async () => {
   const app = loadSyncLayer({
     version: 1,
     content: 'transient-editor-value',
     baseContent: 'A\n\nB',
+    fullResult: { content: 'full-v8', version: 8, mtime: 0 },
     manualTimers: true,
   });
   const appliedValues = [];
@@ -669,17 +1142,19 @@ test('a clean remote batch applies once from the acknowledged baseline', async (
     changes: [{ type: 'insert', paraIdx: 0, content: 'X' }],
   });
   app.runTimers(300);
+  await flushPromises();
 
-  assert.deepEqual(appliedValues, ['X\n\nA\n\nB']);
+  assert.deepEqual(appliedValues, ['X\n\nA\n\nB', 'full-v8']);
   assert.deepEqual(snapshotClient(app), {
-    baseContent: 'X\n\nA\n\nB',
-    baseVersion: 2,
-    editor: 'X\n\nA\n\nB',
-    fileVersion: 2,
-    lastSavedContent: 'X\n\nA\n\nB',
-    originalContent: 'X\n\nA\n\nB',
+    baseContent: 'full-v8',
+    baseVersion: 8,
+    editor: 'full-v8',
+    fileVersion: 8,
+    lastSavedContent: 'full-v8',
+    originalContent: 'full-v8',
   });
   assert.equal(app.state.pendingRemoteVersion, null);
+  assert.deepEqual(app.apiCalls, [['mount-0', '/doc.md']]);
 });
 
 test('a clean remote batch that becomes dirty before debounce preserves its baseline', async () => {

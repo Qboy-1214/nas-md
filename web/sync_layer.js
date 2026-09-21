@@ -19,6 +19,8 @@
   var _pendingBatch = [];
   var _queuedVersions = {};
   var _fullFetchRequiredVersions = {};
+  var _fullFetchRetryTimers = {};
+  var _fullFetchRetriedVersions = {};
   // Active collaborators (authorId -> {name, color, lastActive})
   var _collaborators = {};
 
@@ -242,7 +244,7 @@
   }
 
   function deferWhileDirty(data) {
-    if (!window.state || !state.dirty) return false;
+    if (!window.state || (!state.dirty && !hasCurrentOfflineDraft())) return false;
     state.pendingRemoteVersion = Math.max(
       Number(state.pendingRemoteVersion) || 0,
       Number(data && data.newVersion) || 0,
@@ -251,6 +253,39 @@
       window.showToast('检测到远端更新，将在保存时自动合并', 'info');
     }
     return true;
+  }
+
+  function reconcilePendingRemoteVersion(adoptedVersion, mountId, path) {
+    if (!window.state) return;
+    var pendingVersion = Number(state.pendingRemoteVersion) || 0;
+    if (pendingVersion <= (Number(adoptedVersion) || 0)) {
+      state.pendingRemoteVersion = null;
+      return;
+    }
+    if (
+      !state.dirty &&
+      window._vditor &&
+      state.currentMountId === mountId &&
+      state.currentPath === path
+    ) {
+      fetchFullContent(mountId, path, pendingVersion);
+    }
+  }
+
+  function handleDirtyStateChange(isDirty) {
+    if (isDirty || !window.state || (window.navigator && window.navigator.onLine === false)) {
+      return;
+    }
+    reconcilePendingRemoteVersion(state.baseVersion, state.currentMountId, state.currentPath);
+  }
+
+  function hasCurrentOfflineDraft() {
+    if (!window.state || !state.currentPath || !window.localStorage) return false;
+    try {
+      return window.localStorage.getItem('nasmd_draft_' + state.currentPath) !== null;
+    } catch (_e) {
+      return false;
+    }
   }
 
   function getBatchVersion(item) {
@@ -263,6 +298,45 @@
       return item.mountId + ':' + item.path;
     }
     return item.versionKey;
+  }
+
+  function recomputeQueuedVersion(versionKey) {
+    var queuedVersion = 0;
+    var found = false;
+    var queues = [_pendingBatch, _pendingUpdates];
+    for (var queueIdx = 0; queueIdx < queues.length; queueIdx++) {
+      for (var itemIdx = 0; itemIdx < queues[queueIdx].length; itemIdx++) {
+        var item = queues[queueIdx][itemIdx];
+        var itemVersion = getBatchVersion(item);
+        if (getBatchKey(item) === versionKey && Number.isFinite(itemVersion)) {
+          queuedVersion = Math.max(queuedVersion, itemVersion);
+          found = true;
+        }
+      }
+    }
+    if (found) {
+      _queuedVersions[versionKey] = queuedVersion;
+    } else {
+      delete _queuedVersions[versionKey];
+    }
+  }
+
+  function recomputeConsumedVersions(items) {
+    var affectedKeys = [];
+    for (var itemIdx = 0; itemIdx < items.length; itemIdx++) {
+      var itemKey = getBatchKey(items[itemIdx]);
+      if (itemKey && affectedKeys.indexOf(itemKey) === -1) affectedKeys.push(itemKey);
+    }
+    for (var keyIdx = 0; keyIdx < affectedKeys.length; keyIdx++) {
+      recomputeQueuedVersion(affectedKeys[keyIdx]);
+    }
+  }
+
+  function clearPendingChanges() {
+    var discarded = _pendingBatch.concat(_pendingUpdates);
+    _pendingBatch = [];
+    _pendingUpdates = [];
+    recomputeConsumedVersions(discarded);
   }
 
   function applyBatchRemoteChanges(batch) {
@@ -298,8 +372,6 @@
 
     var latest = batch[batch.length - 1];
     if (deferWhileDirty(latest)) {
-      var dirtyKey = getBatchKey(latest);
-      if (dirtyKey) _queuedVersions[dirtyKey] = Number(state.baseVersion) || 0;
       return;
     }
 
@@ -330,7 +402,7 @@
             state.fileVersions[latestKey] = latestVersion;
           }
         }
-        state.pendingRemoteVersion = null;
+        reconcilePendingRemoteVersion(latestVersion, state.currentMountId, state.currentPath);
       }
     }
 
@@ -381,6 +453,7 @@
 
     var pending = _pendingUpdates.slice();
     _pendingUpdates = [];
+    recomputeConsumedVersions(pending);
     applyBatchRemoteChanges(pending);
   }
 
@@ -463,22 +536,85 @@
       _applyTimer = setTimeout(function () {
         var batch = _pendingBatch.slice();
         _pendingBatch = [];
+        recomputeConsumedVersions(batch);
         _applyTimer = null;
         applyBatchRemoteChanges(batch);
       }, 300);
     }
   }
 
-  function fetchFullContent(mountId, path, expectedVersion) {
+  function clearFullFetchRetry(key) {
+    if (_fullFetchRetryTimers[key]) {
+      clearTimeout(_fullFetchRetryTimers[key]);
+      delete _fullFetchRetryTimers[key];
+    }
+    delete _fullFetchRetriedVersions[key];
+  }
+
+  function schedulePendingFetchRetry(mountId, path) {
+    if (!window.state || state.dirty || !window._vditor) return;
+    if (state.currentMountId !== mountId || state.currentPath !== path) return;
+    if (window.navigator && window.navigator.onLine === false) return;
+    if (hasCurrentOfflineDraft()) return;
+
+    var pendingVersion = Number(state.pendingRemoteVersion) || 0;
+    var baseVersion = Number(state.baseVersion) || 0;
+    var key = mountId + ':' + path;
+    if (
+      pendingVersion <= baseVersion ||
+      _fullFetchRetryTimers[key] ||
+      _fullFetchRetriedVersions[key] === pendingVersion
+    ) {
+      return;
+    }
+
+    _fullFetchRetryTimers[key] = setTimeout(function () {
+      delete _fullFetchRetryTimers[key];
+      if (
+        !window.state ||
+        state.dirty ||
+        state.currentMountId !== mountId ||
+        state.currentPath !== path ||
+        (window.navigator && window.navigator.onLine === false) ||
+        hasCurrentOfflineDraft()
+      ) {
+        return;
+      }
+      var retryVersion = Number(state.pendingRemoteVersion) || 0;
+      if (retryVersion <= (Number(state.baseVersion) || 0)) return;
+      _fullFetchRetriedVersions[key] = retryVersion;
+      fetchFullContent(mountId, path, retryVersion, true);
+    }, 1000);
+  }
+
+  function preserveFailedFetchHighWater(mountId, path, expectedVersion) {
+    if (!window.state || state.currentMountId !== mountId || state.currentPath !== path) {
+      return;
+    }
+    var key = mountId + ':' + path;
+    deferWhileDirty({
+      newVersion: Math.max(
+        Number(_fullFetchRequiredVersions[key]) || 0,
+        Number(expectedVersion) || 0,
+      ),
+    });
+  }
+
+  function fetchFullContent(mountId, path, expectedVersion, isRetry) {
     if (!API || !window._vditor) return;
     var key = mountId + ':' + path;
+    if (!isRetry) clearFullFetchRetry(key);
     _fullFetchRequiredVersions[key] = Math.max(
       Number(_fullFetchRequiredVersions[key]) || 0,
       Number(expectedVersion) || 0,
     );
     API.getFile(mountId, path)
       .then(function (result) {
-        if (!result || result.content === undefined) return;
+        if (!result || result.content === undefined) {
+          preserveFailedFetchHighWater(mountId, path, expectedVersion);
+          schedulePendingFetchRetry(mountId, path);
+          return;
+        }
 
         var resultVersion = Number(result.version);
         var requiredVersion = Number(_fullFetchRequiredVersions[key]) || 0;
@@ -503,14 +639,14 @@
           resultVersion <= currentVersion ||
           resultVersion < queuedVersion
         ) {
+          schedulePendingFetchRetry(mountId, path);
           return;
         }
 
         if (_applyTimer) clearTimeout(_applyTimer);
         _applyTimer = null;
-        _pendingBatch = [];
-        _pendingUpdates = [];
-        _queuedVersions[key] = resultVersion;
+        clearPendingChanges();
+        clearFullFetchRetry(key);
 
         _applyingRemote = true;
         window._vditor.setValue(result.content);
@@ -523,7 +659,7 @@
           if (state.fileVersions) {
             state.fileVersions[key] = resultVersion;
           }
-          state.pendingRemoteVersion = null;
+          reconcilePendingRemoteVersion(resultVersion, mountId, path);
         }
         setTimeout(function () {
           _applyingRemote = false;
@@ -532,6 +668,8 @@
       })
       .catch(function (_e) {
         console.error('Failed to fetch full content for sync:', _e);
+        preserveFailedFetchHighWater(mountId, path, expectedVersion);
+        schedulePendingFetchRetry(mountId, path);
       });
   }
 
@@ -561,9 +699,7 @@
     // No unsaved edits — reload the editor with the new content
     if (_applyTimer) clearTimeout(_applyTimer);
     _applyTimer = null;
-    _pendingBatch = [];
-    _pendingUpdates = [];
-    _queuedVersions[key] = serverVersion;
+    clearPendingChanges();
     _applyingRemote = true;
     window._vditor.setValue(data.content);
     var appliedContent = window._vditor.getValue();
@@ -574,7 +710,7 @@
     if (state.fileVersions) {
       state.fileVersions[key] = serverVersion;
     }
-    state.pendingRemoteVersion = null;
+    reconcilePendingRemoteVersion(serverVersion, data.mountId, data.path);
     setTimeout(function () {
       _applyingRemote = false;
     }, 150);
@@ -584,6 +720,7 @@
   // === Initialization ===
 
   var _hooked = false;
+  var _onlineRecoveryHooked = false;
 
   function hookOnEditorInput() {
     if (_hooked) return;
@@ -604,9 +741,19 @@
     };
   }
 
+  function hookOnlineRecovery() {
+    if (_onlineRecoveryHooked || !window.addEventListener) return;
+    _onlineRecoveryHooked = true;
+    window.addEventListener('online', function () {
+      if (hasCurrentOfflineDraft()) return;
+      handleDirtyStateChange(!window.state || Boolean(state.dirty));
+    });
+  }
+
   function init() {
     // Try to hook immediately
     hookOnEditorInput();
+    hookOnlineRecovery();
     // Retry after delays in case onEditorInput is defined later
     setTimeout(hookOnEditorInput, 100);
     setTimeout(hookOnEditorInput, 500);
@@ -635,6 +782,7 @@
     init: init,
     handleRemoteEdit: handleRemoteEdit,
     handleExternalReload: handleExternalReload,
+    handleDirtyStateChange: handleDirtyStateChange,
     applyPendingUpdates: applyPendingUpdates,
     applyRemoteChange: applyRemoteChange,
     applyChangesToContent: applyChangesToContent,

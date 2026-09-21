@@ -3182,6 +3182,12 @@ function startDirtyCheck() {
   // No longer using 500ms polling; driven by Vditor input event via onEditorInput()
 }
 
+function notifySyncDirtyStateChange(isDirty) {
+  if (window.nasmdSync && window.nasmdSync.handleDirtyStateChange) {
+    window.nasmdSync.handleDirtyStateChange(isDirty);
+  }
+}
+
 function onEditorInput() {
   if (!window._vditor) return;
   const isDirty = _isContentDirty(window._vditor.getValue(), window._originalContent);
@@ -3189,6 +3195,7 @@ function onEditorInput() {
     state.dirty = isDirty;
     const btn = $('btn-save');
     if (btn) btn.classList.toggle('dirty', isDirty);
+    notifySyncDirtyStateChange(isDirty);
   }
   if (isDirty && state.autoSave && state.currentPath) {
     // Debounce auto-save for all mount types to avoid race condition
@@ -3236,15 +3243,19 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function markDirty() {
+  const changed = !state.dirty;
   state.dirty = true;
   const btn = $('btn-save');
   if (btn) btn.classList.add('dirty');
+  if (changed) notifySyncDirtyStateChange(true);
 }
 
 function markClean() {
+  const changed = state.dirty;
   state.dirty = false;
   const btn = $('btn-save');
   if (btn) btn.classList.remove('dirty');
+  if (changed) notifySyncDirtyStateChange(false);
 }
 
 // === 侧边栏折叠（移动端） ===
