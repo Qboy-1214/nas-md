@@ -21,6 +21,7 @@ Conflict resolution (base_version mismatch):
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 import os
 import secrets
@@ -255,6 +256,13 @@ class _FileVersion:
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
 
+@dataclass(frozen=True)
+class _DiskSnapshot:
+    data: bytes
+    content: str
+    mod_time: int
+
+
 class FileVersionStore:
     """Thread-safe file version store with paragraph-level merge."""
 
@@ -343,15 +351,76 @@ class FileVersionStore:
         )
         return True
 
-    def _refresh_unpersisted(self, fv: _FileVersion, file_key: str, file_path: str) -> bool:
-        if fv.persisted:
-            return False
+    def _reconcile_disk_locked(
+        self,
+        fv: _FileVersion,
+        file_key: str,
+        file_path: str,
+    ) -> tuple[dict, _DiskSnapshot | None]:
+        """Reconcile one file from its current disk state while ``fv.lock`` is held."""
         try:
-            with open(file_path, encoding="utf-8", errors="replace") as f:
-                new_content = f.read()
-        except OSError:
-            return False
-        return self._apply_external_content(fv, file_key, file_path, new_content)
+            with open(file_path, "rb") as f:
+                data = f.read()
+                mod_time = int(os.fstat(f.fileno()).st_mtime * 1000)
+        except FileNotFoundError:
+            fv.persisted = False
+            return (
+                {
+                    "applied": False,
+                    "newVersion": fv.version,
+                    "content": fv.content,
+                },
+                None,
+            )
+        except OSError as e:
+            logger.error("Failed to reconcile file %s: %s", file_path, e)
+            return (
+                {
+                    "applied": False,
+                    "newVersion": fv.version,
+                    "content": fv.content,
+                    "errorCode": "read_failed",
+                    "message": "Unable to verify current file state",
+                },
+                None,
+            )
+
+        snapshot = _DiskSnapshot(
+            data=data,
+            content=io.TextIOWrapper(
+                io.BytesIO(data),
+                encoding="utf-8",
+                errors="replace",
+                newline=None,
+            ).read(),
+            mod_time=mod_time,
+        )
+        applied = self._apply_external_content(fv, file_key, file_path, snapshot.content)
+        return (
+            {
+                "applied": applied,
+                "newVersion": fv.version,
+                "content": fv.content,
+            },
+            snapshot,
+        )
+
+    @staticmethod
+    def _with_external_transition(result: dict, transition: dict) -> dict:
+        if transition["applied"]:
+            result["_externalTransition"] = transition
+        return result
+
+    @staticmethod
+    def _reconciliation_error_result(fv: _FileVersion, transition: dict) -> dict:
+        return {
+            "applied": False,
+            "merged": False,
+            "newVersion": fv.version,
+            "content": fv.content,
+            "errorCode": transition["errorCode"],
+            "message": transition["message"],
+        }
 
     def _get_or_load_file(self, file_key: str, file_path: str) -> _FileVersion:
         with self._lock:
@@ -388,11 +457,11 @@ class FileVersionStore:
         """Persist an empty file only if it is still missing."""
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            if fv.persisted and not os.path.isfile(file_path):
-                fv.persisted = False
-            self._refresh_unpersisted(fv, file_key, file_path)
+            transition, _snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            if transition.get("errorCode"):
+                return self._reconciliation_error_result(fv, transition)
             if fv.persisted:
-                return self._resync_result(fv)
+                return self._with_external_transition(self._resync_result(fv), transition)
 
             _write_text_atomically(file_path, "", before_write)
             previous_content = fv.content
@@ -449,33 +518,57 @@ class FileVersionStore:
         """
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            refreshed = self._refresh_unpersisted(fv, file_key, file_path)
-            # Legacy requests without baseContent describe the disk content that
-            # this operation just discovered, now confirmed as the next version.
-            if refreshed and base_content is None and base_version == fv.version - 1:
-                base_version = fv.version
+            transition, _snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            if transition.get("errorCode"):
+                return self._reconciliation_error_result(fv, transition)
+
+            def finish(result: dict) -> dict:
+                return self._with_external_transition(result, transition)
+
+            def attach_transition(error: TypeError | ValueError) -> TypeError | ValueError:
+                if transition["applied"]:
+                    error._external_transition = transition
+                return error
+
+            if (
+                transition["applied"]
+                and base_content is None
+                and base_version == fv.version - 1
+                and isinstance(client_content, str)
+            ):
+                try:
+                    validate_changes(changes, len(split_paragraphs(fv.content)))
+                    confirmed_content = apply_diff(fv.content, changes)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    if confirmed_content == client_content:
+                        base_version = fv.version
             if base_version < 0 or base_version > fv.version:
-                return self._resync_result(fv)
+                return finish(self._resync_result(fv))
 
             submitted_base = base_content
             if submitted_base is None and base_version == fv.version:
                 submitted_base = fv.content
             if submitted_base is None:
-                return self._resync_result(fv)
+                return finish(self._resync_result(fv))
             if not isinstance(submitted_base, str):
-                raise TypeError("baseContent must be a string")
+                raise attach_transition(TypeError("baseContent must be a string"))
 
-            validate_changes(changes, len(split_paragraphs(submitted_base)))
-            reconstructed_content = apply_diff(submitted_base, changes)
+            try:
+                validate_changes(changes, len(split_paragraphs(submitted_base)))
+                reconstructed_content = apply_diff(submitted_base, changes)
+            except (TypeError, ValueError) as e:
+                raise attach_transition(e)
 
             submitted_content = client_content
             if submitted_content is None:
                 submitted_content = reconstructed_content
             else:
                 if not isinstance(submitted_content, str):
-                    raise TypeError("content must be a string")
+                    raise attach_transition(TypeError("content must be a string"))
                 if split_paragraphs(reconstructed_content) != split_paragraphs(submitted_content):
-                    return self._resync_result(fv)
+                    return finish(self._resync_result(fv))
                 if reconstructed_content != submitted_content:
                     # Legacy clients sent full content whose incidental whitespace could
                     # overwrite newer server formatting. Their declared operations are
@@ -485,17 +578,19 @@ class FileVersionStore:
             try:
                 canonical_changes = compute_diff(submitted_base, submitted_content)
             except DiffWorkLimitExceeded:
-                return self._resync_result(fv)
+                return finish(self._resync_result(fv))
             merged = base_version != fv.version
             if not merged and submitted_base != fv.content:
-                return self._resync_result(fv)
+                return finish(self._resync_result(fv))
             if not canonical_changes:
-                return {
-                    "applied": False,
-                    "merged": False,
-                    "newVersion": fv.version,
-                    "content": fv.content,
-                }
+                return finish(
+                    {
+                        "applied": False,
+                        "merged": False,
+                        "newVersion": fv.version,
+                        "content": fv.content,
+                    }
+                )
 
             if not merged:
                 changes_to_apply = canonical_changes
@@ -504,35 +599,42 @@ class FileVersionStore:
                 try:
                     remote_changes = compute_diff(submitted_base, fv.content)
                 except DiffWorkLimitExceeded:
-                    return self._resync_result(fv)
-                changes_to_apply = transform_changes(
-                    canonical_changes,
-                    remote_changes,
-                    len(split_paragraphs(submitted_base)),
-                )
-                new_content = apply_diff(fv.content, changes_to_apply)
+                    return finish(self._resync_result(fv))
+                try:
+                    changes_to_apply = transform_changes(
+                        canonical_changes,
+                        remote_changes,
+                        len(split_paragraphs(submitted_base)),
+                    )
+                    new_content = apply_diff(fv.content, changes_to_apply)
+                except (TypeError, ValueError) as e:
+                    raise attach_transition(e)
 
             if not changes_to_apply or new_content == fv.content:
-                return {
-                    "applied": False,
-                    "merged": False,
-                    "newVersion": fv.version,
-                    "content": fv.content,
-                }
+                return finish(
+                    {
+                        "applied": False,
+                        "merged": False,
+                        "newVersion": fv.version,
+                        "content": fv.content,
+                    }
+                )
 
             # Write to disk
             try:
                 _write_text_atomically(file_path, new_content, before_write)
             except OSError:
                 logger.exception("Failed to write file %s", file_path)
-                return {
-                    "applied": False,
-                    "merged": False,
-                    "newVersion": fv.version,
-                    "content": fv.content,
-                    "errorCode": "write_failed",
-                    "message": "Unable to save file",
-                }
+                return finish(
+                    {
+                        "applied": False,
+                        "merged": False,
+                        "newVersion": fv.version,
+                        "content": fv.content,
+                        "errorCode": "write_failed",
+                        "message": "Unable to save file",
+                    }
+                )
 
             # Update in-memory state
             previous_content = fv.content
@@ -559,13 +661,15 @@ class FileVersionStore:
                 user_agent=user_agent,
             )
 
-            return {
-                "applied": True,
-                "merged": merged,
-                "newVersion": fv.version,
-                "content": new_content,
-                "appliedChanges": changes_to_apply,
-            }
+            return finish(
+                {
+                    "applied": True,
+                    "merged": merged,
+                    "newVersion": fv.version,
+                    "content": new_content,
+                    "appliedChanges": changes_to_apply,
+                }
+            )
 
     @staticmethod
     def _resync_result(fv: _FileVersion) -> dict:
@@ -577,12 +681,25 @@ class FileVersionStore:
             "content": fv.content,
         }
 
-    def apply_external_change(
-        self,
-        file_key: str,
-        file_path: str,
-        content: str | None = None,
-    ) -> dict:
+    def reconcile_disk(self, file_key: str, file_path: str) -> dict:
+        """Apply the current disk state once and return its version transition."""
+        fv = self._get_or_load_file(file_key, file_path)
+        with fv.lock:
+            transition, _snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            return transition
+
+    def read_reconciled_disk(self, file_key: str, file_path: str) -> dict:
+        """Return bytes and metadata from the same locked read used for reconciliation."""
+        fv = self._get_or_load_file(file_key, file_path)
+        with fv.lock:
+            transition, snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            return {
+                "transition": transition,
+                "data": snapshot.data if snapshot is not None else None,
+                "modTime": snapshot.mod_time if snapshot is not None else None,
+            }
+
+    def apply_external_change(self, file_key: str, file_path: str) -> dict:
         """Apply an external file modification (e.g., from watchdog).
 
         Reads the current disk content and bumps the version number,
@@ -590,27 +707,7 @@ class FileVersionStore:
 
         Returns dict with applied/newVersion/content.
         """
-        fv = self._get_or_load_file(file_key, file_path)
-        with fv.lock:
-            if content is None:
-                try:
-                    with open(file_path, encoding="utf-8", errors="replace") as f:
-                        content = f.read()
-                except OSError as e:
-                    logger.error("Failed to read external change %s: %s", file_path, e)
-                    return {
-                        "applied": False,
-                        "newVersion": fv.version,
-                        "content": fv.content,
-                    }
-
-            applied = self._apply_external_content(fv, file_key, file_path, content)
-
-            return {
-                "applied": applied,
-                "newVersion": fv.version,
-                "content": fv.content,
-            }
+        return self.reconcile_disk(file_key, file_path)
 
     def get_current_version(self, file_key: str) -> int:
         with self._lock:

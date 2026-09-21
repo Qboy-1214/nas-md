@@ -363,6 +363,11 @@ def test_create_empty_file_resyncs_invalid_utf8_external_creation(store, tmp_pat
         "resyncRequired": True,
         "newVersion": 1,
         "content": "\ufffd",
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": "\ufffd",
+        },
     }
     assert file_path.read_bytes() == b"\xff"
     assert store.get_current_snapshot(file_key) == {"version": 1, "content": "\ufffd"}
@@ -1342,6 +1347,8 @@ def test_apply_changes_3way_merge_with_shifting_indices(store, test_file):
     """When a prior version inserts paragraphs, subsequent edits based on older base_version shift correctly."""
     # Seed document: P0, P1, P2 (version 0)
     base = "P0\n\nP1\n\nP2"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
     store.init_file("mount-0:/test.md", test_file, base)
 
     # User 1 inserts HEADER at index 0 -> version 1
@@ -1561,6 +1568,8 @@ def test_stale_change_requires_resync_after_external_reload(store, test_file):
 def test_restart_stale_client_three_way_merges(tmp_path, test_file):
     key = "mount-0:/test.md"
     base = "A\n\nB\n\nC"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
     first = FileVersionStore(storage_dir=str(tmp_path / ".version_history"))
     first.init_file(key, test_file, base)
     first.apply_changes(
@@ -2086,6 +2095,55 @@ def test_diff_work_limit_returns_resync_without_side_effects(store, test_file, m
     before_write.assert_not_called()
     with open(test_file, encoding="utf-8") as f:
         assert f.read() == base
+
+
+def test_reconcile_read_failure_blocks_client_write(store, test_file, monkeypatch):
+    key = "mount-0:/test.md"
+    base = "A\n\nB"
+    external = "A-external\n\nB"
+    target = "A\n\nB-client"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(external)
+
+    original_open = open
+    read_attempted = False
+
+    def fail_reconcile_read(path, *args, **kwargs):
+        nonlocal read_attempted
+        mode = args[0] if args else "r"
+        if os.fspath(path) == test_file and "r" in mode:
+            read_attempted = True
+            raise PermissionError("transient read failure")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(file_version_store_module, "open", fail_reconcile_read, raising=False)
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        [{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        "local",
+        "Local",
+        "#0f0",
+        client_content=target,
+        base_content=base,
+    )
+
+    assert read_attempted
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "newVersion": 0,
+        "content": base,
+        "errorCode": "read_failed",
+        "message": "Unable to verify current file state",
+    }
+    assert store.get_current_snapshot(key) == {"version": 0, "content": base}
+    assert original_open(test_file, encoding="utf-8").read() == external
 
 
 def test_stale_exact_delimiter_edit_three_way_merges(store, test_file):

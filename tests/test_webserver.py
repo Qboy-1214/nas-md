@@ -503,6 +503,26 @@ def test_watcher_external_creation_increments_once_and_broadcasts(tmp_path, monk
         },
     )
 
+    edit_result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(target),
+        base_version=1,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        base_content="external",
+        client_content="client",
+    )
+    assert edit_result["newVersion"] == 2
+    broadcast.reset_mock()
+
+    on_change(mount_id, "/external.md", "external")
+
+    assert target.read_text(encoding="utf-8") == "client"
+    assert store.get_current_snapshot(file_key) == {"version": 2, "content": "client"}
+    broadcast.assert_not_called()
+
 
 # --- Write operation API tests ---
 
@@ -524,8 +544,10 @@ class TestWriteFileAPI:
             assert f.read() == content
 
     def test_get_external_creation_advances_existing_unpersisted_version(
-        self, writable_server_url, writable_dir
+        self, writable_server_url, writable_dir, monkeypatch
     ):
+        from unittest.mock import Mock
+
         from nas_md.webserver.file_version_store import get_store
 
         name = f"get-external-{os.path.basename(writable_dir)}.md"
@@ -533,6 +555,8 @@ class TestWriteFileAPI:
         path = os.path.join(writable_dir, name)
         file_key = f"writable:{rel_path}"
         store = get_store()
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
         store.init_file(file_key, path, "", persisted=False)
         with open(path, "w", encoding="utf-8") as f:
             f.write("external")
@@ -545,11 +569,145 @@ class TestWriteFileAPI:
         assert body == "external"
         assert headers["x-file-version"] == "1"
         assert store.get_current_snapshot(file_key) == {"version": 1, "content": "external"}
+        broadcast.assert_called_once_with(
+            file_key,
+            exclude_id=None,
+            event={
+                "type": "external_reload",
+                "mountId": "writable",
+                "path": rel_path,
+                "newVersion": 1,
+                "content": "external",
+            },
+        )
 
         status, body, headers = _get(
             f"{writable_server_url}/api/mounts/writable/file?path={rel_path}"
         )
         assert (status, body, headers["x-file-version"]) == (200, "external", "1")
+        assert broadcast.call_count == 1
+
+    def test_get_uses_reconciled_disk_snapshot_for_body_version_and_mtime(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver.file_version_store import FileVersionStore
+
+        rel_path = "/get-snapshot.md"
+        path = os.path.join(writable_dir, "get-snapshot.md")
+        old_content = "old"
+        external = "external-current"
+        old_mtime = 1_600_000_000
+        external_mtime = 1_700_000_123
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(old_content)
+        os.utime(path, (old_mtime, old_mtime))
+        original_init_file = FileVersionStore.init_file
+        broadcast = Mock()
+
+        def init_then_change_disk(self, *args, **kwargs):
+            version = original_init_file(self, *args, **kwargs)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(external)
+            os.utime(path, (external_mtime, external_mtime))
+            return version
+
+        monkeypatch.setattr(FileVersionStore, "init_file", init_then_change_disk)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body, headers = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}"
+        )
+
+        assert (status, body) == (200, external)
+        assert headers["x-file-version"] == "1"
+        assert headers["x-mod-time"] == str(external_mtime * 1000)
+        assert broadcast.call_args.kwargs["event"] == {
+            "type": "external_reload",
+            "mountId": "writable",
+            "path": rel_path,
+            "newVersion": 1,
+            "content": external,
+        }
+
+    def test_get_crlf_content_is_a_valid_post_baseline(self, writable_server_url, writable_dir):
+        rel_path = "/crlf-baseline.md"
+        path = os.path.join(writable_dir, "crlf-baseline.md")
+        with open(path, "wb") as f:
+            f.write(b"A\r\n\r\nB")
+
+        status, body, headers = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}"
+        )
+
+        assert (status, body, headers["x-file-version"]) == (200, "A\n\nB", "0")
+
+        status, response_body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": body,
+                "content": "A\n\nB-client",
+                "changes": [{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+            },
+        )
+
+        assert status == 200
+        response = json.loads(response_body)
+        assert (response["applied"], response["merged"]) == (True, False)
+        assert (response["newVersion"], response["content"]) == (1, "A\n\nB-client")
+        assert "resyncRequired" not in response
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "A\n\nB-client"
+
+    def test_post_reconciles_external_disk_change_before_merging_client_edit(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver.file_version_store import get_store
+
+        name = f"post-external-race-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        base = "A\n\nB"
+        external = "A-external\n\nB"
+        expected = "A-external\n\nB-client"
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+            data=base.encode("utf-8"),
+        )
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 1
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(external)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 1,
+                "baseContent": base,
+                "content": "A\n\nB-client",
+                "changes": [{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+            },
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 3
+        assert json.loads(body)["content"] == expected
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == expected
+        assert get_store().get_current_snapshot(file_key) == {"version": 3, "content": expected}
+        events = [call.kwargs["event"] for call in broadcast.call_args_list]
+        assert [(event["type"], event["newVersion"]) for event in events] == [
+            ("external_reload", 2),
+            ("remote_edit", 3),
+        ]
+        assert events[0]["content"] == external
 
     def test_write_file_creates_missing_empty_markdown_without_history_or_broadcast(
         self, writable_server_url, writable_dir, monkeypatch
@@ -785,6 +943,25 @@ class TestWriteFileAPI:
         )
 
         assert status == 200
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 1,
+            "content": external,
+        }
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 1,
+                "baseContent": external,
+                "content": "external\n\nupdated",
+                "changes": [{"type": "replace", "paraIdx": 1, "content": "updated"}],
+            },
+        )
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 2
         assert json.loads(body)["content"] == "external\n\nupdated"
 
     def test_failed_missing_nonempty_put_does_not_become_post_baseline(
@@ -827,6 +1004,25 @@ class TestWriteFileAPI:
         )
 
         assert status == 200
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 1,
+            "content": external,
+        }
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 1,
+                "baseContent": external,
+                "content": "external\n\nupdated",
+                "changes": [{"type": "replace", "paraIdx": 1, "content": "updated"}],
+            },
+        )
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 2
         assert json.loads(body)["content"] == "external\n\nupdated"
 
     def test_missing_empty_put_serializes_with_changes_for_same_file(
@@ -1393,6 +1589,60 @@ class TestWriteFileAPI:
         }
         with open(path, encoding="utf-8") as f:
             assert f.read() == old_content
+
+    def test_write_markdown_work_limit_reconciles_unseen_external_change(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver import paragraph_diff
+        from nas_md.webserver.file_version_store import get_store
+
+        rel_path = "/work-limit-external.md"
+        path = os.path.join(writable_dir, "work-limit-external.md")
+        file_key = f"writable:{rel_path}"
+        base = "A\n\nB"
+        external = "A-external\n\nB"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+        store = get_store()
+        store.init_file(file_key, path, base)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(external)
+        broadcast = Mock()
+
+        def exhaust_diff(_old_text, _new_text):
+            raise paragraph_diff.DiffWorkLimitExceeded
+
+        monkeypatch.setattr(paragraph_diff, "compute_diff", exhaust_diff)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+            data=b"unreachable replacement",
+        )
+
+        assert status == 409
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 1,
+            "content": external,
+        }
+        assert store.get_current_snapshot(file_key) == {"version": 1, "content": external}
+        assert open(path, encoding="utf-8").read() == external
+        broadcast.assert_called_once_with(
+            file_key,
+            exclude_id=None,
+            event={
+                "type": "external_reload",
+                "mountId": "writable",
+                "path": rel_path,
+                "newVersion": 1,
+                "content": external,
+            },
+        )
 
     def test_write_markdown_work_limit_returns_one_atomic_store_snapshot(
         self, writable_server_url, writable_dir, monkeypatch
@@ -1994,6 +2244,53 @@ class TestSubmitChangesAPI:
         assert get_store().get_current_version("writable:/invalid-change.md") == 0
         watcher.mark_expected.assert_not_called()
         broadcast.assert_not_called()
+
+    def test_invalid_changes_broadcast_external_reconciliation(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver.file_version_store import get_store
+
+        rel_path = "/invalid-after-external.md"
+        path = os.path.join(writable_dir, "invalid-after-external.md")
+        file_key = f"writable:{rel_path}"
+        base = "base"
+        external = "external"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+        store = get_store()
+        store.init_file(file_key, path, base)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(external)
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": "invalid",
+                "changes": [{"type": "replace", "paraIdx": -1, "content": "invalid"}],
+            },
+        )
+
+        assert status == 400
+        assert json.loads(body) == {"error": "Invalid changes: paraIdx must be nonnegative"}
+        assert store.get_current_snapshot(file_key) == {"version": 1, "content": external}
+        assert open(path, encoding="utf-8").read() == external
+        broadcast.assert_called_once_with(
+            file_key,
+            exclude_id=None,
+            event={
+                "type": "external_reload",
+                "mountId": "writable",
+                "path": rel_path,
+                "newVersion": 1,
+                "content": external,
+            },
+        )
 
     def test_submit_changes_readonly_mount_rejected(self, writable_server_url):
         """POST /changes on a readonly mount should return 403."""

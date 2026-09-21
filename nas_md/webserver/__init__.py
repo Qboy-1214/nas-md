@@ -20,7 +20,7 @@ import traceback
 import uuid
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from http.cookies import SimpleCookie
-from io import BytesIO
+from io import BytesIO, TextIOWrapper
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
@@ -93,6 +93,32 @@ def _content_type(path: str) -> str:
     if ct.startswith("text/") and "charset" not in ct:
         return ct + "; charset=utf-8"
     return ct
+
+
+def _broadcast_external_reload(
+    file_key: str,
+    mount_id: str,
+    rel_path: str,
+    transition: dict | None,
+) -> None:
+    if not transition or not transition.get("applied"):
+        return
+    try:
+        from nas_md.webserver.sse_handler import sse_broadcast
+
+        sse_broadcast(
+            file_key,
+            exclude_id=None,
+            event={
+                "type": "external_reload",
+                "mountId": mount_id,
+                "path": rel_path,
+                "newVersion": transition["newVersion"],
+                "content": transition["content"],
+            },
+        )
+    except Exception as e:
+        logger.warning("External reload broadcast failed: %s", e)
 
 
 # --- Mount Manager ---
@@ -1391,11 +1417,28 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
                 file_key = f"{mount_id}:{rel_path}"
                 store = get_store()
-                content = data.decode("utf-8", errors="replace")
+                content = TextIOWrapper(
+                    BytesIO(data),
+                    encoding="utf-8",
+                    errors="replace",
+                    newline=None,
+                ).read()
                 store.init_file(file_key, abs_path, content)
-                version = store.apply_external_change(file_key, abs_path, content)["newVersion"]
+                disk_result = store.read_reconciled_disk(file_key, abs_path)
+                transition = disk_result["transition"]
+                if transition.get("errorCode"):
+                    return self._send_error(transition["message"], 500)
+                if disk_result["data"] is None:
+                    return self._send_error("File not found", 404)
+                data = disk_result["data"]
+                if "charset=" in ct:
+                    data = transition["content"].encode("utf-8")
+                mtime = disk_result["modTime"]
+                version = transition["newVersion"]
             except Exception:
                 version = 0
+            else:
+                _broadcast_external_reload(file_key, mount_id, rel_path, transition)
             # Tier 3: no-store + Gzip for text/markdown files > 512 bytes
             # 注意：X-File-Version 是服务端元数据，不受 Gzip 影响，前端轮询逻辑不变
             compressed, did_compress = _compress(data, ct, handler=self)
@@ -1502,14 +1545,27 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             changes = compute_diff(old_content, new_text) if old_content != new_text else []
         except DiffWorkLimitExceeded:
-            snapshot = store.get_current_snapshot(file_key)
+            transition = store.reconcile_disk(file_key, abs_path)
+            if transition.get("errorCode"):
+                return self._send_json(
+                    {
+                        "applied": False,
+                        "merged": False,
+                        "newVersion": transition["newVersion"],
+                        "content": transition["content"],
+                        "errorCode": transition["errorCode"],
+                        "message": transition["message"],
+                    },
+                    500,
+                )
+            _broadcast_external_reload(file_key, mount_id, rel_path, transition)
             return self._send_json(
                 {
                     "applied": False,
                     "merged": False,
                     "resyncRequired": True,
-                    "newVersion": snapshot["version"],
-                    "content": snapshot["content"],
+                    "newVersion": transition["newVersion"],
+                    "content": transition["content"],
                 },
                 409,
             )
@@ -1565,6 +1621,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 client_content=new_text,
                 before_write=mark_expected,
             )
+
+        external_transition = result.pop("_externalTransition", None)
+        _broadcast_external_reload(file_key, mount_id, rel_path, external_transition)
 
         if result.get("errorCode"):
             return self._send_json(result, 500)
@@ -1809,7 +1868,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 before_write=mark_expected,
             )
         except (TypeError, ValueError) as e:
+            _broadcast_external_reload(
+                file_key,
+                mount_id,
+                rel_path,
+                getattr(e, "_external_transition", None),
+            )
             return self._send_error(f"Invalid changes: {e}", 400)
+
+        external_transition = result.pop("_externalTransition", None)
+        _broadcast_external_reload(file_key, mount_id, rel_path, external_transition)
 
         # Broadcast to other clients via SSE
         if result.get("applied"):
@@ -2848,11 +2916,10 @@ def serve(
 
         watcher = get_watcher()
 
-        def _on_external_change(mount_id: str, rel_path: str, content: str):
+        def _on_external_change(mount_id: str, rel_path: str, _content: str):
             """Called by file_watcher when a file is modified externally."""
             try:
                 from nas_md.webserver.file_version_store import get_store
-                from nas_md.webserver.sse_handler import sse_broadcast
 
                 file_key = f"{mount_id}:{rel_path}"
                 # Find abs_path
@@ -2864,19 +2931,9 @@ def serve(
                     return
                 store = get_store()
                 store.init_file(file_key, abs_path, "", persisted=False)
-                result = store.apply_external_change(file_key, abs_path, content)
+                result = store.reconcile_disk(file_key, abs_path)
                 if result.get("applied"):
-                    sse_broadcast(
-                        file_key,
-                        exclude_id=None,
-                        event={
-                            "type": "external_reload",
-                            "mountId": mount_id,
-                            "path": rel_path,
-                            "newVersion": result["newVersion"],
-                            "content": result["content"],
-                        },
-                    )
+                    _broadcast_external_reload(file_key, mount_id, rel_path, result)
                     logger.info(
                         "External change broadcast: %s:%s v%d",
                         mount_id,
