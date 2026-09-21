@@ -22,6 +22,7 @@ from nas_md.webserver import (
     _create_server,
     serve,
 )
+from nas_md.webserver.paragraph_diff import compute_diff
 
 
 def _find_free_port() -> int:
@@ -43,6 +44,35 @@ def _get(url: str, headers: dict | None = None) -> tuple[int, dict]:
             return resp.status, {k.lower(): v for k, v in resp.headers.items()}
     except urllib.error.HTTPError as e:
         return e.code, {}
+
+
+def test_sparse_4000_paragraph_diff_completes_within_linear_edit_budget():
+    paragraphs = [f"paragraph-{idx}" for idx in range(4000)]
+    old_text = "\n\n".join(paragraphs)
+    new_paragraphs = list(paragraphs)
+    new_paragraphs[0] = "first-edited"
+    new_paragraphs[-1] = "last-edited"
+    new_text = "\n\n".join(new_paragraphs)
+
+    started = time.perf_counter()
+    changes = compute_diff(old_text, new_text)
+    elapsed = time.perf_counter() - started
+
+    assert changes == [
+        {
+            "type": "replace",
+            "paraIdx": 0,
+            "content": "first-edited",
+            "fallbackDelimiter": "\n\n",
+        },
+        {
+            "type": "replace",
+            "paraIdx": 3999,
+            "content": "last-edited",
+            "fallbackDelimiter": "",
+        },
+    ]
+    assert elapsed < 10
 
 
 @pytest.fixture
@@ -148,15 +178,15 @@ class TestCompress:
         assert decompressed == data
 
     def test_image_types_skipped(self):
-        data, compressed = _compress(b"x" * 1000, "image/png")
+        _data, compressed = _compress(b"x" * 1000, "image/png")
         assert not compressed
 
     def test_font_types_skipped(self):
-        data, compressed = _compress(b"x" * 1000, "font/woff2")
+        _data, compressed = _compress(b"x" * 1000, "font/woff2")
         assert not compressed
 
     def test_event_stream_skipped(self):
-        data, compressed = _compress(b"x" * 1000, "text/event-stream")
+        _data, compressed = _compress(b"x" * 1000, "text/event-stream")
         assert not compressed
 
     def test_json_compressed(self):

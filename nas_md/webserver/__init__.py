@@ -1488,7 +1488,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         file_key = f"{mount_id}:{rel_path}"
 
         old_content = ""
-        if os.path.isfile(abs_path):
+        file_existed = os.path.isfile(abs_path)
+        if file_existed:
             try:
                 with open(abs_path, encoding="utf-8", errors="replace") as f:
                     old_content = f.read()
@@ -1510,17 +1511,31 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass  # watcher optional
 
-        result = store.apply_changes(
-            file_key=file_key,
-            file_path=abs_path,
-            base_version=store.get_current_version(file_key),
-            changes=changes,
-            author_id=session_id,
-            author_name=author_name,
-            author_color=author_color,
-            client_content=new_text,
-            before_write=mark_expected,
-        )
+        if not file_existed and not new_text:
+            parent = os.path.dirname(abs_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            mark_expected(new_text)
+            with open(abs_path, "w", encoding="utf-8"):
+                pass
+            result = {
+                "applied": False,
+                "merged": False,
+                "newVersion": store.get_current_version(file_key),
+                "content": new_text,
+            }
+        else:
+            result = store.apply_changes(
+                file_key=file_key,
+                file_path=abs_path,
+                base_version=store.get_current_version(file_key),
+                changes=changes,
+                author_id=session_id,
+                author_name=author_name,
+                author_color=author_color,
+                client_content=new_text,
+                before_write=mark_expected,
+            )
 
         if changes and not result.get("applied"):
             return self._send_json(result, 409)

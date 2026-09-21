@@ -83,14 +83,100 @@ test('paragraph diff operations match the backend contract', async ({ page }) =>
   expect(results).toEqual({
     delimiterOnly: [{ type: 'delimiter', paraIdx: 0, delimiter: '\n\n\n' }],
     multiReplace: [
-      { type: 'replace', paraIdx: 0, content: 'X', delimiter: '\n\n' },
-      { type: 'replace', paraIdx: 1, content: 'Y', delimiter: '' },
+      { type: 'replace', paraIdx: 0, content: 'X', fallbackDelimiter: '\n\n' },
+      { type: 'replace', paraIdx: 1, content: 'Y', fallbackDelimiter: '' },
     ],
     prefixMultiReplace: [
       { type: 'prefix', content: ' \n' },
-      { type: 'replace', paraIdx: 0, content: 'X', delimiter: '\n \n' },
-      { type: 'replace', paraIdx: 1, content: 'Y', delimiter: '' },
+      {
+        type: 'replace',
+        paraIdx: 0,
+        content: 'X',
+        delimiter: '\n \n',
+        fallbackDelimiter: '\n \n',
+      },
+      { type: 'replace', paraIdx: 1, content: 'Y', fallbackDelimiter: '' },
     ],
+  });
+});
+
+test('paragraph diff adversarial operations match the backend contract', async ({ page }) => {
+  await page.goto('/admin');
+
+  const results = await page.evaluate(() => {
+    const paragraphs = Array.from({ length: 4000 }, (_, idx) => `paragraph-${idx}`);
+    const sparseTarget = paragraphs.slice();
+    sparseTarget[0] = 'first-edited';
+    sparseTarget[sparseTarget.length - 1] = 'last-edited';
+    const fallbackOld = Array.from({ length: 300 }, (_, idx) => `old-${idx}`)
+      .concat(['ANCHOR'])
+      .concat(Array.from({ length: 300 }, (_, idx) => `old-tail-${idx}`));
+    const fallbackNew = Array.from({ length: 300 }, (_, idx) => `new-${idx}`)
+      .concat(['ANCHOR'])
+      .concat(Array.from({ length: 300 }, (_, idx) => `new-tail-${idx}`));
+    return {
+      insertionShift: window.nasmdDiff.computeParagraphDiff(
+        'A\n\nB\n\nC\n\nD',
+        'A\n\nX\n\nB\n\nC\n\nD',
+      ),
+      deletionShift: window.nasmdDiff.computeParagraphDiff(
+        'A\n\nX\n\nB\n\nC\n\nD',
+        'A\n\nB\n\nC\n\nD',
+      ),
+      repeated: window.nasmdDiff.computeParagraphDiff(
+        'A\n\nX\n\nA\n\nY\n\nA',
+        'A\n\nZ\n\nA\n\nY\n\nA',
+      ),
+      noCommon: window.nasmdDiff.computeParagraphDiff('A\n\nB', 'X\n\nY'),
+      mixed: window.nasmdDiff.computeParagraphDiff(
+        'A\n\nB\n\nC\n\nD\n\nE\n\nF',
+        'A\n\nB2\n\nX\n\nD\n\nF\n\nG',
+      ),
+      sparseLarge: window.nasmdDiff.computeParagraphDiff(
+        paragraphs.join('\n\n'),
+        sparseTarget.join('\n\n'),
+      ),
+      hirschbergFallback: window.nasmdDiff.computeParagraphDiff(
+        fallbackOld.join('\n\n'),
+        fallbackNew.join('\n\n'),
+      ),
+    };
+  });
+
+  const hirschbergExpected = Array.from({ length: 300 }, (_, idx) => ({
+    type: 'replace',
+    paraIdx: idx,
+    content: `new-${idx}`,
+    fallbackDelimiter: '\n\n',
+  })).concat(
+    Array.from({ length: 300 }, (_, idx) => ({
+      type: 'replace',
+      paraIdx: idx + 301,
+      content: `new-tail-${idx}`,
+      fallbackDelimiter: idx === 299 ? '' : '\n\n',
+    })),
+  );
+
+  expect(results).toEqual({
+    insertionShift: [{ type: 'insert', paraIdx: 1, content: 'X', delimiter: '\n\n' }],
+    deletionShift: [{ type: 'delete', paraIdx: 1 }],
+    repeated: [{ type: 'replace', paraIdx: 1, content: 'Z', fallbackDelimiter: '\n\n' }],
+    noCommon: [
+      { type: 'replace', paraIdx: 0, content: 'X', fallbackDelimiter: '\n\n' },
+      { type: 'replace', paraIdx: 1, content: 'Y', fallbackDelimiter: '' },
+    ],
+    mixed: [
+      { type: 'replace', paraIdx: 1, content: 'B2', fallbackDelimiter: '\n\n' },
+      { type: 'replace', paraIdx: 2, content: 'X', fallbackDelimiter: '\n\n' },
+      { type: 'delete', paraIdx: 4 },
+      { type: 'delimiter', paraIdx: 5, delimiter: '\n\n' },
+      { type: 'insert', paraIdx: 6, content: 'G', delimiter: '' },
+    ],
+    sparseLarge: [
+      { type: 'replace', paraIdx: 0, content: 'first-edited', fallbackDelimiter: '\n\n' },
+      { type: 'replace', paraIdx: 3999, content: 'last-edited', fallbackDelimiter: '' },
+    ],
+    hirschbergFallback: hirschbergExpected,
   });
 });
 
@@ -123,7 +209,7 @@ test('non-Markdown whitespace has stable diff coordinates', async ({ page }) => 
       return {
         name,
         target,
-        changes: [{ type: 'replace', paraIdx: 0, content: target, delimiter: '' }],
+        changes: [{ type: 'replace', paraIdx: 0, content: target, fallbackDelimiter: '' }],
         applied: target,
       };
     }),
@@ -227,6 +313,28 @@ test.describe('rebase', () => {
     ]);
 
     expect(results).toEqual(['A-remote\n\n\nB', 'A\n\nB-remote']);
+  });
+
+  test('replace rebases preserve or override delimiters according to intent', async ({ page }) => {
+    const results = await page.evaluate(() => ({
+      remoteDelimiterThenLocalText: window.nasmdDiff.rebaseContent(
+        'A\n\nB',
+        'A-local\n\nB',
+        'A-remote\n\n\nB',
+      ),
+      deletedReplaceUsesFallback: window.nasmdDiff.rebaseContent('A\n \nB', 'A-local\n \nB', 'B'),
+      explicitLocalDelimiterWins: window.nasmdDiff.rebaseContent(
+        'A\n\nB',
+        'A-local\n \nB',
+        'A-remote\n\n\nB',
+      ),
+    }));
+
+    expect(results).toEqual({
+      remoteDelimiterThenLocalText: 'A-local\n\n\nB',
+      deletedReplaceUsesFallback: 'A-local\n \nB',
+      explicitLocalDelimiterWins: 'A-local\n \nB',
+    });
   });
 
   test('lossless formatting rebases preserve remote paragraph text', async ({ page }) => {
@@ -342,6 +450,24 @@ test.describe('rebase', () => {
             ),
         ],
         [
+          'non-string-fallback-delimiter',
+          () =>
+            window.nasmdDiff.transformParagraphChanges(
+              [{ type: 'replace', paraIdx: 0, content: 'X', fallbackDelimiter: 7 }],
+              [],
+              1,
+            ),
+        ],
+        [
+          'insert-with-fallback-delimiter',
+          () =>
+            window.nasmdDiff.transformParagraphChanges(
+              [{ type: 'insert', paraIdx: 0, content: 'X', fallbackDelimiter: '' }],
+              [],
+              1,
+            ),
+        ],
+        [
           'delete-with-delimiter',
           () =>
             window.nasmdDiff.transformParagraphChanges(
@@ -426,6 +552,8 @@ test.describe('rebase', () => {
       ['unknown-type', true],
       ['non-string-content', true],
       ['non-string-delimiter', true],
+      ['non-string-fallback-delimiter', true],
+      ['insert-with-fallback-delimiter', true],
       ['delete-with-delimiter', true],
       ['delimiter-change-missing-delimiter', true],
       ['delimiter-change-with-content', true],

@@ -266,7 +266,12 @@ def test_stale_change_rebases_through_each_version_coordinate_space(store, test_
         "newVersion": 3,
         "content": expected,
         "appliedChanges": [
-            {"type": "replace", "paraIdx": 4, "content": "C-stale", "delimiter": ""}
+            {
+                "type": "replace",
+                "paraIdx": 4,
+                "content": "C-stale",
+                "fallbackDelimiter": "",
+            }
         ],
     }
     assert store.get_current_content(file_key) == expected
@@ -583,22 +588,26 @@ def test_current_version_save_writes_exact_target_content(store, test_file):
 
 
 @pytest.mark.parametrize(
-    ("base", "changes", "target"),
+    ("base", "changes", "submitted", "reconstructed"),
     [
         (
             "A\n\nB\n\nC",
             [{"type": "delete", "paraIdx": 2}],
             "A\n\nB",
+            "A\n\nB\n\n",
         ),
         (
             "A\n\nB",
             [{"type": "replace", "paraIdx": 1, "content": "B2"}],
             "A\n\nB2\n",
+            "A\n\nB2",
         ),
     ],
     ids=["legacy-final-delete", "legacy-trailing-newline"],
 )
-def test_legacy_changes_accept_exact_delimiter_differences(store, test_file, base, changes, target):
+def test_legacy_changes_canonicalize_from_declared_operations(
+    store, test_file, base, changes, submitted, reconstructed
+):
     key = "mount-0:/test.md"
     with open(test_file, "w", encoding="utf-8") as f:
         f.write(base)
@@ -612,15 +621,168 @@ def test_legacy_changes_accept_exact_delimiter_differences(store, test_file, bas
         "local",
         "Local",
         "#0f0",
-        client_content=target,
+        client_content=submitted,
         base_content=base,
     )
 
     assert result["applied"] is True
-    assert result["content"] == target
-    assert any("delimiter" in change for change in result["appliedChanges"])
+    assert result["content"] == reconstructed
+    assert version_history.get_version_content(key, 0) == reconstructed
     with open(test_file, "rb") as f:
-        assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
+        assert f.read() == reconstructed.replace("\n", os.linesep).encode("utf-8")
+
+
+def test_legacy_stale_text_edit_preserves_remote_tab_delimiter(store, test_file):
+    key = "mount-0:/test.md"
+    base = "A\n\nB"
+    remote_content = "A\n\t\nB"
+    legacy_content = "A-local\n\nB"
+    expected = "A-local\n\t\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    remote = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, remote_content),
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=remote_content,
+        base_content=base,
+    )
+    assert remote["applied"] is True
+    before_write = Mock()
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        [{"type": "replace", "paraIdx": 0, "content": "A-local"}],
+        "local",
+        "Local",
+        "#0f0",
+        client_content=legacy_content,
+        base_content=base,
+        before_write=before_write,
+    )
+
+    assert result["applied"] is True
+    assert result["merged"] is True
+    assert result["content"] == expected
+    assert result["appliedChanges"] == [
+        {
+            "type": "replace",
+            "paraIdx": 0,
+            "content": "A-local",
+            "fallbackDelimiter": "\n\n",
+        }
+    ]
+    assert version_history.get_version_content(key, 0) == expected
+    before_write.assert_called_once_with(expected)
+    with open(test_file, "rb") as f:
+        assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("local_content", "expected"),
+    [
+        ("A-local\n\nB", "A-local\n\n\nB"),
+        ("A-local\n \nB", "A-local\n \nB"),
+    ],
+    ids=["text-only-preserves-remote-delimiter", "explicit-delimiter-wins"],
+)
+def test_stale_replace_distinguishes_fallback_from_delimiter_intent(
+    store, test_file, local_content, expected
+):
+    key = "mount-0:/test.md"
+    base = "A\n\nB"
+    remote_content = "A-remote\n\n\nB"
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    remote = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, remote_content),
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=remote_content,
+        base_content=base,
+    )
+    assert remote["applied"] is True
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, local_content),
+        "local",
+        "Local",
+        "#0f0",
+        client_content=local_content,
+        base_content=base,
+    )
+
+    assert result["applied"] is True
+    assert result["merged"] is True
+    assert result["content"] == expected
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == expected
+
+
+def test_stale_large_diff_preserves_remote_anchor_edit(store, test_file):
+    key = "mount-0:/test.md"
+    base_paragraphs = [f"old-{idx}" for idx in range(300)]
+    base_paragraphs += ["ANCHOR"]
+    base_paragraphs += [f"old-tail-{idx}" for idx in range(300)]
+    base = "\n\n".join(base_paragraphs)
+    remote_paragraphs = list(base_paragraphs)
+    remote_paragraphs[300] = "ANCHOR-REMOTE"
+    remote_content = "\n\n".join(remote_paragraphs)
+    local_paragraphs = [f"new-{idx}" for idx in range(300)]
+    local_paragraphs += ["ANCHOR"]
+    local_paragraphs += [f"new-tail-{idx}" for idx in range(300)]
+    local_content = "\n\n".join(local_paragraphs)
+    expected_paragraphs = list(local_paragraphs)
+    expected_paragraphs[300] = "ANCHOR-REMOTE"
+    expected = "\n\n".join(expected_paragraphs)
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write(base)
+    store.init_file(key, test_file, base)
+    remote = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, remote_content),
+        "remote",
+        "Remote",
+        "#f00",
+        client_content=remote_content,
+        base_content=base,
+    )
+    assert remote["applied"] is True
+
+    result = store.apply_changes(
+        key,
+        test_file,
+        0,
+        compute_diff(base, local_content),
+        "local",
+        "Local",
+        "#0f0",
+        client_content=local_content,
+        base_content=base,
+    )
+
+    assert result["applied"] is True
+    assert result["merged"] is True
+    assert result["content"] == expected
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == expected
 
 
 def test_stale_exact_delimiter_edit_three_way_merges(store, test_file):

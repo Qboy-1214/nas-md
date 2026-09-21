@@ -472,6 +472,72 @@ class TestWriteFileAPI:
         with open(os.path.join(writable_dir, "new.md"), encoding="utf-8") as f:
             assert f.read() == content
 
+    def test_write_file_creates_missing_empty_markdown_without_history_or_broadcast(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver import version_history
+        from nas_md.webserver.file_version_store import get_store
+
+        name = f"missing-empty-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        watcher = Mock()
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+            data=b"",
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 0
+        assert os.path.isfile(path)
+        with open(path, "rb") as f:
+            assert f.read() == b""
+        assert get_store().get_current_version(file_key) == 0
+        assert file_key not in version_history._histories
+        watcher.mark_expected.assert_called_once_with("writable", rel_path, "")
+        broadcast.assert_not_called()
+
+    def test_write_file_existing_empty_markdown_remains_side_effect_free(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver import version_history
+        from nas_md.webserver.file_version_store import get_store
+
+        name = f"existing-empty-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        with open(path, "wb"):
+            pass
+        watcher = Mock()
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+            data=b"",
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 0
+        assert os.path.isfile(path)
+        with open(path, "rb") as f:
+            assert f.read() == b""
+        assert get_store().get_current_version(file_key) == 0
+        assert file_key not in version_history._histories
+        watcher.mark_expected.assert_not_called()
+        broadcast.assert_not_called()
+
     def test_write_file_overwrites_existing(self, writable_server_url, writable_dir):
         """PUT /api/mounts/{id}/file overwrites an existing file."""
         new_content = "# Updated\n"
@@ -766,6 +832,69 @@ class TestSubmitChangesAPI:
         with open(path, "rb") as f:
             assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
 
+    def test_submit_legacy_stale_text_edit_preserves_remote_tab_formatting(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        from nas_md.webserver import version_history
+
+        name = f"legacy-tab-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        base = "A\n\nB"
+        remote_content = "A\n\t\nB"
+        expected = "A-local\n\t\nB"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": remote_content,
+                "changes": [{"type": "delimiter", "paraIdx": 0, "delimiter": "\n\t\n"}],
+            },
+        )
+        assert status == 200
+        assert json.loads(body)["applied"] is True
+
+        watcher = Mock()
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": "A-local\n\nB",
+                "changes": [{"type": "replace", "paraIdx": 0, "content": "A-local"}],
+            },
+        )
+
+        assert status == 200
+        data = json.loads(body)
+        assert data["applied"] is True
+        assert data["merged"] is True
+        assert data["content"] == expected
+        assert data["appliedChanges"] == [
+            {
+                "type": "replace",
+                "paraIdx": 0,
+                "content": "A-local",
+                "fallbackDelimiter": "\n\n",
+            }
+        ]
+        with open(path, "rb") as f:
+            assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
+        assert version_history.get_version_content(file_key, 0) == expected
+        watcher.mark_expected.assert_called_once_with("writable", rel_path, expected)
+        broadcast.assert_called_once()
+
     @pytest.mark.parametrize(
         ("name", "base", "change", "target"),
         [
@@ -1007,6 +1136,24 @@ class TestSubmitChangesAPI:
                 "Invalid changes: delimiter must be a string",
             ),
             (
+                {
+                    "type": "replace",
+                    "paraIdx": 0,
+                    "content": "valid",
+                    "fallbackDelimiter": 7,
+                },
+                "Invalid changes: fallbackDelimiter must be a string",
+            ),
+            (
+                {
+                    "type": "insert",
+                    "paraIdx": 0,
+                    "content": "valid",
+                    "fallbackDelimiter": "",
+                },
+                "Invalid changes: fallbackDelimiter is only valid for replace changes",
+            ),
+            (
                 {"type": "delete", "paraIdx": 0, "delimiter": ""},
                 "Invalid changes: delimiter is only valid for insert/replace changes",
             ),
@@ -1039,6 +1186,8 @@ class TestSubmitChangesAPI:
             "negative-index",
             "current-version-index-out-of-range",
             "non-string-delimiter",
+            "non-string-fallback-delimiter",
+            "insert-with-fallback-delimiter",
             "delete-with-delimiter",
             "delimiter-change-with-content",
             "delimiter-change-missing-delimiter",

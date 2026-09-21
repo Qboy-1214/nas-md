@@ -134,7 +134,7 @@ def test_non_markdown_line_whitespace_has_stable_diff_coordinates(name, characte
             "type": "replace",
             "paraIdx": 0,
             "content": target,
-            "delimiter": "",
+            "fallbackDelimiter": "",
         }
     ]
 
@@ -227,17 +227,186 @@ def test_transform_prefix_change_is_coordinate_independent_and_preserves_metadat
 
 def test_compute_diff_multi_paragraph_replacement_has_deterministic_operations():
     assert compute_diff("A\n\nB", "X\n\nY") == [
-        {"type": "replace", "paraIdx": 0, "content": "X", "delimiter": "\n\n"},
-        {"type": "replace", "paraIdx": 1, "content": "Y", "delimiter": ""},
+        {
+            "type": "replace",
+            "paraIdx": 0,
+            "content": "X",
+            "fallbackDelimiter": "\n\n",
+        },
+        {"type": "replace", "paraIdx": 1, "content": "Y", "fallbackDelimiter": ""},
     ]
 
 
 def test_compute_diff_prefix_and_multi_paragraph_operations_are_deterministic():
     assert compute_diff("\nA\n\nB", " \nX\n \nY") == [
         {"type": "prefix", "content": " \n"},
-        {"type": "replace", "paraIdx": 0, "content": "X", "delimiter": "\n \n"},
-        {"type": "replace", "paraIdx": 1, "content": "Y", "delimiter": ""},
+        {
+            "type": "replace",
+            "paraIdx": 0,
+            "content": "X",
+            "delimiter": "\n \n",
+            "fallbackDelimiter": "\n \n",
+        },
+        {"type": "replace", "paraIdx": 1, "content": "Y", "fallbackDelimiter": ""},
     ]
+
+
+def test_text_only_replace_uses_fallback_without_claiming_delimiter_intent():
+    changes = compute_diff("A\n\nB", "A-local\n\nB")
+
+    assert changes == [
+        {
+            "type": "replace",
+            "paraIdx": 0,
+            "content": "A-local",
+            "fallbackDelimiter": "\n\n",
+        }
+    ]
+    assert apply_changes("A-remote\n\n\nB", changes) == "A-local\n\n\nB"
+
+
+def test_replace_with_delimiter_edit_records_explicit_and_fallback_delimiters():
+    changes = compute_diff("A\n\nB", "A-local\n \nB")
+
+    assert changes == [
+        {
+            "type": "replace",
+            "paraIdx": 0,
+            "content": "A-local",
+            "delimiter": "\n \n",
+            "fallbackDelimiter": "\n \n",
+        }
+    ]
+    assert apply_changes("A-remote\n\n\nB", changes) == "A-local\n \nB"
+
+
+def test_replace_of_remotely_deleted_paragraph_promotes_fallback_delimiter():
+    from nas_md.webserver.paragraph_diff import transform_changes
+
+    changes = compute_diff("A\n \nB", "A-local\n \nB")
+    transformed = transform_changes(
+        changes,
+        [{"type": "delete", "paraIdx": 0}],
+        base_para_count=2,
+    )
+
+    assert transformed == [
+        {
+            "type": "insert",
+            "paraIdx": 0,
+            "content": "A-local",
+            "delimiter": "\n \n",
+        }
+    ]
+    assert apply_changes("B", transformed) == "A-local\n \nB"
+
+
+@pytest.mark.parametrize(
+    ("base", "target", "expected"),
+    [
+        (
+            "A\n\nB\n\nC\n\nD",
+            "A\n\nX\n\nB\n\nC\n\nD",
+            [{"type": "insert", "paraIdx": 1, "content": "X", "delimiter": "\n\n"}],
+        ),
+        (
+            "A\n\nX\n\nB\n\nC\n\nD",
+            "A\n\nB\n\nC\n\nD",
+            [{"type": "delete", "paraIdx": 1}],
+        ),
+        (
+            "A\n\nX\n\nA\n\nY\n\nA",
+            "A\n\nZ\n\nA\n\nY\n\nA",
+            [
+                {
+                    "type": "replace",
+                    "paraIdx": 1,
+                    "content": "Z",
+                    "fallbackDelimiter": "\n\n",
+                }
+            ],
+        ),
+        (
+            "A\n\nB",
+            "X\n\nY",
+            [
+                {
+                    "type": "replace",
+                    "paraIdx": 0,
+                    "content": "X",
+                    "fallbackDelimiter": "\n\n",
+                },
+                {
+                    "type": "replace",
+                    "paraIdx": 1,
+                    "content": "Y",
+                    "fallbackDelimiter": "",
+                },
+            ],
+        ),
+        (
+            "A\n\nB\n\nC\n\nD\n\nE\n\nF",
+            "A\n\nB2\n\nX\n\nD\n\nF\n\nG",
+            [
+                {
+                    "type": "replace",
+                    "paraIdx": 1,
+                    "content": "B2",
+                    "fallbackDelimiter": "\n\n",
+                },
+                {
+                    "type": "replace",
+                    "paraIdx": 2,
+                    "content": "X",
+                    "fallbackDelimiter": "\n\n",
+                },
+                {"type": "delete", "paraIdx": 4},
+                {"type": "delimiter", "paraIdx": 5, "delimiter": "\n\n"},
+                {"type": "insert", "paraIdx": 6, "content": "G", "delimiter": ""},
+            ],
+        ),
+    ],
+    ids=["insertion-shift", "deletion-shift", "repeated", "no-common", "mixed"],
+)
+def test_compute_diff_adversarial_operations_are_deterministic(base, target, expected):
+    changes = compute_diff(base, target)
+
+    assert changes == expected
+    assert apply_changes(base, changes) == target
+
+
+def test_compute_diff_hirschberg_fallback_preserves_equal_anchor():
+    old_paragraphs = [f"old-{idx}" for idx in range(300)]
+    old_paragraphs += ["ANCHOR"]
+    old_paragraphs += [f"old-tail-{idx}" for idx in range(300)]
+    new_paragraphs = [f"new-{idx}" for idx in range(300)]
+    new_paragraphs += ["ANCHOR"]
+    new_paragraphs += [f"new-tail-{idx}" for idx in range(300)]
+    old_text = "\n\n".join(old_paragraphs)
+    new_text = "\n\n".join(new_paragraphs)
+    expected = [
+        {
+            "type": "replace",
+            "paraIdx": idx,
+            "content": f"new-{idx}",
+            "fallbackDelimiter": "\n\n",
+        }
+        for idx in range(300)
+    ]
+    expected += [
+        {
+            "type": "replace",
+            "paraIdx": idx + 301,
+            "content": f"new-tail-{idx}",
+            "fallbackDelimiter": "" if idx == 299 else "\n\n",
+        }
+        for idx in range(300)
+    ]
+
+    changes = compute_diff(old_text, new_text)
+
+    assert changes == expected
+    assert apply_changes(old_text, changes) == new_text
 
 
 def test_apply_changes_does_not_rewrite_explicit_delimiter_before_trailing_insert():
@@ -599,6 +768,24 @@ def test_transform_changes_batch_orders_local_inserts_after_remote_inserts():
             1,
             TypeError,
         ),
+        (
+            [{"type": "replace", "paraIdx": 0, "content": "X", "fallbackDelimiter": 7}],
+            [],
+            1,
+            TypeError,
+        ),
+        (
+            [{"type": "insert", "paraIdx": 0, "content": "X", "fallbackDelimiter": ""}],
+            [],
+            1,
+            ValueError,
+        ),
+        (
+            [{"type": "delete", "paraIdx": 0, "fallbackDelimiter": ""}],
+            [],
+            1,
+            ValueError,
+        ),
         ([{"type": "delete", "paraIdx": 0, "delimiter": ""}], [], 1, ValueError),
         ([{"type": "delimiter", "paraIdx": 0}], [], 1, TypeError),
         ([{"type": "delimiter", "paraIdx": 0, "delimiter": 7}], [], 1, TypeError),
@@ -631,6 +818,9 @@ def test_transform_changes_batch_orders_local_inserts_after_remote_inserts():
         "unknown-type",
         "non-string-content",
         "non-string-delimiter",
+        "non-string-fallback-delimiter",
+        "insert-with-fallback-delimiter",
+        "delete-with-fallback-delimiter",
         "delete-with-delimiter",
         "delimiter-change-missing-delimiter",
         "delimiter-change-non-string-delimiter",

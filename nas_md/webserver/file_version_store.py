@@ -140,6 +140,11 @@ class FileVersionStore:
                     raise TypeError("content must be a string")
                 if split_paragraphs(reconstructed_content) != split_paragraphs(submitted_content):
                     return self._resync_result(fv)
+                if reconstructed_content != submitted_content:
+                    # Legacy clients sent full content whose incidental whitespace could
+                    # overwrite newer server formatting. Their declared operations are
+                    # the authoritative compatible representation.
+                    submitted_content = reconstructed_content
 
             canonical_changes = compute_diff(submitted_base, submitted_content)
             merged = base_version != fv.version

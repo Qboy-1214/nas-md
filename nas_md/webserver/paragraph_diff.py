@@ -168,6 +168,167 @@ def split_paragraphs(text: str) -> list[str]:
     return paras
 
 
+def _backtrack_myers(trace: list[dict[int, int]], old_len: int, new_len: int) -> list[str]:
+    """Reconstruct a deterministic edit script from a bounded Myers trace."""
+    old_idx = old_len
+    new_idx = new_len
+    operations: list[str] = []
+
+    for distance in range(len(trace) - 1, 0, -1):
+        previous = trace[distance - 1]
+        diagonal = old_idx - new_idx
+        if diagonal == -distance or (
+            diagonal != distance and previous.get(diagonal - 1, -1) < previous.get(diagonal + 1, -1)
+        ):
+            previous_diagonal = diagonal + 1
+            edit = "insert"
+        else:
+            previous_diagonal = diagonal - 1
+            edit = "delete"
+
+        previous_old_idx = previous[previous_diagonal]
+        previous_new_idx = previous_old_idx - previous_diagonal
+        while old_idx > previous_old_idx and new_idx > previous_new_idx:
+            operations.append("equal")
+            old_idx -= 1
+            new_idx -= 1
+        operations.append(edit)
+        old_idx = previous_old_idx
+        new_idx = previous_new_idx
+
+    while old_idx > 0 and new_idx > 0:
+        operations.append("equal")
+        old_idx -= 1
+        new_idx -= 1
+    operations.extend("delete" for _ in range(old_idx))
+    operations.extend("insert" for _ in range(new_idx))
+    operations.reverse()
+    return operations
+
+
+def _bounded_myers_operations(
+    old_items: list[str], new_items: list[str], max_distance: int = 256
+) -> list[str] | None:
+    """Return a shortest edit script when its edit distance is reasonably small."""
+    old_len = len(old_items)
+    new_len = len(new_items)
+    previous = {1: 0}
+    trace: list[dict[int, int]] = []
+
+    for distance in range(min(max_distance, old_len + new_len) + 1):
+        current: dict[int, int] = {}
+        for diagonal in range(-distance, distance + 1, 2):
+            if diagonal == -distance or (
+                diagonal != distance
+                and previous.get(diagonal - 1, -1) < previous.get(diagonal + 1, -1)
+            ):
+                old_idx = previous.get(diagonal + 1, 0)
+            else:
+                old_idx = previous.get(diagonal - 1, 0) + 1
+            new_idx = old_idx - diagonal
+            while (
+                old_idx < old_len and new_idx < new_len and old_items[old_idx] == new_items[new_idx]
+            ):
+                old_idx += 1
+                new_idx += 1
+            current[diagonal] = old_idx
+            if old_idx >= old_len and new_idx >= new_len:
+                trace.append(current)
+                return _backtrack_myers(trace, old_len, new_len)
+        trace.append(current)
+        previous = current
+    return None
+
+
+def _lcs_lengths(old_items: list[str], new_items: list[str]) -> list[int]:
+    """Compute one LCS row using space linear in the second input."""
+    previous = [0] * (len(new_items) + 1)
+    for old_item in old_items:
+        current = [0]
+        for new_idx, new_item in enumerate(new_items, start=1):
+            if old_item == new_item:
+                current.append(previous[new_idx - 1] + 1)
+            else:
+                current.append(max(previous[new_idx], current[-1]))
+        previous = current
+    return previous
+
+
+def _hirschberg_matches(
+    old_items: list[str],
+    new_items: list[str],
+    old_offset: int = 0,
+    new_offset: int = 0,
+) -> list[tuple[int, int]]:
+    """Find deterministic LCS anchors without allocating a quadratic matrix."""
+    if not old_items or not new_items:
+        return []
+    if len(old_items) == 1:
+        for new_idx in range(len(new_items) - 1, -1, -1):
+            if old_items[0] == new_items[new_idx]:
+                return [(old_offset, new_offset + new_idx)]
+        return []
+    if len(new_items) == 1:
+        for old_idx in range(len(old_items) - 1, -1, -1):
+            if old_items[old_idx] == new_items[0]:
+                return [(old_offset + old_idx, new_offset)]
+        return []
+
+    old_midpoint = len(old_items) // 2
+    left_lengths = _lcs_lengths(old_items[:old_midpoint], new_items)
+    right_lengths = _lcs_lengths(
+        list(reversed(old_items[old_midpoint:])), list(reversed(new_items))
+    )
+    new_midpoint = max(
+        range(len(new_items) + 1),
+        key=lambda idx: left_lengths[idx] + right_lengths[len(new_items) - idx],
+    )
+    return _hirschberg_matches(
+        old_items[:old_midpoint],
+        new_items[:new_midpoint],
+        old_offset,
+        new_offset,
+    ) + _hirschberg_matches(
+        old_items[old_midpoint:],
+        new_items[new_midpoint:],
+        old_offset + old_midpoint,
+        new_offset + new_midpoint,
+    )
+
+
+def _operations_from_matches(
+    old_len: int, new_len: int, matches: list[tuple[int, int]]
+) -> list[str]:
+    operations: list[str] = []
+    old_cursor = 0
+    new_cursor = 0
+    for old_idx, new_idx in matches:
+        operations.extend("delete" for _ in range(old_idx - old_cursor))
+        operations.extend("insert" for _ in range(new_idx - new_cursor))
+        operations.append("equal")
+        old_cursor = old_idx + 1
+        new_cursor = new_idx + 1
+    operations.extend("delete" for _ in range(old_len - old_cursor))
+    operations.extend("insert" for _ in range(new_len - new_cursor))
+    return operations
+
+
+def _diff_operations(old_items: list[str], new_items: list[str]) -> list[str]:
+    """Build an exact deterministic edit script with bounded auxiliary memory."""
+    if not old_items:
+        return ["insert"] * len(new_items)
+    if not new_items:
+        return ["delete"] * len(old_items)
+    if set(old_items).isdisjoint(new_items):
+        return ["delete"] * len(old_items) + ["insert"] * len(new_items)
+
+    operations = _bounded_myers_operations(old_items, new_items)
+    if operations is not None:
+        return operations
+    matches = _hirschberg_matches(old_items, new_items)
+    return _operations_from_matches(len(old_items), len(new_items), matches)
+
+
 def compute_diff(old_text: str, new_text: str) -> list[dict]:
     """Compute a deterministic text diff plus non-content delimiter changes."""
     old_document = _parse_document(old_text)
@@ -215,32 +376,8 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
 
     mid_old = old_paras[prefix : m - suffix]
     mid_new = new_paras[prefix : n - suffix]
-    mid_m = len(mid_old)
-    mid_n = len(mid_new)
 
-    dp = [[0] * (mid_n + 1) for _ in range(mid_m + 1)]
-    for i in range(1, mid_m + 1):
-        for j in range(1, mid_n + 1):
-            if mid_old[i - 1] == mid_new[j - 1]:
-                dp[i][j] = dp[i - 1][j - 1] + 1
-            else:
-                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
-
-    operations = []
-    i = mid_m
-    j = mid_n
-    while i > 0 or j > 0:
-        if i > 0 and j > 0 and mid_old[i - 1] == mid_new[j - 1]:
-            operations.append("equal")
-            i -= 1
-            j -= 1
-        elif j > 0 and (i == 0 or dp[i][j - 1] >= dp[i - 1][j]):
-            operations.append("insert")
-            j -= 1
-        else:
-            operations.append("delete")
-            i -= 1
-    operations.reverse()
+    operations = _diff_operations(mid_old, mid_new)
 
     old_cursor = 0
     new_cursor = 0
@@ -252,15 +389,17 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
         paired = min(old_len, new_len)
 
         for offset in range(paired):
+            source_idx = prefix + old_start + offset
             target_idx = prefix + new_start + offset
-            changes.append(
-                {
-                    "type": "replace",
-                    "paraIdx": prefix + old_start + offset,
-                    "content": new_paras[target_idx],
-                    "delimiter": new_delimiters[target_idx],
-                }
-            )
+            replacement = {
+                "type": "replace",
+                "paraIdx": source_idx,
+                "content": new_paras[target_idx],
+                "fallbackDelimiter": new_delimiters[target_idx],
+            }
+            if old_delimiters[source_idx] != new_delimiters[target_idx]:
+                replacement["delimiter"] = new_delimiters[target_idx]
+            changes.append(replacement)
         for offset in range(paired, old_len):
             changes.append({"type": "delete", "paraIdx": prefix + old_start + offset})
         for offset in range(paired, new_len):
@@ -475,6 +614,8 @@ def validate_changes(
                 raise ValueError("prefix changes must not include paraIdx")
             if "delimiter" in change:
                 raise ValueError("prefix changes must not include delimiter")
+            if "fallbackDelimiter" in change:
+                raise ValueError("fallbackDelimiter is only valid for replace changes")
             if not isinstance(change.get("content"), str):
                 raise TypeError("prefix content must be a string")
             continue
@@ -504,6 +645,11 @@ def validate_changes(
                 raise ValueError("delimiter is only valid for insert/replace changes")
             if "delimiter" in change and not isinstance(change["delimiter"], str):
                 raise TypeError("delimiter must be a string")
+        if "fallbackDelimiter" in change:
+            if change_type != "replace":
+                raise ValueError("fallbackDelimiter is only valid for replace changes")
+            if not isinstance(change["fallbackDelimiter"], str):
+                raise TypeError("fallbackDelimiter must be a string")
 
 
 def transform_changes(
@@ -555,14 +701,20 @@ def transform_changes(
                     "paraIdx": target_idx,
                     "content": ch["content"],
                 }
+                if "fallbackDelimiter" in ch:
+                    transformed_change["delimiter"] = ch["fallbackDelimiter"]
+                elif "delimiter" in ch:
+                    transformed_change["delimiter"] = ch["delimiter"]
             else:
                 transformed_change = {
                     "type": "replace",
                     "paraIdx": target_idx,
                     "content": ch["content"],
                 }
-            if "delimiter" in ch:
-                transformed_change["delimiter"] = ch["delimiter"]
+                if "delimiter" in ch:
+                    transformed_change["delimiter"] = ch["delimiter"]
+                if "fallbackDelimiter" in ch:
+                    transformed_change["fallbackDelimiter"] = ch["fallbackDelimiter"]
             transformed.append(transformed_change)
         elif t == "delete" and idx not in deleted:
             transformed.append({"type": "delete", "paraIdx": target_idx})

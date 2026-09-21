@@ -3827,8 +3827,185 @@ function applyChangesLocally(text, changes) {
   return resultParts.join('');
 }
 
+function backtrackMyers(trace, oldLength, newLength) {
+  let oldIdx = oldLength;
+  let newIdx = newLength;
+  const operations = [];
+
+  for (let distance = trace.length - 1; distance > 0; distance--) {
+    const previous = trace[distance - 1];
+    const diagonal = oldIdx - newIdx;
+    const left = previous.has(diagonal - 1) ? previous.get(diagonal - 1) : -1;
+    const right = previous.has(diagonal + 1) ? previous.get(diagonal + 1) : -1;
+    let previousDiagonal;
+    let edit;
+    if (diagonal === -distance || (diagonal !== distance && left < right)) {
+      previousDiagonal = diagonal + 1;
+      edit = 'insert';
+    } else {
+      previousDiagonal = diagonal - 1;
+      edit = 'delete';
+    }
+
+    const previousOldIdx = previous.get(previousDiagonal);
+    const previousNewIdx = previousOldIdx - previousDiagonal;
+    while (oldIdx > previousOldIdx && newIdx > previousNewIdx) {
+      operations.push('equal');
+      oldIdx--;
+      newIdx--;
+    }
+    operations.push(edit);
+    oldIdx = previousOldIdx;
+    newIdx = previousNewIdx;
+  }
+
+  while (oldIdx > 0 && newIdx > 0) {
+    operations.push('equal');
+    oldIdx--;
+    newIdx--;
+  }
+  while (oldIdx-- > 0) operations.push('delete');
+  while (newIdx-- > 0) operations.push('insert');
+  return operations.reverse();
+}
+
+function boundedMyersOperations(oldItems, newItems, maxDistance = 256) {
+  const oldLength = oldItems.length;
+  const newLength = newItems.length;
+  let previous = new Map([[1, 0]]);
+  const trace = [];
+
+  for (let distance = 0; distance <= Math.min(maxDistance, oldLength + newLength); distance++) {
+    const current = new Map();
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const left = previous.has(diagonal - 1) ? previous.get(diagonal - 1) : -1;
+      const right = previous.has(diagonal + 1) ? previous.get(diagonal + 1) : -1;
+      let oldIdx;
+      if (diagonal === -distance || (diagonal !== distance && left < right)) {
+        oldIdx = previous.has(diagonal + 1) ? previous.get(diagonal + 1) : 0;
+      } else {
+        oldIdx = (previous.has(diagonal - 1) ? previous.get(diagonal - 1) : 0) + 1;
+      }
+      let newIdx = oldIdx - diagonal;
+      while (oldIdx < oldLength && newIdx < newLength && oldItems[oldIdx] === newItems[newIdx]) {
+        oldIdx++;
+        newIdx++;
+      }
+      current.set(diagonal, oldIdx);
+      if (oldIdx >= oldLength && newIdx >= newLength) {
+        trace.push(current);
+        return backtrackMyers(trace, oldLength, newLength);
+      }
+    }
+    trace.push(current);
+    previous = current;
+  }
+  return null;
+}
+
+function lcsLengths(oldItems, newItems) {
+  let previous = new Array(newItems.length + 1).fill(0);
+  for (const oldItem of oldItems) {
+    const current = [0];
+    for (let newIdx = 1; newIdx <= newItems.length; newIdx++) {
+      if (oldItem === newItems[newIdx - 1]) {
+        current.push(previous[newIdx - 1] + 1);
+      } else {
+        current.push(Math.max(previous[newIdx], current[current.length - 1]));
+      }
+    }
+    previous = current;
+  }
+  return previous;
+}
+
+function hirschbergMatches(oldItems, newItems, oldOffset = 0, newOffset = 0) {
+  if (!oldItems.length || !newItems.length) return [];
+  if (oldItems.length === 1) {
+    for (let newIdx = newItems.length - 1; newIdx >= 0; newIdx--) {
+      if (oldItems[0] === newItems[newIdx]) return [[oldOffset, newOffset + newIdx]];
+    }
+    return [];
+  }
+  if (newItems.length === 1) {
+    for (let oldIdx = oldItems.length - 1; oldIdx >= 0; oldIdx--) {
+      if (oldItems[oldIdx] === newItems[0]) return [[oldOffset + oldIdx, newOffset]];
+    }
+    return [];
+  }
+
+  const oldMidpoint = Math.floor(oldItems.length / 2);
+  const leftLengths = lcsLengths(oldItems.slice(0, oldMidpoint), newItems);
+  const rightLengths = lcsLengths(
+    oldItems.slice(oldMidpoint).reverse(),
+    newItems.slice().reverse(),
+  );
+  let newMidpoint = 0;
+  let bestLength = -1;
+  for (let idx = 0; idx <= newItems.length; idx++) {
+    const length = leftLengths[idx] + rightLengths[newItems.length - idx];
+    if (length > bestLength) {
+      bestLength = length;
+      newMidpoint = idx;
+    }
+  }
+  return hirschbergMatches(
+    oldItems.slice(0, oldMidpoint),
+    newItems.slice(0, newMidpoint),
+    oldOffset,
+    newOffset,
+  ).concat(
+    hirschbergMatches(
+      oldItems.slice(oldMidpoint),
+      newItems.slice(newMidpoint),
+      oldOffset + oldMidpoint,
+      newOffset + newMidpoint,
+    ),
+  );
+}
+
+function operationsFromMatches(oldLength, newLength, matches) {
+  const operations = [];
+  let oldCursor = 0;
+  let newCursor = 0;
+  for (const [oldIdx, newIdx] of matches) {
+    while (oldCursor < oldIdx) {
+      operations.push('delete');
+      oldCursor++;
+    }
+    while (newCursor < newIdx) {
+      operations.push('insert');
+      newCursor++;
+    }
+    operations.push('equal');
+    oldCursor++;
+    newCursor++;
+  }
+  while (oldCursor++ < oldLength) operations.push('delete');
+  while (newCursor++ < newLength) operations.push('insert');
+  return operations;
+}
+
+function diffOperations(oldItems, newItems) {
+  if (!oldItems.length) return new Array(newItems.length).fill('insert');
+  if (!newItems.length) return new Array(oldItems.length).fill('delete');
+  const oldSet = new Set(oldItems);
+  if (!newItems.some((item) => oldSet.has(item))) {
+    return new Array(oldItems.length)
+      .fill('delete')
+      .concat(new Array(newItems.length).fill('insert'));
+  }
+
+  const operations = boundedMyersOperations(oldItems, newItems);
+  if (operations !== null) return operations;
+  return operationsFromMatches(
+    oldItems.length,
+    newItems.length,
+    hirschbergMatches(oldItems, newItems),
+  );
+}
+
 // 客户端段落级 diff 计算：对比 baseContent 与当前内容，输出 changes 列表。
-// 引入公共前后缀快速修剪，杜绝重复标题/分割线导致的跨段落错位。
 function computeParagraphDiff(oldText, newText) {
   if (oldText === newText) return [];
 
@@ -3887,37 +4064,8 @@ function computeParagraphDiff(oldText, newText) {
 
   const midOld = oldParas.slice(prefix, m - suffix);
   const midNew = newParas.slice(prefix, n - suffix);
-  const midM = midOld.length;
-  const midN = midNew.length;
 
-  const dp = Array.from({ length: midM + 1 }, () => new Array(midN + 1).fill(0));
-  for (let i = 1; i <= midM; i++) {
-    for (let j = 1; j <= midN; j++) {
-      if (midOld[i - 1] === midNew[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
-
-  const operations = [];
-  let i = midM;
-  let j = midN;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && midOld[i - 1] === midNew[j - 1]) {
-      operations.push('equal');
-      i--;
-      j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      operations.push('insert');
-      j--;
-    } else {
-      operations.push('delete');
-      i--;
-    }
-  }
-  operations.reverse();
+  const operations = diffOperations(midOld, midNew);
 
   let oldCursor = 0;
   let newCursor = 0;
@@ -3928,13 +4076,18 @@ function computeParagraphDiff(oldText, newText) {
     const paired = Math.min(oldLen, newLen);
 
     for (let offset = 0; offset < paired; offset++) {
+      const sourceIdx = prefix + oldStart + offset;
       const targetIdx = prefix + newStart + offset;
-      changes.push({
+      const replacement = {
         type: 'replace',
-        paraIdx: prefix + oldStart + offset,
+        paraIdx: sourceIdx,
         content: newParas[targetIdx],
-        delimiter: newParts.delimiters[targetIdx],
-      });
+        fallbackDelimiter: newParts.delimiters[targetIdx],
+      };
+      if (oldParts.delimiters[sourceIdx] !== newParts.delimiters[targetIdx]) {
+        replacement.delimiter = newParts.delimiters[targetIdx];
+      }
+      changes.push(replacement);
     }
     for (let offset = paired; offset < oldLen; offset++) {
       changes.push({ type: 'delete', paraIdx: prefix + oldStart + offset });
@@ -4009,6 +4162,9 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
         if (Object.prototype.hasOwnProperty.call(change, 'delimiter')) {
           throw new TypeError('prefix changes must not include delimiter');
         }
+        if (Object.prototype.hasOwnProperty.call(change, 'fallbackDelimiter')) {
+          throw new TypeError('fallbackDelimiter is only valid for replace changes');
+        }
         if (typeof change.content !== 'string') {
           throw new TypeError('prefix content must be a string');
         }
@@ -4055,6 +4211,14 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
           throw new TypeError('delimiter must be a string');
         }
       }
+      if (Object.prototype.hasOwnProperty.call(change, 'fallbackDelimiter')) {
+        if (change.type !== 'replace') {
+          throw new TypeError('fallbackDelimiter is only valid for replace changes');
+        }
+        if (typeof change.fallbackDelimiter !== 'string') {
+          throw new TypeError('fallbackDelimiter must be a string');
+        }
+      }
     }
   }
 
@@ -4093,13 +4257,25 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
       }
       transformed.push(transformedChange);
     } else if (type === 'replace') {
+      const wasDeleted = deleted.has(idx);
       const transformedChange = {
-        type: deleted.has(idx) ? 'insert' : 'replace',
+        type: wasDeleted ? 'insert' : 'replace',
         paraIdx: targetIdx,
         content: change.content,
       };
-      if (Object.prototype.hasOwnProperty.call(change, 'delimiter')) {
-        transformedChange.delimiter = change.delimiter;
+      if (wasDeleted) {
+        if (Object.prototype.hasOwnProperty.call(change, 'fallbackDelimiter')) {
+          transformedChange.delimiter = change.fallbackDelimiter;
+        } else if (Object.prototype.hasOwnProperty.call(change, 'delimiter')) {
+          transformedChange.delimiter = change.delimiter;
+        }
+      } else {
+        if (Object.prototype.hasOwnProperty.call(change, 'delimiter')) {
+          transformedChange.delimiter = change.delimiter;
+        }
+        if (Object.prototype.hasOwnProperty.call(change, 'fallbackDelimiter')) {
+          transformedChange.fallbackDelimiter = change.fallbackDelimiter;
+        }
       }
       transformed.push(transformedChange);
     } else if (type === 'delete' && !deleted.has(idx)) {
