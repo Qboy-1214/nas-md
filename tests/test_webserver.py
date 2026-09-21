@@ -504,6 +504,56 @@ class TestWriteFileAPI:
         watcher.mark_expected.assert_called_once_with("writable", rel_path, "")
         broadcast.assert_not_called()
 
+    def test_missing_empty_markdown_replace_failure_rolls_back_mark_and_returns_stable_500(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        import nas_md.webserver.file_version_store as file_version_store_module
+
+        name = f"empty-write-failure-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        original_replace = os.replace
+        original_open = open
+        normalized_target = os.path.normcase(os.path.abspath(path))
+
+        def fail_target_replace(src, dst):
+            if os.path.normcase(os.path.abspath(dst)) == normalized_target:
+                raise OSError("empty replace failed")
+            return original_replace(src, dst)
+
+        def fail_direct_target_open(file, mode="r", *args, **kwargs):
+            if mode == "w" and os.path.normcase(os.path.abspath(file)) == normalized_target:
+                raise OSError("empty direct write failed")
+            return original_open(file, mode, *args, **kwargs)
+
+        watcher = Mock()
+        token = object()
+        watcher.mark_expected.return_value = token
+        broadcast = Mock()
+        monkeypatch.setattr("builtins.open", fail_direct_target_open)
+        monkeypatch.setattr(file_version_store_module.os, "replace", fail_target_replace)
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}", data=b""
+        )
+
+        assert (status, watcher.unmark_expected.call_count) == (500, 1)
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "newVersion": 0,
+            "content": "",
+            "errorCode": "write_failed",
+            "message": "Unable to save file",
+        }
+        assert not os.path.exists(path)
+        watcher.unmark_expected.assert_called_once_with(token)
+        broadcast.assert_not_called()
+
     def test_write_file_existing_empty_markdown_remains_side_effect_free(
         self, writable_server_url, writable_dir, monkeypatch
     ):
@@ -548,6 +598,58 @@ class TestWriteFileAPI:
         assert status == 200
         with open(os.path.join(writable_dir, "hello.md"), encoding="utf-8") as f:
             assert f.read() == new_content
+
+    def test_write_file_replace_failure_returns_stable_500_without_broadcast(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        import nas_md.webserver.file_version_store as file_version_store_module
+
+        name = f"put-write-failure-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        original = "before"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(original)
+        original_replace = os.replace
+        normalized_target = os.path.normcase(os.path.abspath(path))
+
+        def fail_target_replace(src, dst, _target_existed):
+            if os.path.normcase(os.path.abspath(dst)) == normalized_target:
+                raise OSError(f"cannot replace sensitive path {path}")
+            return original_replace(src, dst)
+
+        watcher = Mock()
+        watcher_token = object()
+        watcher.mark_expected.return_value = watcher_token
+        broadcast = Mock()
+        monkeypatch.setattr(
+            file_version_store_module, "_replace_target", fail_target_replace, raising=False
+        )
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+            data=b"after",
+        )
+
+        assert (status, broadcast.call_count) == (500, 0)
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "newVersion": 0,
+            "content": original,
+            "errorCode": "write_failed",
+            "message": "Unable to save file",
+        }
+        assert path not in body
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == original
+        watcher.mark_expected.assert_called_once_with("writable", rel_path, "after")
+        watcher.unmark_expected.assert_called_once_with(watcher_token)
+        broadcast.assert_not_called()
 
     def test_write_file_existing_exact_delimiter_change_is_not_false_success(
         self, writable_server_url, writable_dir
@@ -864,6 +966,63 @@ class TestSubmitChangesAPI:
         assert "new para" in data["content"]
         with open(os.path.join(writable_dir, "created.md"), encoding="utf-8") as f:
             assert f.read() == "new para"
+
+    def test_submit_changes_replace_failure_returns_stable_500_without_broadcast(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        import nas_md.webserver.file_version_store as file_version_store_module
+
+        name = f"post-write-failure-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        original = "before"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(original)
+        original_replace = os.replace
+        normalized_target = os.path.normcase(os.path.abspath(path))
+
+        def fail_target_replace(src, dst, _target_existed):
+            if os.path.normcase(os.path.abspath(dst)) == normalized_target:
+                raise OSError(f"cannot replace sensitive path {path}")
+            return original_replace(src, dst)
+
+        watcher = Mock()
+        watcher_token = object()
+        watcher.mark_expected.return_value = watcher_token
+        broadcast = Mock()
+        monkeypatch.setattr(
+            file_version_store_module, "_replace_target", fail_target_replace, raising=False
+        )
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": original,
+                "content": "after",
+                "changes": [{"type": "replace", "paraIdx": 0, "content": "after"}],
+            },
+        )
+
+        assert (status, broadcast.call_count) == (500, 0)
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "newVersion": 0,
+            "content": original,
+            "errorCode": "write_failed",
+            "message": "Unable to save file",
+        }
+        assert path not in body
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == original
+        watcher.mark_expected.assert_called_once_with("writable", rel_path, "after")
+        watcher.unmark_expected.assert_called_once_with(watcher_token)
+        broadcast.assert_not_called()
 
     def test_submit_changes_replace_paragraph(self, writable_server_url, writable_dir):
         """POST /changes with replace should update the specified paragraph."""

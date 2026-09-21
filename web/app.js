@@ -3504,6 +3504,10 @@ async function saveFile({ silent = false } = {}) {
 
         if (!resp || !resp.applied) {
           console.log('[saveFile] changes not applied', resp);
+          if (resp && resp.errorCode) {
+            markDirty();
+            throw new Error(resp.message || 'Unable to save file');
+          }
           if (resp && resp.resyncRequired) {
             markDirty();
             saveToLocalStorage(state.currentPath, content);

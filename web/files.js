@@ -129,7 +129,22 @@ const API = {
         body: content,
       });
       console.log('[putFile] response status:', r ? r.status : 'null');
-      return r ? r.json() : null;
+      if (!r) return null;
+      const response = await r.json().catch(() => null);
+      if (!r.ok) {
+        const message =
+          response && typeof response.message === 'string'
+            ? response.message
+            : 'Unable to save file';
+        const error = new Error(message);
+        error.code =
+          response && typeof response.errorCode === 'string'
+            ? response.errorCode
+            : 'request_failed';
+        error.status = r.status;
+        throw error;
+      }
+      return response;
     } catch (e) {
       console.error('[putFile] fetch error:', e);
       throw e;
@@ -177,12 +192,14 @@ const API = {
         headers: { 'Content-Type': 'application/json' },
         body,
       });
-      if (!r || !r.ok) {
-        const errText = r ? await r.text().catch(() => '') : '';
-        console.error('[submitChanges] error:', errText);
+      if (!r) return null;
+      const response = await r.json().catch(() => null);
+      if (!r.ok) {
+        console.error('[submitChanges] error:', response);
+        if (response && response.errorCode) return response;
         return null;
       }
-      return r.json();
+      return response;
     } catch (e) {
       console.error('[submitChanges] fetch error:', e);
       throw e;

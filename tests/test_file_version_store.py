@@ -1,6 +1,11 @@
 # tests/test_file_version_store.py
+import json
+import logging
 import os
+import stat
+import struct
 import threading
+from pathlib import Path
 from unittest.mock import Mock
 
 import nas_md.webserver.file_version_store as file_version_store_module
@@ -33,6 +38,20 @@ def test_file(tmp_path):
 
 def _history_count(store, file_key):
     return len(version_history.get_history(file_key, limit=1000, storage_dir=store._storage_dir))
+
+
+def _assert_failed_write_preserves_state(store, file_key, file_path, original, result):
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "newVersion": 0,
+        "content": original,
+        "errorCode": "write_failed",
+        "message": "Unable to save file",
+    }
+    assert Path(file_path).read_text(encoding="utf-8") == original
+    assert store.get_current_snapshot(file_key) == {"version": 0, "content": original}
+    assert _history_count(store, file_key) == 0
 
 
 def test_init_file_new(store, test_file):
@@ -80,6 +99,792 @@ def test_apply_changes_no_conflict(store, test_file):
     assert result["merged"] is False
     assert result["newVersion"] == 1
     assert "para one\n\nCHANGED\n\npara three" in result["content"]
+
+
+def test_partial_write_keeps_target_store_and_history_unchanged(store, test_file, monkeypatch):
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+    original_fdopen = os.fdopen
+    target_dir = os.path.dirname(test_file)
+
+    class PartialWriter:
+        def __init__(self, fd, *args, **kwargs):
+            self._stream = original_fdopen(fd, *args, **kwargs)
+
+        def __enter__(self):
+            self._stream.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return self._stream.__exit__(exc_type, exc_value, traceback)
+
+        def write(self, value):
+            self._stream.write(value[:3])
+            self._stream.flush()
+            raise OSError(f"partial write at {test_file}")
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
+    def partial_fdopen(fd, mode="r", *args, **kwargs):
+        if mode == "w":
+            return PartialWriter(fd, mode, *args, **kwargs)
+        return original_fdopen(fd, mode, *args, **kwargs)
+
+    monkeypatch.setattr(file_version_store_module.os, "fdopen", partial_fdopen)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "CHANGED"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    _assert_failed_write_preserves_state(store, file_key, test_file, original, result)
+    assert test_file not in json.dumps(result)
+    assert [entry.name for entry in os.scandir(target_dir)] == [os.path.basename(test_file)]
+
+
+def test_replace_failure_cleans_temp_rolls_back_watcher_and_preserves_state(
+    store, test_file, monkeypatch
+):
+    from nas_md.webserver.file_watcher import FileWatcher
+
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+    watcher = FileWatcher()
+    tokens = []
+    replace_sources = []
+    original_replace = os.replace
+    normalized_target = os.path.normcase(os.path.abspath(test_file))
+
+    def fail_target_replace(src, dst, _target_existed):
+        if os.path.normcase(os.path.abspath(dst)) == normalized_target:
+            replace_sources.append(os.fspath(src))
+            raise OSError(f"replace failed for {test_file}")
+        return original_replace(src, dst)
+
+    def mark_expected(content):
+        token = watcher.mark_expected("mount-0", "/test.md", content)
+        tokens.append(token)
+        return lambda: watcher.unmark_expected(token)
+
+    monkeypatch.setattr(
+        file_version_store_module, "_replace_target", fail_target_replace, raising=False
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "CHANGED"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+        before_write=mark_expected,
+    )
+
+    assert replace_sources
+    assert all(not os.path.exists(path) for path in replace_sources)
+    _assert_failed_write_preserves_state(store, file_key, test_file, original, result)
+    assert tokens
+    assert watcher.unmark_expected(tokens[0]) is False
+
+
+def test_successful_write_marks_immediately_before_atomic_replace(store, test_file, monkeypatch):
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    target = "CHANGED\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+    events = []
+    original_replace = os.replace
+    normalized_target = os.path.normcase(os.path.abspath(test_file))
+
+    def observe_replace(src, dst, _target_existed):
+        if os.path.normcase(os.path.abspath(dst)) == normalized_target:
+            with open(dst, encoding="utf-8") as f:
+                events.append(("before", f.read()))
+            original_replace(src, dst)
+            with open(dst, encoding="utf-8") as f:
+                events.append(("after", f.read()))
+            return None
+        return original_replace(src, dst)
+
+    def mark_expected(content):
+        events.append(("marked", content))
+
+    monkeypatch.setattr(
+        file_version_store_module, "_replace_target", observe_replace, raising=False
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "CHANGED"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+        before_write=mark_expected,
+    )
+
+    assert result["applied"] is True
+    assert events == [("marked", target), ("before", original), ("after", target)]
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == target
+
+
+def test_directory_sync_failure_after_replace_does_not_report_save_failure(
+    store, test_file, monkeypatch
+):
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    target = "CHANGED\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+
+    def fail_directory_sync(_directory):
+        raise OSError("directory sync unavailable")
+
+    monkeypatch.setattr(file_version_store_module, "_fsync_directory", fail_directory_sync)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "CHANGED"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert result["newVersion"] == 1
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": target}
+    with open(test_file, encoding="utf-8") as f:
+        assert f.read() == target
+
+
+def test_directory_sync_happens_after_target_replace(store, test_file, monkeypatch):
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+    events = []
+    original_replace = os.replace
+
+    def observe_replace(src, dst, _target_existed):
+        if os.path.abspath(dst) == os.path.abspath(test_file):
+            events.append("replace")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(
+        file_version_store_module, "_replace_target", observe_replace, raising=False
+    )
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_fsync_directory",
+        lambda _directory: events.append("directory-fsync"),
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "changed"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert events == ["replace", "directory-fsync"]
+
+
+def test_existing_file_metadata_is_applied_before_replace(store, test_file, monkeypatch):
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+    target_stat = os.stat(test_file)
+    events = []
+    target_replaced = [False]
+    original_replace = os.replace
+    original_fsync = os.fsync
+
+    monkeypatch.setattr(
+        file_version_store_module.os,
+        "fchmod",
+        lambda _fd, mode: events.append(("mode", mode)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        file_version_store_module.os,
+        "fchown",
+        lambda _fd, uid, gid: events.append(("owner", uid, gid)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_snapshot_xattrs",
+        lambda _path: (("user.nasmd", b"metadata"),),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_apply_xattrs",
+        lambda _fd, attrs: events.append(("xattrs", attrs)),
+        raising=False,
+    )
+
+    def observe_fsync(fd):
+        if not target_replaced[0] and stat.S_ISREG(os.fstat(fd).st_mode):
+            events.append(("file-fsync",))
+        return original_fsync(fd)
+
+    def observe_replace(src, dst, _target_existed):
+        if os.path.abspath(dst) == os.path.abspath(test_file):
+            events.append(("replace",))
+            target_replaced[0] = True
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(
+        file_version_store_module, "_replace_target", observe_replace, raising=False
+    )
+    monkeypatch.setattr(file_version_store_module.os, "fsync", observe_fsync)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "changed"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+        before_write=lambda _content: events.append(("mark",)),
+    )
+
+    assert result["applied"] is True
+    assert events == [
+        ("owner", target_stat.st_uid, target_stat.st_gid),
+        ("mode", stat.S_IMODE(target_stat.st_mode)),
+        ("xattrs", (("user.nasmd", b"metadata"),)),
+        ("file-fsync",),
+        ("mark",),
+        ("replace",),
+    ]
+
+
+def test_new_file_uses_private_content_temp_and_normal_permission_probe(
+    store, tmp_path, monkeypatch
+):
+    file_path = tmp_path / "new.md"
+    file_key = "mount-0:/new.md"
+    store.init_file(file_key, str(file_path), "")
+    original_open = os.open
+    create_modes = []
+
+    def observe_open(path, flags, mode=0o777, *args, **kwargs):
+        if flags & os.O_CREAT and flags & os.O_EXCL:
+            create_modes.append((os.path.basename(path), mode))
+        return original_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(file_version_store_module.os, "open", observe_open)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "insert", "paraIdx": 0, "content": "new"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert [mode for name, mode in create_modes if name.startswith(".nasmd-perm-")] == [0o666]
+    assert [
+        mode
+        for name, mode in create_modes
+        if name.startswith(".nasmd-") and not name.startswith(".nasmd-perm-")
+    ] == [0o600]
+
+
+@pytest.mark.parametrize("failure_stage", ["owner", "xattr-snapshot", "xattr-apply"])
+def test_metadata_failure_keeps_existing_target_and_cleans_temp(
+    store, test_file, monkeypatch, failure_stage
+):
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+
+    def fail(operation):
+        raise OSError(f"{operation} xattr failed")
+
+    if failure_stage == "owner":
+        monkeypatch.setattr(
+            file_version_store_module.os,
+            "fchown",
+            lambda _fd, _uid, _gid: fail("owner"),
+            raising=False,
+        )
+    elif failure_stage == "xattr-snapshot":
+        monkeypatch.setattr(
+            file_version_store_module,
+            "_snapshot_xattrs",
+            lambda _path: fail("snapshot"),
+            raising=False,
+        )
+    else:
+        monkeypatch.setattr(
+            file_version_store_module,
+            "_snapshot_xattrs",
+            lambda _path: (("user.nasmd", b"metadata"),),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            file_version_store_module,
+            "_apply_xattrs",
+            lambda _fd, _attrs: fail("apply"),
+            raising=False,
+        )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "changed"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    _assert_failed_write_preserves_state(store, file_key, test_file, original, result)
+    assert not list(Path(test_file).parent.glob(".nasmd-*"))
+
+
+@pytest.mark.skipif(
+    os.name != "posix"
+    or not all(hasattr(os, name) for name in ("listxattr", "getxattr", "setxattr")),
+    reason="POSIX xattrs are unavailable",
+)
+def test_atomic_replace_preserves_all_readable_posix_xattrs(store, tmp_path):
+    file_path = tmp_path / "xattrs.md"
+    file_path.write_text("before", encoding="utf-8")
+    try:
+        os.setxattr(file_path, "user.nasmd", b"metadata")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support user xattrs: {error}")
+    before = {name: os.getxattr(file_path, name) for name in os.listxattr(file_path)}
+    file_key = "mount-0:/xattrs.md"
+    store.init_file(file_key, str(file_path), "before")
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    after = {name: os.getxattr(file_path, name) for name in os.listxattr(file_path)}
+    assert result["applied"] is True
+    assert after == before
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(os, "setxattr"),
+    reason="POSIX ACL xattrs are unavailable",
+)
+def test_atomic_replace_preserves_posix_acl_xattr_when_supported(store, tmp_path):
+    file_path = tmp_path / "acl.md"
+    file_path.write_text("before", encoding="utf-8")
+    acl = struct.pack("<I", 2) + b"".join(
+        struct.pack("<HHI", tag, permissions, qualifier)
+        for tag, permissions, qualifier in (
+            (0x01, 0o6, 0xFFFFFFFF),
+            (0x02, 0o4, os.geteuid() + 1),
+            (0x04, 0o4, 0xFFFFFFFF),
+            (0x10, 0o4, 0xFFFFFFFF),
+            (0x20, 0o0, 0xFFFFFFFF),
+        )
+    )
+    try:
+        os.setxattr(file_path, "system.posix_acl_access", acl)
+    except OSError as error:
+        pytest.skip(f"filesystem does not support POSIX ACL xattrs: {error}")
+    expected_acl = os.getxattr(file_path, "system.posix_acl_access")
+    file_key = "mount-0:/acl.md"
+    store.init_file(file_key, str(file_path), "before")
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert os.getxattr(file_path, "system.posix_acl_access") == expected_acl
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows alternate data streams")
+def test_windows_existing_replace_preserves_alternate_data_stream(store, tmp_path):
+    file_path = tmp_path / "streams.md"
+    file_path.write_text("before", encoding="utf-8")
+    stream_path = f"{file_path}:nasmd-metadata"
+    try:
+        Path(stream_path).write_text("stream metadata", encoding="utf-8")
+    except OSError as error:
+        pytest.skip(f"filesystem does not support alternate data streams: {error}")
+    file_key = "mount-0:/streams.md"
+    store.init_file(file_key, str(file_path), "before")
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert Path(stream_path).read_text(encoding="utf-8") == "stream metadata"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows DACL behavior")
+def test_windows_existing_replace_preserves_dacl_descriptor(store, tmp_path):
+    import ctypes
+    from ctypes import wintypes
+
+    get_file_security = ctypes.WinDLL("advapi32", use_last_error=True).GetFileSecurityW
+    get_file_security.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.LPDWORD,
+    )
+    get_file_security.restype = wintypes.BOOL
+
+    def read_dacl(path):
+        needed = wintypes.DWORD()
+        get_file_security(path, 0x00000004, None, 0, ctypes.byref(needed))
+        descriptor = ctypes.create_string_buffer(needed.value)
+        if not get_file_security(
+            path,
+            0x00000004,
+            descriptor,
+            needed.value,
+            ctypes.byref(needed),
+        ):
+            error_code = ctypes.get_last_error()
+            raise OSError(error_code, ctypes.FormatError(error_code), path)
+        return descriptor.raw
+
+    file_path = tmp_path / "dacl.md"
+    file_path.write_text("before", encoding="utf-8")
+    expected_dacl = read_dacl(str(file_path))
+    file_key = "mount-0:/dacl.md"
+    store.init_file(file_key, str(file_path), "before")
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert read_dacl(str(file_path)) == expected_dacl
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows CopyFileW behavior")
+def test_windows_existing_write_uses_copy_file_helper(store, tmp_path, monkeypatch):
+    file_path = tmp_path / "replace-file.md"
+    file_path.write_text("before", encoding="utf-8")
+    file_key = "mount-0:/replace-file.md"
+    store.init_file(file_key, str(file_path), "before")
+    calls = []
+
+    def observe_copy_file(target, replacement):
+        calls.append((target, replacement))
+        Path(replacement).write_bytes(Path(target).read_bytes())
+
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_copy_file_windows",
+        observe_copy_file,
+        raising=False,
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert len(calls) == 1
+    assert os.path.abspath(calls[0][0]) == os.path.abspath(file_path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows CopyFileW behavior")
+def test_windows_copy_failure_preserves_existing_target(store, tmp_path, monkeypatch):
+    file_path = tmp_path / "copy-failure.md"
+    file_path.write_text("before", encoding="utf-8")
+    file_key = "mount-0:/copy-failure.md"
+    store.init_file(file_key, str(file_path), "before")
+    calls = []
+
+    def fail_copy_file(target, replacement):
+        calls.append((target, replacement))
+        Path(replacement).write_text("partial", encoding="utf-8")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_copy_file_windows",
+        fail_copy_file,
+        raising=False,
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert len(calls) == 1
+    assert result["errorCode"] == "write_failed"
+    assert result["newVersion"] == 0
+    assert file_path.read_text(encoding="utf-8") == "before"
+    assert store.get_current_snapshot(file_key) == {"version": 0, "content": "before"}
+    assert not list(tmp_path.glob(".nasmd-*"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows replacement behavior")
+def test_windows_new_file_still_uses_os_replace(store, tmp_path, monkeypatch):
+    file_path = tmp_path / "new-replace.md"
+    file_key = "mount-0:/new-replace.md"
+    store.init_file(file_key, str(file_path), "")
+    calls = []
+    original_replace = os.replace
+
+    def observe_replace(src, dst, _target_existed):
+        if os.path.abspath(dst) == os.path.abspath(file_path):
+            calls.append((src, dst))
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(
+        file_version_store_module, "_replace_target", observe_replace, raising=False
+    )
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_copy_file_windows",
+        lambda _target, _replacement: pytest.fail("new files must not use CopyFileW"),
+        raising=False,
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "insert", "paraIdx": 0, "content": "new"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert len(calls) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory collision semantics")
+def test_atomic_temp_retries_permission_error_for_existing_directory(tmp_path, monkeypatch):
+    collision = tmp_path / ".nasmd-collision.tmp"
+    collision.mkdir()
+    tokens = iter(("collision", "available"))
+    monkeypatch.setattr(file_version_store_module.secrets, "token_hex", lambda _size: next(tokens))
+
+    fd, temp_path = file_version_store_module._create_atomic_temp(str(tmp_path))
+    os.close(fd)
+    os.remove(temp_path)
+
+    assert Path(temp_path).name == ".nasmd-available.tmp"
+
+
+def test_atomic_temp_propagates_unrelated_permission_error(tmp_path, monkeypatch):
+    def deny_open(_path, _flags, _mode):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(file_version_store_module.os, "open", deny_open)
+    with pytest.raises(PermissionError, match="access denied"):
+        file_version_store_module._create_atomic_temp(str(tmp_path))
+
+
+def test_atomic_write_uses_fixed_short_temp_name(store, tmp_path, monkeypatch):
+    name = "x" * 60 + ".md"
+    file_path = tmp_path / name
+    original = "before"
+    file_path.write_text(original, encoding="utf-8")
+    file_key = f"mount-0:/{name}"
+    store.init_file(file_key, str(file_path), original)
+    original_replace = os.replace
+    temp_names = []
+
+    def observe_replace(src, dst, _target_existed):
+        if os.path.abspath(dst) == os.path.abspath(file_path):
+            temp_names.append(os.path.basename(src))
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(
+        file_version_store_module, "_replace_target", observe_replace, raising=False
+    )
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert file_path.read_text(encoding="utf-8") == "after"
+    assert len(temp_names) == 1
+    assert temp_names[0].startswith(".nasmd-")
+    assert len(temp_names[0]) <= 32
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX NAME_MAX behavior")
+def test_atomic_write_supports_target_near_name_max(store, tmp_path):
+    name = "x" * 235 + ".md"
+    file_path = tmp_path / name
+    file_path.write_text("before", encoding="utf-8")
+    file_key = f"mount-0:/{name}"
+    store.init_file(file_key, str(file_path), "before")
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert file_path.read_text(encoding="utf-8") == "after"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ownership semantics")
+def test_atomic_replace_preserves_posix_mode_uid_and_gid(store, tmp_path):
+    file_path = tmp_path / "owned.md"
+    file_path.write_text("before", encoding="utf-8")
+    os.chmod(file_path, 0o2640)
+    if os.geteuid() == 0:
+        os.chown(file_path, 1000, 1000)
+    original_stat = file_path.stat()
+    file_key = "mount-0:/owned.md"
+    store.init_file(file_key, str(file_path), "before")
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    replaced_stat = file_path.stat()
+    assert result["applied"] is True
+    assert stat.S_IMODE(replaced_stat.st_mode) == stat.S_IMODE(original_stat.st_mode)
+    assert (replaced_stat.st_uid, replaced_stat.st_gid) == (
+        original_stat.st_uid,
+        original_stat.st_gid,
+    )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX umask semantics")
+def test_new_atomic_file_uses_normal_create_mode_under_umask(store, tmp_path):
+    file_path = tmp_path / "umask.md"
+    file_key = "mount-0:/umask.md"
+    store.init_file(file_key, str(file_path), "")
+    content_temp_modes = []
+
+    def observe_before_replace(_content):
+        content_temps = [
+            path for path in tmp_path.glob(".nasmd-*") if not path.name.startswith(".nasmd-perm-")
+        ]
+        assert len(content_temps) == 1
+        content_temp_modes.append(stat.S_IMODE(content_temps[0].stat().st_mode))
+
+    previous_umask = os.umask(0o022)
+    try:
+        result = store.apply_changes(
+            file_key=file_key,
+            file_path=str(file_path),
+            base_version=0,
+            changes=[{"type": "insert", "paraIdx": 0, "content": "new"}],
+            author_id="user1",
+            author_name="Tester",
+            author_color="#fff",
+            before_write=observe_before_replace,
+        )
+    finally:
+        os.umask(previous_umask)
+
+    assert result["applied"] is True
+    assert content_temp_modes == [0o600]
+    assert stat.S_IMODE(file_path.stat().st_mode) == 0o644
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode semantics")
+def test_existing_private_file_remains_private_after_atomic_replace(store, tmp_path):
+    file_path = tmp_path / "private.md"
+    file_path.write_text("before", encoding="utf-8")
+    os.chmod(file_path, 0o600)
+    file_key = "mount-0:/private.md"
+    store.init_file(file_key, str(file_path), "before")
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "after"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+    )
+
+    assert result["applied"] is True
+    assert stat.S_IMODE(file_path.stat().st_mode) == 0o600
 
 
 def test_apply_changes_with_merge(store, test_file):
@@ -309,6 +1114,46 @@ def test_history_persist_for_one_file_does_not_block_another_file_apply(
     assert results["b"]["applied"] is True
     assert file_a.read_text(encoding="utf-8") == target_a
     assert file_b.read_text(encoding="utf-8") == target_b
+
+
+def test_history_persistence_failure_is_logged_without_rolling_back_body(
+    store, tmp_path, monkeypatch, caplog
+):
+    file_path = tmp_path / "history-warning.md"
+    original = "before"
+    target = "after"
+    file_key = "mount-0:/history-warning.md"
+    file_path.write_text(original, encoding="utf-8")
+    store.init_file(file_key, str(file_path), original)
+    original_replace = os.replace
+
+    def fail_history_replace(src, dst):
+        if os.fspath(dst).endswith(".json"):
+            raise OSError("history persistence unavailable")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(version_history.os, "replace", fail_history_replace)
+
+    with caplog.at_level(logging.WARNING, logger=version_history.__name__):
+        result = store.apply_changes(
+            file_key=file_key,
+            file_path=str(file_path),
+            base_version=0,
+            changes=[{"type": "replace", "paraIdx": 0, "content": target}],
+            author_id="user1",
+            author_name="Tester",
+            author_color="#fff",
+        )
+
+    assert result["applied"] is True
+    assert result["newVersion"] == 1
+    assert file_path.read_text(encoding="utf-8") == target
+    warning = next(
+        record
+        for record in caplog.records
+        if "Failed to persist version history" in record.getMessage()
+    )
+    assert warning.exc_info is not None
 
 
 def test_history_updates_for_the_same_file_remain_serialized_and_persisted(store, monkeypatch):
@@ -1339,7 +2184,7 @@ def test_init_file_restores_max_version_after_server_restart(tmp_path, test_file
             file_key="mount-0:/test.md",
             file_path=test_file,
             base_version=i,
-            changes=[{"type": "replace", "paraIdx": 0, "content": f"content v{i+1}"}],
+            changes=[{"type": "replace", "paraIdx": 0, "content": f"content v{i + 1}"}],
             author_id="user1",
             author_name="Tester",
             author_color="#fff",

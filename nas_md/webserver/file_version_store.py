@@ -20,8 +20,11 @@ Conflict resolution (base_version mismatch):
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import secrets
+import stat
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -36,6 +39,207 @@ from nas_md.webserver.paragraph_diff import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ATOMIC_TEMP_ATTEMPTS = 10
+
+
+def _create_atomic_temp(
+    directory: str, *, mode: int = 0o600, prefix: str = ".nasmd-"
+) -> tuple[int, str]:
+    """Exclusively create a short, same-directory temporary file."""
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    for _ in range(_ATOMIC_TEMP_ATTEMPTS):
+        temp_path = os.path.join(directory, f"{prefix}{secrets.token_hex(8)}.tmp")
+        try:
+            return os.open(temp_path, flags, mode), temp_path
+        except FileExistsError:
+            continue
+        except PermissionError:
+            if os.path.isdir(temp_path):
+                continue
+            raise
+    raise FileExistsError("unable to allocate atomic write temporary file")
+
+
+def _probe_new_file_mode(directory: str) -> int:
+    """Ask the kernel for the directory's umask/default-ACL-derived mode."""
+    fd, probe_path = _create_atomic_temp(directory, mode=0o666, prefix=".nasmd-perm-")
+    try:
+        return stat.S_IMODE(os.fstat(fd).st_mode)
+    finally:
+        try:
+            os.close(fd)
+        finally:
+            os.remove(probe_path)
+
+
+def _snapshot_xattrs(file_path: str) -> tuple[tuple[str | bytes, bytes], ...]:
+    """Read every extended attribute or fail before replacing the target."""
+    listxattr = getattr(os, "listxattr", None)
+    getxattr = getattr(os, "getxattr", None)
+    if listxattr is None or getxattr is None:
+        return ()
+    names = listxattr(file_path, follow_symlinks=False)
+    return tuple((name, getxattr(file_path, name, follow_symlinks=False)) for name in names)
+
+
+def _apply_xattrs(fd: int, attributes: tuple[tuple[str | bytes, bytes], ...]) -> None:
+    """Apply a complete extended-attribute snapshot to an open temp file."""
+    if not attributes:
+        return
+    setxattr = getattr(os, "setxattr", None)
+    if setxattr is None:
+        raise OSError("extended attributes cannot be preserved on this platform")
+    for name, value in attributes:
+        setxattr(fd, name, value)
+
+
+def _copy_file_windows(source_path: str, destination_path: str) -> None:
+    """Copy a Windows file and all of its streams and security metadata."""
+    import ctypes
+    from ctypes import wintypes
+
+    copy_file = ctypes.WinDLL("kernel32", use_last_error=True).CopyFileW
+    copy_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.BOOL,
+    )
+    copy_file.restype = wintypes.BOOL
+    if not copy_file(source_path, destination_path, True):
+        error_code = ctypes.get_last_error()
+        if error_code in (80, 183):
+            raise FileExistsError(error_code, ctypes.FormatError(error_code), destination_path)
+        if error_code == 5:
+            raise PermissionError(error_code, ctypes.FormatError(error_code), destination_path)
+        raise OSError(error_code, ctypes.FormatError(error_code), destination_path)
+
+
+def _copy_atomic_temp_windows(source_path: str, directory: str) -> tuple[int, str]:
+    """Copy an existing Windows file to a short temp, then open its default stream."""
+    flags = os.O_WRONLY | os.O_TRUNC
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    for _ in range(_ATOMIC_TEMP_ATTEMPTS):
+        temp_path = os.path.join(directory, f".nasmd-{secrets.token_hex(8)}.tmp")
+        try:
+            _copy_file_windows(source_path, temp_path)
+        except FileExistsError:
+            continue
+        except PermissionError:
+            if os.path.isdir(temp_path):
+                continue
+            raise
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.remove(temp_path)
+            raise
+        try:
+            return os.open(temp_path, flags), temp_path
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.remove(temp_path)
+            raise
+    raise FileExistsError("unable to allocate atomic write temporary file")
+
+
+def _replace_target(temp_path: str, target_path: str, target_existed: bool) -> None:
+    """Atomically move the fully prepared temporary file into place."""
+    os.replace(temp_path, target_path)
+
+
+def _fsync_directory(directory: str) -> None:
+    """Best-effort directory sync after a completed atomic replacement."""
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+def _write_text_atomically(
+    file_path: str,
+    content: str,
+    before_replace: Callable[[str], Callable[[], None] | None] | None,
+) -> None:
+    """Write complete text beside the target, then atomically replace it."""
+    target_path = os.path.abspath(file_path)
+    directory = os.path.dirname(target_path) or "."
+    os.makedirs(directory, exist_ok=True)
+
+    try:
+        existing_stat = os.stat(target_path)
+    except FileNotFoundError:
+        existing_stat = None
+
+    if existing_stat is None:
+        final_mode = _probe_new_file_mode(directory)
+        xattrs = ()
+    else:
+        final_mode = stat.S_IMODE(existing_stat.st_mode)
+        xattrs = _snapshot_xattrs(target_path)
+
+    if existing_stat is not None and os.name == "nt":
+        fd, temp_path = _copy_atomic_temp_windows(target_path, directory)
+    else:
+        fd, temp_path = _create_atomic_temp(directory, mode=0o600)
+
+    rollback_expected = None
+    replaced = False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = -1
+            f.write(content)
+            f.flush()
+            if existing_stat is not None:
+                fchown = getattr(os, "fchown", None)
+                if fchown is not None:
+                    fchown(f.fileno(), existing_stat.st_uid, existing_stat.st_gid)
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(f.fileno(), final_mode)
+            else:
+                os.chmod(temp_path, final_mode)
+            _apply_xattrs(f.fileno(), xattrs)
+            os.fsync(f.fileno())
+        if before_replace is not None:
+            rollback_expected = before_replace(content)
+        try:
+            _replace_target(temp_path, target_path, existing_stat is not None)
+        except BaseException:
+            if rollback_expected is not None:
+                try:
+                    rollback_expected()
+                except Exception:
+                    logger.warning("Failed to roll back expected file watcher mark", exc_info=True)
+            raise
+        replaced = True
+    finally:
+        if fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if not replaced:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning("Failed to clean temporary file %s", temp_path, exc_info=True)
+
+    try:
+        _fsync_directory(directory)
+    except OSError:
+        logger.warning(
+            "Failed to sync directory %s after file replacement", directory, exc_info=True
+        )
 
 
 @dataclass
@@ -116,7 +320,7 @@ class FileVersionStore:
         user_agent: str = "",
         client_content: str | None = None,
         base_content: str | None = None,
-        before_write: Callable[[str], None] | None = None,
+        before_write: Callable[[str], Callable[[], None] | None] | None = None,
     ) -> dict:
         """Apply changes with version-based optimistic locking.
 
@@ -196,19 +400,16 @@ class FileVersionStore:
 
             # Write to disk
             try:
-                if before_write is not None:
-                    before_write(new_content)
-                os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(new_content)
-            except OSError as e:
-                logger.error("Failed to write file %s: %s", file_path, e)
+                _write_text_atomically(file_path, new_content, before_write)
+            except OSError:
+                logger.exception("Failed to write file %s", file_path)
                 return {
                     "applied": False,
                     "merged": False,
                     "newVersion": fv.version,
                     "content": fv.content,
-                    "error": str(e),
+                    "errorCode": "write_failed",
+                    "message": "Unable to save file",
                 }
 
             # Update in-memory state

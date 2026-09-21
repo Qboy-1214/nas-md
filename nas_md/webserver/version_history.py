@@ -7,12 +7,15 @@ survives server restarts.
 
 import contextlib
 import json
+import logging
 import os
 import threading
 import time
 import weakref
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 _MAX_HISTORY_PER_FILE = 50
 _MAX_CACHE_FILES = 200
@@ -185,7 +188,7 @@ def _persist(file_key: str, hist: FileHistory, storage_dir: str | None = None):
                 with contextlib.suppress(OSError):
                     os.remove(legacy_path)
         except Exception:
-            pass
+            logger.warning("Failed to persist version history for %s", file_key, exc_info=True)
 
 
 def _load(file_key: str, storage_dir: str | None = None) -> FileHistory | None:

@@ -420,6 +420,163 @@ test('save keeps an over-budget document dirty without submitting changes', asyn
   expect(result.draftContent).toBe(result.editorContent);
 });
 
+test('save keeps the local draft dirty when the server reports a write failure', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/write-failure.md';
+    const base = 'before';
+    const local = 'after';
+    const originalRequest = API.request;
+    API.request = async () =>
+      new Response(
+        JSON.stringify({
+          applied: false,
+          merged: false,
+          newVersion: 7,
+          content: base,
+          errorCode: 'write_failed',
+          message: 'Unable to save file',
+        }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } },
+      );
+    localStorage.removeItem(`nasmd_draft_${path}`);
+    Object.assign(window.state, {
+      currentMountId: 'write-failure',
+      currentPath: path,
+      mounts: [{ id: 'write-failure', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 7,
+      baseContent: base,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = base;
+    window._vditor = { getValue: () => local };
+
+    try {
+      await window.saveFile();
+      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${path}`));
+      return {
+        dirty: window.state.dirty,
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        draftContent: draft?.content,
+      };
+    } finally {
+      API.request = originalRequest;
+    }
+  });
+
+  expect(result).toEqual({
+    dirty: true,
+    baseVersion: 7,
+    baseContent: 'before',
+    draftContent: 'after',
+  });
+});
+
+test('new-file flow shows only failure when PUT returns 500', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const originalRequest = API.request;
+    const toast = document.getElementById('toast');
+    const messages = [];
+    const observer = new MutationObserver(() => messages.push(toast.textContent));
+    observer.observe(toast, { childList: true, characterData: true, subtree: true });
+
+    let finishRequest;
+    const requestFinished = new Promise((resolve) => {
+      finishRequest = resolve;
+    });
+    API.request = async () => {
+      finishRequest();
+      return new Response(
+        JSON.stringify({ errorCode: 'write_failed', message: 'Unable to save file' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+    window.state.mounts = [{ id: 'write-failure', readonly: false }];
+    document.getElementById('new-file-name').value = 'failed-create';
+
+    try {
+      confirmNewFile();
+      await requestFinished;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { messages, finalToast: toast.textContent };
+    } finally {
+      observer.disconnect();
+      API.request = originalRequest;
+    }
+  });
+
+  expect(result.finalToast).toBe('创建失败');
+  expect(result.messages).toContain('创建失败');
+  expect(result.messages).not.toContain('已创建');
+});
+
+test('server import flow shows only failure when PUT returns 500', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const originalRequest = API.request;
+    const toast = document.getElementById('toast');
+    const messages = [];
+    const observer = new MutationObserver(() => messages.push(toast.textContent));
+    observer.observe(toast, { childList: true, characterData: true, subtree: true });
+
+    let finishPut;
+    const putFinished = new Promise((resolve) => {
+      finishPut = resolve;
+    });
+    API.request = async (_path, options = {}) => {
+      if (options.method === 'PUT') {
+        finishPut();
+        return new Response(
+          JSON.stringify({ errorCode: 'write_failed', message: 'Unable to save file' }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response('', { status: 404 });
+    };
+
+    Object.assign(window.state, {
+      mounts: [{ id: 'write-failure', readonly: false }],
+      localMounts: {},
+      _fileOpInProgress: false,
+    });
+    setupDragDrop();
+    const target = document.createElement('div');
+    target.dataset.dropMount = 'write-failure';
+    target.dataset.dropPath = '/';
+    document.getElementById('file-tree').appendChild(target);
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['content'], 'failed-import.md', { type: 'text/markdown' }));
+
+    try {
+      target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: transfer }));
+      await putFinished;
+      while (window.state._fileOpInProgress) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { messages, finalToast: toast.textContent };
+    } finally {
+      observer.disconnect();
+      API.request = originalRequest;
+      target.remove();
+    }
+  });
+
+  expect(result.finalToast).toBe('导入失败');
+  expect(result.messages).toContain('导入失败');
+  expect(result.messages).not.toContain('已导入: failed-import.md');
+});
+
 test('large paragraph fallback remains within the browser main-thread budget', async ({ page }) => {
   await page.goto('/admin');
 

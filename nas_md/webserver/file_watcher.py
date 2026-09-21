@@ -11,9 +11,13 @@ watchdog is an optional dependency — if not available, the watcher is a no-op.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
+import time
+from collections import OrderedDict, deque
+from dataclasses import dataclass
 
 try:
     from typing import TYPE_CHECKING
@@ -24,6 +28,34 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, eq=False)
+class _ExpectedWriteToken:
+    """Opaque identity for one expected watcher event."""
+
+    key: str
+    content: str
+
+
+@dataclass(frozen=True)
+class _FileFingerprint:
+    """Filesystem identity for suppressing duplicate events from one write."""
+
+    device: int
+    inode: int
+    size: int
+    modified_ns: int
+
+
+@dataclass(frozen=True)
+class _RecentExpectedWrite:
+    """Content and filesystem identity for a short duplicate-event window."""
+
+    fingerprint: _FileFingerprint
+    digest: bytes
+    expires_at: float
+
 
 try:
     from watchdog.events import FileSystemEventHandler
@@ -65,6 +97,14 @@ class _MountWatchHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else objec
             return
         self._handle(event.src_path)
 
+    def on_moved(self, event):  # type: ignore[override]
+        if event.is_directory:
+            return
+        destination = getattr(event, "dest_path", None)
+        if not destination or not os.path.exists(destination):
+            return
+        self._handle(destination)
+
     def _handle(self, abs_path: str):
         abs_path = os.path.abspath(abs_path)
         if not self._is_markdown(abs_path):
@@ -79,7 +119,12 @@ class _MountWatchHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else objec
         # Normalize to leading slash
         if not rel_path.startswith("/"):
             rel_path = "/" + rel_path
-        # Skip if this is the server's own write
+        # Atomic replacement can emit both moved and modified. Check the last
+        # consumed fingerprint first so a duplicate cannot consume a token for
+        # a later save.
+        if self._watcher.is_duplicate_expected_event(self._mount_id, rel_path, abs_path):
+            return
+        # Skip if this is the server's own write.
         if self._watcher.is_expected(self._mount_id, rel_path, abs_path):
             return
         # Read content (best-effort)
@@ -99,12 +144,24 @@ class _MountWatchHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else objec
 class FileWatcher:
     """Manages watchdog observers for all host mounts."""
 
-    def __init__(self):
-        from collections import deque
-
+    def __init__(
+        self,
+        *,
+        monotonic: Callable[[], float] | None = None,
+        recent_expected_ttl: float = 2.0,
+        recent_expected_limit: int = 1024,
+    ):
+        if recent_expected_ttl < 0:
+            raise ValueError("recent_expected_ttl must be non-negative")
+        if recent_expected_limit < 1:
+            raise ValueError("recent_expected_limit must be positive")
         self._observers: dict = {}
         self._handlers: dict = {}
-        self._expected: dict[str, deque[str]] = {}  # "mount_id:rel_path" -> deque([content, ...])
+        self._expected: dict[str, deque[_ExpectedWriteToken]] = {}
+        self._recent_expected: OrderedDict[str, _RecentExpectedWrite] = OrderedDict()
+        self._monotonic = monotonic or time.monotonic
+        self._recent_expected_ttl = recent_expected_ttl
+        self._recent_expected_limit = recent_expected_limit
         self._expected_lock = threading.Lock()
         self._lock = threading.Lock()
 
@@ -147,6 +204,12 @@ class FileWatcher:
                 observer.join(timeout=1.0)
             except Exception as e:
                 logger.warning("Error stopping observer for %s: %s", mount_id, e)
+        key_prefix = f"{mount_id}:"
+        with self._expected_lock:
+            for key in [key for key in self._expected if key.startswith(key_prefix)]:
+                self._expected.pop(key, None)
+            for key in [key for key in self._recent_expected if key.startswith(key_prefix)]:
+                self._recent_expected.pop(key, None)
 
     def stop_all(self):
         """Stop all observers."""
@@ -155,15 +218,31 @@ class FileWatcher:
         for mid in ids:
             self.stop_mount(mid)
 
-    def mark_expected(self, mount_id: str, rel_path: str, content: str):
+    def mark_expected(self, mount_id: str, rel_path: str, content: str) -> _ExpectedWriteToken:
         """Mark an upcoming server write so watchdog doesn't flag it as external."""
-        from collections import deque
-
         key = f"{mount_id}:{rel_path}"
+        token = _ExpectedWriteToken(key=key, content=content)
         with self._expected_lock:
             if key not in self._expected:
                 self._expected[key] = deque(maxlen=10)
-            self._expected[key].append(content)
+            self._expected[key].append(token)
+        return token
+
+    def unmark_expected(self, token: _ExpectedWriteToken) -> bool:
+        """Remove only the mark represented by ``token`` after a failed write."""
+        if not isinstance(token, _ExpectedWriteToken):
+            return False
+        with self._expected_lock:
+            q = self._expected.get(token.key)
+            if not q:
+                return False
+            for index, item in enumerate(q):
+                if item is token:
+                    del q[index]
+                    if not q:
+                        self._expected.pop(token.key, None)
+                    return True
+            return False
 
     def is_expected(self, mount_id: str, rel_path: str, abs_path: str) -> bool:
         """Check if the file content matches any expected (server's own) write.
@@ -177,8 +256,7 @@ class FileWatcher:
                 return False
 
         try:
-            with open(abs_path, encoding="utf-8", errors="replace") as f:
-                actual = f.read()
+            actual, fingerprint, digest = self._read_state(abs_path)
         except OSError:
             return False
 
@@ -187,14 +265,24 @@ class FileWatcher:
             if not q:
                 return False
 
-            if actual in q:
+            if any(mark.content == actual for mark in q):
                 # Remove up to and including the matched item
                 while q:
-                    item = q.popleft()
-                    if item == actual:
+                    mark = q.popleft()
+                    if mark.content == actual:
                         break
                 if not q:
                     self._expected.pop(key, None)
+                now = self._monotonic()
+                self._prune_recent_expected(now)
+                self._recent_expected[key] = _RecentExpectedWrite(
+                    fingerprint=fingerprint,
+                    digest=digest,
+                    expires_at=now + self._recent_expected_ttl,
+                )
+                self._recent_expected.move_to_end(key)
+                while len(self._recent_expected) > self._recent_expected_limit:
+                    self._recent_expected.popitem(last=False)
                 return True
             else:
                 # Top item did not match; pop one to avoid stale queue buildup
@@ -202,6 +290,53 @@ class FileWatcher:
                 if not q:
                     self._expected.pop(key, None)
                 return False
+
+    def is_duplicate_expected_event(self, mount_id: str, rel_path: str, abs_path: str) -> bool:
+        """Return True while an event still describes the last expected write."""
+        key = f"{mount_id}:{rel_path}"
+        try:
+            _content, fingerprint, digest = self._read_state(abs_path)
+        except OSError:
+            return False
+
+        now = self._monotonic()
+        with self._expected_lock:
+            self._prune_recent_expected(now)
+            expected = self._recent_expected.get(key)
+            if (
+                expected is not None
+                and expected.fingerprint == fingerprint
+                and expected.digest == digest
+            ):
+                self._recent_expected.move_to_end(key)
+                return True
+            if expected is not None:
+                self._recent_expected.pop(key, None)
+            return False
+
+    def _prune_recent_expected(self, now: float) -> None:
+        for key in [
+            key for key, item in self._recent_expected.items() if item.expires_at <= now
+        ]:
+            self._recent_expected.pop(key, None)
+
+    @staticmethod
+    def _read_state(abs_path: str) -> tuple[str, _FileFingerprint, bytes]:
+        with open(abs_path, "rb") as f:
+            raw_content = f.read()
+            fingerprint = FileWatcher._fingerprint_from_stat(os.fstat(f.fileno()))
+        content = raw_content.decode("utf-8", errors="replace")
+        digest = hashlib.sha256(raw_content).digest()
+        return content, fingerprint, digest
+
+    @staticmethod
+    def _fingerprint_from_stat(stat_result: os.stat_result) -> _FileFingerprint:
+        return _FileFingerprint(
+            device=stat_result.st_dev,
+            inode=stat_result.st_ino,
+            size=stat_result.st_size,
+            modified_ns=stat_result.st_mtime_ns,
+        )
 
 
 _watcher: FileWatcher | None = None

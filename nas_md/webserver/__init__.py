@@ -1481,7 +1481,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         new_text = body.decode("utf-8", errors="replace")
 
-        from nas_md.webserver.file_version_store import get_store
+        from nas_md.webserver.file_version_store import _write_text_atomically, get_store
         from nas_md.webserver.paragraph_diff import DiffWorkLimitExceeded, compute_diff
 
         store = get_store()
@@ -1520,23 +1520,37 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             try:
                 from nas_md.webserver.file_watcher import get_watcher
 
-                get_watcher().mark_expected(mount_id, rel_path, content)
+                watcher = get_watcher()
+                token = watcher.mark_expected(mount_id, rel_path, content)
             except Exception:
-                pass  # watcher optional
+                return None  # watcher optional
+
+            def rollback():
+                with contextlib.suppress(Exception):
+                    watcher.unmark_expected(token)
+
+            return rollback
 
         if not file_existed and not new_text:
-            parent = os.path.dirname(abs_path)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            mark_expected(new_text)
-            with open(abs_path, "w", encoding="utf-8"):
-                pass
-            result = {
-                "applied": False,
-                "merged": False,
-                "newVersion": store.get_current_version(file_key),
-                "content": new_text,
-            }
+            try:
+                _write_text_atomically(abs_path, new_text, mark_expected)
+            except OSError:
+                logger.exception("Failed to write file %s", abs_path)
+                result = {
+                    "applied": False,
+                    "merged": False,
+                    "newVersion": store.get_current_version(file_key),
+                    "content": new_text,
+                    "errorCode": "write_failed",
+                    "message": "Unable to save file",
+                }
+            else:
+                result = {
+                    "applied": False,
+                    "merged": False,
+                    "newVersion": store.get_current_version(file_key),
+                    "content": new_text,
+                }
         else:
             result = store.apply_changes(
                 file_key=file_key,
@@ -1549,6 +1563,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 client_content=new_text,
                 before_write=mark_expected,
             )
+
+        if result.get("errorCode"):
+            return self._send_json(result, 500)
 
         if changes and not result.get("applied"):
             return self._send_json(result, 409)
@@ -1756,9 +1773,16 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             try:
                 from nas_md.webserver.file_watcher import get_watcher
 
-                get_watcher().mark_expected(mount_id, rel_path, content)
+                watcher = get_watcher()
+                token = watcher.mark_expected(mount_id, rel_path, content)
             except Exception:
-                pass  # watcher optional
+                return None  # watcher optional
+
+            def rollback():
+                with contextlib.suppress(Exception):
+                    watcher.unmark_expected(token)
+
+            return rollback
 
         try:
             result = store.apply_changes(
@@ -1802,7 +1826,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 logger.warning("SSE broadcast failed: %s", e)
 
-        self._send_json(result)
+        self._send_json(result, 500 if result.get("errorCode") else 200)
 
     def _handle_rename(self, mount_id: str, qs: dict):
         if not self.mount_manager:
