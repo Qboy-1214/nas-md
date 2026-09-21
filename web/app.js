@@ -3984,7 +3984,7 @@ function positionsByValue(items, start, end) {
   return positions;
 }
 
-const MATCH_PAIR_WORK_BUDGET = 1000000;
+const MATCH_PAIR_WORK_BUDGET = 128 * 1024;
 
 class DiffWorkLimitError extends Error {
   constructor() {
@@ -3992,6 +3992,14 @@ class DiffWorkLimitError extends Error {
     this.name = 'DiffWorkLimitError';
     this.code = 'DIFF_WORK_LIMIT_EXCEEDED';
   }
+}
+
+function matchPairCount(oldItems, newItems) {
+  const newCounts = new Map();
+  for (const item of newItems) newCounts.set(item, (newCounts.get(item) || 0) + 1);
+  let count = 0;
+  for (const item of oldItems) count += newCounts.get(item) || 0;
+  return count;
 }
 
 function huntSzymanskiMatches(oldItems, newPositions) {
@@ -4117,6 +4125,16 @@ function diffOperations(oldItems, newItems) {
     if (!newSegment.some((item) => oldSet.has(item))) {
       for (let idx = 0; idx < oldLength; idx++) operations.push('delete');
       for (let idx = 0; idx < newLength; idx++) operations.push('insert');
+      continue;
+    }
+
+    if (matchPairCount(oldSegment, newSegment) > MATCH_PAIR_WORK_BUDGET) {
+      const exactOperations = operationsFromMatches(
+        oldLength,
+        newLength,
+        exactLcsMatches(oldSegment, newSegment),
+      );
+      for (const operation of exactOperations) operations.push(operation);
       continue;
     }
 

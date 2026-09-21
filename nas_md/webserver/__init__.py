@@ -1501,13 +1501,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             changes = compute_diff(old_content, new_text) if old_content != new_text else []
         except DiffWorkLimitExceeded:
+            snapshot = store.get_current_snapshot(file_key)
             return self._send_json(
                 {
                     "applied": False,
                     "merged": False,
                     "resyncRequired": True,
-                    "newVersion": store.get_current_version(file_key),
-                    "content": store.get_current_content(file_key),
+                    "newVersion": snapshot["version"],
+                    "content": snapshot["content"],
                 },
                 409,
             )

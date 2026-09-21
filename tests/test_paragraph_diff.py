@@ -1,4 +1,5 @@
 import json
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -494,6 +495,25 @@ def test_compute_diff_raises_typed_error_when_exact_work_budget_is_exhausted():
 
     with pytest.raises(paragraph_diff.DiffWorkLimitExceeded):
         compute_diff("\n\n".join(old_paragraphs), "\n\n".join(new_paragraphs))
+
+
+def test_compute_diff_rejects_near_million_match_graph_before_allocating_it():
+    repetitions = 577
+    match_pair_count = 3 * repetitions * repetitions
+    old_paragraphs = ["A"] * repetitions + ["B"] * repetitions + ["C"] * repetitions
+    new_paragraphs = ["B"] * repetitions + ["C"] * repetitions + ["A"] * repetitions
+
+    assert match_pair_count == 998_787
+    tracemalloc.start()
+    try:
+        with pytest.raises(paragraph_diff.DiffWorkLimitExceeded):
+            compute_diff("\n\n".join(old_paragraphs), "\n\n".join(new_paragraphs))
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert paragraph_diff._MATCH_PAIR_WORK_BUDGET == 128 * 1024
+    assert peak_bytes < 8 * 1024 * 1024
 
 
 def test_apply_changes_does_not_rewrite_explicit_delimiter_before_trailing_insert():

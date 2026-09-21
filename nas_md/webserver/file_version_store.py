@@ -325,6 +325,15 @@ class FileVersionStore:
         with fv.lock:
             return fv.content
 
+    def get_current_snapshot(self, file_key: str) -> dict:
+        """Return the current version and content from one file-lock acquisition."""
+        with self._lock:
+            fv = self._files.get(file_key)
+        if fv is None:
+            return {"version": 0, "content": None}
+        with fv.lock:
+            return {"version": fv.version, "content": fv.content}
+
     def _prune_changes_history(self, fv: _FileVersion, keep: int = 50):
         """Keep only the most recent `keep` versions of changes_by_version."""
         if len(fv.changes_by_version) <= keep:

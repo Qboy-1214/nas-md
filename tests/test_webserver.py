@@ -786,6 +786,61 @@ class TestWriteFileAPI:
         with open(path, encoding="utf-8") as f:
             assert f.read() == old_content
 
+    def test_write_markdown_work_limit_returns_one_atomic_store_snapshot(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from nas_md.webserver import paragraph_diff
+        from nas_md.webserver.file_version_store import FileVersionStore, get_store
+
+        path = os.path.join(writable_dir, "snapshot.md")
+        old_content = "A\n\nB"
+        concurrent_content = "A-REMOTE\n\nB"
+        file_key = "writable:/snapshot.md"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(old_content)
+
+        store = get_store()
+        store.init_file(file_key, path, old_content)
+        original_get_version = FileVersionStore.get_current_version
+        original_compute_diff = paragraph_diff.compute_diff
+        interleaving_write_applied = threading.Event()
+
+        def exhaust_diff(_old_text, _new_text):
+            raise paragraph_diff.DiffWorkLimitExceeded
+
+        def get_version_then_apply_write(self, key):
+            version = original_get_version(self, key)
+            result = self.apply_changes(
+                file_key,
+                path,
+                0,
+                original_compute_diff(old_content, concurrent_content),
+                "remote",
+                "Remote",
+                "#f00",
+                client_content=concurrent_content,
+                base_content=old_content,
+            )
+            assert result["applied"] is True
+            interleaving_write_applied.set()
+            return version
+
+        monkeypatch.setattr(FileVersionStore, "get_current_version", get_version_then_apply_write)
+        monkeypatch.setattr(paragraph_diff, "compute_diff", exhaust_diff)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/snapshot.md",
+            data=b"unreachable replacement",
+        )
+
+        assert status == 409
+        response = json.loads(body)
+        snapshot = (response["newVersion"], response["content"])
+        if interleaving_write_applied.is_set():
+            assert snapshot == (1, concurrent_content)
+        else:
+            assert snapshot == (0, old_content)
+
 
 class TestSubmitChangesAPI:
     """Integration tests for POST /api/mounts/{id}/changes — version-driven paragraph merge."""

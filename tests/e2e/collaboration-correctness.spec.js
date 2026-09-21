@@ -323,6 +323,44 @@ test('paragraph diff reports typed work-limit exhaustion', async ({ page }) => {
   });
 });
 
+test('paragraph diff rejects a 998787-pair match graph before allocating it', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(() => {
+    const repetitions = 577;
+    const oldParagraphs = new Array(repetitions)
+      .fill('A')
+      .concat(new Array(repetitions).fill('B'))
+      .concat(new Array(repetitions).fill('C'));
+    const newParagraphs = new Array(repetitions)
+      .fill('B')
+      .concat(new Array(repetitions).fill('C'))
+      .concat(new Array(repetitions).fill('A'));
+    try {
+      const changes = window.nasmdDiff.computeParagraphDiff(
+        oldParagraphs.join('\n\n'),
+        newParagraphs.join('\n\n'),
+      );
+      return { threw: false, changesLength: changes.length };
+    } catch (error) {
+      return {
+        threw: true,
+        name: error.name,
+        code: error.code,
+        typed: error instanceof window.nasmdDiff.DiffWorkLimitError,
+      };
+    }
+  });
+
+  expect(3 * 577 * 577).toBe(998787);
+  expect(result).toEqual({
+    threw: true,
+    name: 'DiffWorkLimitError',
+    code: 'DIFF_WORK_LIMIT_EXCEEDED',
+    typed: true,
+  });
+});
+
 test('save keeps an over-budget document dirty without submitting changes', async ({ page }) => {
   await page.goto('/admin');
 

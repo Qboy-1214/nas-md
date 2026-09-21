@@ -310,7 +310,15 @@ def _positions_by_value(items: list[str], start: int, end: int) -> dict[str, lis
     return positions
 
 
-_MATCH_PAIR_WORK_BUDGET = 1_000_000
+_MATCH_PAIR_WORK_BUDGET = 128 * 1024
+
+
+def _match_pair_count(old_items: list[str], new_items: list[str]) -> int:
+    """Count equal-position pairs without materializing the match graph."""
+    new_counts: dict[str, int] = {}
+    for item in new_items:
+        new_counts[item] = new_counts.get(item, 0) + 1
+    return sum(new_counts.get(item, 0) for item in old_items)
 
 
 def _hunt_szymanski_matches(
@@ -427,6 +435,11 @@ def _diff_operations(old_items: list[str], new_items: list[str]) -> list[str]:
         if set(old_segment).isdisjoint(new_segment):
             operations.extend("delete" for _ in range(old_len))
             operations.extend("insert" for _ in range(new_len))
+            continue
+
+        if _match_pair_count(old_segment, new_segment) > _MATCH_PAIR_WORK_BUDGET:
+            matches = _exact_lcs_matches(old_segment, new_segment)
+            operations.extend(_operations_from_matches(old_len, new_len, matches))
             continue
 
         segment_operations = _bounded_myers_operations(old_segment, new_segment)

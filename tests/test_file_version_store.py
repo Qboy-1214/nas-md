@@ -40,6 +40,16 @@ def test_init_file_new(store, test_file):
     assert version == 0
 
 
+def test_get_current_snapshot_returns_version_and_content_together(store, test_file):
+    content = "para one\n\npara two"
+    store.init_file("mount-0:/test.md", test_file, content)
+
+    assert store.get_current_snapshot("mount-0:/test.md") == {
+        "version": 0,
+        "content": content,
+    }
+
+
 def test_init_file_with_existing_history(store, test_file):
     store.init_file("mount-0:/test.md", test_file, "para one\n\npara two\n\npara three")
     store.apply_changes(
@@ -234,6 +244,124 @@ def test_large_diff_for_one_file_does_not_block_another_file_query(store, tmp_pa
 
     assert completed_while_diff_blocked
     assert query_result == {"version": 0, "content": base_b}
+
+
+def test_history_persist_for_one_file_does_not_block_another_file_apply(
+    store, tmp_path, monkeypatch
+):
+    file_a = tmp_path / "history-a.md"
+    file_b = tmp_path / "history-b.md"
+    base_a = "A"
+    base_b = "B"
+    target_a = "A-local"
+    target_b = "B-local"
+    key_a = "mount-0:/history-a.md"
+    key_b = "mount-0:/history-b.md"
+    file_a.write_text(base_a, encoding="utf-8")
+    file_b.write_text(base_b, encoding="utf-8")
+    store.init_file(key_a, str(file_a), base_a)
+    store.init_file(key_b, str(file_b), base_b)
+    persist_started = threading.Event()
+    release_persist = threading.Event()
+    apply_b_done = threading.Event()
+    original_persist = version_history._persist
+    results = {}
+
+    def controlled_persist(file_key, history, storage_dir=None):
+        if file_key == key_a:
+            persist_started.set()
+            assert release_persist.wait(timeout=5)
+        return original_persist(file_key, history, storage_dir=storage_dir)
+
+    def apply(key, path, base, target):
+        return store.apply_changes(
+            key,
+            str(path),
+            0,
+            compute_diff(base, target),
+            "local",
+            "Local",
+            "#0f0",
+            client_content=target,
+            base_content=base,
+        )
+
+    monkeypatch.setattr(version_history, "_persist", controlled_persist)
+    thread_a = threading.Thread(
+        target=lambda: results.setdefault("a", apply(key_a, file_a, base_a, target_a))
+    )
+
+    def apply_b():
+        results["b"] = apply(key_b, file_b, base_b, target_b)
+        apply_b_done.set()
+
+    thread_a.start()
+    assert persist_started.wait(timeout=5)
+    thread_b = threading.Thread(target=apply_b)
+    thread_b.start()
+    completed_while_a_persist_blocked = apply_b_done.wait(timeout=1)
+    release_persist.set()
+    thread_a.join(timeout=5)
+    thread_b.join(timeout=5)
+
+    assert completed_while_a_persist_blocked
+    assert results["a"]["applied"] is True
+    assert results["b"]["applied"] is True
+    assert file_a.read_text(encoding="utf-8") == target_a
+    assert file_b.read_text(encoding="utf-8") == target_b
+
+
+def test_history_updates_for_the_same_file_remain_serialized_and_persisted(store, monkeypatch):
+    key = "mount-0:/same-history.md"
+    persist_started = threading.Event()
+    release_persist = threading.Event()
+    second_persist_started = threading.Event()
+    original_persist = version_history._persist
+    errors = []
+
+    def controlled_persist(file_key, history, storage_dir=None):
+        newest_content = history.versions[-1].content_snapshot
+        if newest_content == "version one":
+            persist_started.set()
+            assert release_persist.wait(timeout=5)
+        elif newest_content == "version two":
+            second_persist_started.set()
+        return original_persist(file_key, history, storage_dir=storage_dir)
+
+    def record(version, content):
+        try:
+            version_history.record_version(
+                file_key=key,
+                author_id="local",
+                author_name="Local",
+                author_color="#0f0",
+                changes=[],
+                content_snapshot=content,
+                version=version,
+                storage_dir=store._storage_dir,
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(version_history, "_persist", controlled_persist)
+    first = threading.Thread(target=record, args=(1, "version one"))
+    first.start()
+    assert persist_started.wait(timeout=5)
+    second = threading.Thread(target=record, args=(2, "version two"))
+    second.start()
+    second_started_before_release = second_persist_started.wait(timeout=0.5)
+    release_persist.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not second_started_before_release
+    assert not errors
+    loaded = version_history._load(key, storage_dir=store._storage_dir)
+    assert loaded is not None
+    assert [(entry.version, entry.content_snapshot) for entry in loaded.versions] == [
+        (1, "version one"),
+        (2, "version two"),
+    ]
 
 
 def test_apply_changes_3way_merge_with_shifting_indices(store, test_file):
