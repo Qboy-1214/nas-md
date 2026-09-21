@@ -272,6 +272,37 @@ def test_successful_write_marks_expected_from_prepared_temp_identity(store, test
     assert (tokens[0].fingerprint, tokens[0].digest) == (fingerprint, digest)
 
 
+def test_create_empty_file_resyncs_without_overwriting_persisted_version(store, tmp_path):
+    file_path = tmp_path / "created-by-post.md"
+    file_key = "mount-0:/created-by-post.md"
+    store.init_file(file_key, str(file_path), "", persisted=False)
+    post_result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "insert", "paraIdx": 0, "content": "B"}],
+        author_id="post",
+        author_name="POST",
+        author_color="#fff",
+        client_content="B",
+        base_content="",
+    )
+    assert post_result["applied"] is True
+    assert post_result["newVersion"] == 1
+
+    result = store.create_empty_file(file_key, str(file_path))
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": "B",
+    }
+    assert file_path.read_text(encoding="utf-8") == "B"
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": "B"}
+
+
 def test_directory_sync_failure_after_replace_does_not_report_save_failure(
     store, test_file, monkeypatch
 ):

@@ -1535,7 +1535,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         if not file_existed and not new_text:
             try:
-                new_version = store.create_empty_file(file_key, abs_path, mark_expected)
+                result = store.create_empty_file(file_key, abs_path, mark_expected)
             except OSError:
                 logger.exception("Failed to write file %s", abs_path)
                 snapshot = store.get_current_snapshot(file_key)
@@ -1546,13 +1546,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     "content": snapshot["content"],
                     "errorCode": "write_failed",
                     "message": "Unable to save file",
-                }
-            else:
-                result = {
-                    "applied": False,
-                    "merged": False,
-                    "newVersion": new_version,
-                    "content": new_text,
                 }
         else:
             result = store.apply_changes(
@@ -1569,6 +1562,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         if result.get("errorCode"):
             return self._send_json(result, 500)
+
+        if result.get("resyncRequired"):
+            return self._send_json(result, 409)
 
         if changes and not result.get("applied"):
             return self._send_json(result, 409)

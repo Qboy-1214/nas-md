@@ -740,6 +740,77 @@ class TestWriteFileAPI:
             assert f.read() == "B"
         assert get_store().get_current_snapshot(file_key) == {"version": 1, "content": "B"}
 
+    def test_missing_empty_put_resyncs_when_post_persists_first(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from nas_md.webserver.file_version_store import FileVersionStore, get_store
+
+        name = f"empty-reverse-race-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        original_create_empty_file = FileVersionStore.create_empty_file
+        empty_before_create = threading.Event()
+        release_empty_create = threading.Event()
+        empty_result = {}
+        errors = []
+
+        def pause_empty_before_create(self, *args, **kwargs):
+            if args[0] == file_key:
+                empty_before_create.set()
+                if not release_empty_create.wait(timeout=5):
+                    raise TimeoutError("empty PUT was not released")
+            return original_create_empty_file(self, *args, **kwargs)
+
+        def run_empty_put():
+            try:
+                empty_result["response"] = _put(
+                    f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+                    data=b"",
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        monkeypatch.setattr(FileVersionStore, "create_empty_file", pause_empty_before_create)
+        empty_thread = threading.Thread(target=run_empty_put, daemon=True)
+        try:
+            empty_thread.start()
+            assert empty_before_create.wait(timeout=5)
+
+            post_status, post_body = _post(
+                f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+                data={
+                    "baseVersion": 0,
+                    "baseContent": "",
+                    "content": "B",
+                    "changes": [{"type": "insert", "paraIdx": 0, "content": "B"}],
+                },
+            )
+            assert post_status == 200
+            assert json.loads(post_body)["newVersion"] == 1
+            assert json.loads(post_body)["content"] == "B"
+            with open(path, encoding="utf-8") as f:
+                assert f.read() == "B"
+            assert get_store().get_current_snapshot(file_key) == {"version": 1, "content": "B"}
+        finally:
+            release_empty_create.set()
+            empty_thread.join(timeout=5)
+
+        assert not empty_thread.is_alive()
+        assert errors == []
+        empty_status, empty_body = empty_result["response"]
+        assert empty_status == 409
+        assert json.loads(empty_body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 1,
+            "content": "B",
+        }
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "B"
+        assert get_store().get_current_snapshot(file_key) == {"version": 1, "content": "B"}
+
     def test_write_file_existing_empty_markdown_remains_side_effect_free(
         self, writable_server_url, writable_dir, monkeypatch
     ):

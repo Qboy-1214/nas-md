@@ -350,15 +350,23 @@ class FileVersionStore:
         file_key: str,
         file_path: str,
         before_write: Callable[[str], Callable[[], None] | None] | None = None,
-    ) -> int:
-        """Persist an empty new file while serialized with versioned edits."""
+    ) -> dict:
+        """Persist an empty file only if it is still missing."""
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
             self._refresh_unpersisted(fv, file_path)
+            if fv.persisted:
+                return self._resync_result(fv)
+
             _write_text_atomically(file_path, "", before_write)
             fv.content = ""
             fv.persisted = True
-            return fv.version
+            return {
+                "applied": False,
+                "merged": False,
+                "newVersion": fv.version,
+                "content": "",
+            }
 
     def apply_changes(
         self,
