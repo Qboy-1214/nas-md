@@ -3385,6 +3385,8 @@ async function saveFile({ silent = false } = {}) {
   _saveInProgress = true;
   const btn = $('btn-save');
   let content;
+  let handledResync = false;
+  let retryAfterResync = false;
 
   setTimeout(() => {
     if (_saveInProgress) {
@@ -3429,7 +3431,7 @@ async function saveFile({ silent = false } = {}) {
 
     if (!navigator.onLine) {
       saveToLocalStorage(state.currentPath, content);
-      markClean();
+      markDirty();
       if (!silent) {
         showToast('已离线保存，恢复连接后自动同步');
       }
@@ -3491,8 +3493,15 @@ async function saveFile({ silent = false } = {}) {
       } else {
         // 服务器挂载：版本号驱动的段落级合并
         const fileKey = state.currentMountId + ':' + state.currentPath;
-        const baseContent = state.baseContent || window._originalContent || '';
-        const changes = computeParagraphDiff(baseContent, content);
+        const submittedContent = content;
+        const submittedBaseContent =
+          typeof state.baseContent === 'string'
+            ? state.baseContent
+            : typeof window._originalContent === 'string'
+              ? window._originalContent
+              : '';
+        const submittedBaseVersion = state.baseVersion;
+        const changes = computeParagraphDiff(submittedBaseContent, submittedContent);
 
         if (changes.length === 0) {
           console.log('[saveFile] no changes to submit');
@@ -3503,51 +3512,102 @@ async function saveFile({ silent = false } = {}) {
         const identity = window.nasmdIdentity ? window.nasmdIdentity.get() : null;
         console.log('[saveFile] submitChanges:', {
           fileKey,
-          baseVersion: state.baseVersion,
+          baseVersion: submittedBaseVersion,
           changesCount: changes.length,
         });
 
         const resp = await API.submitChanges(
           state.currentMountId,
           state.currentPath,
-          state.baseVersion,
+          submittedBaseVersion,
           changes,
           identity ? identity.name : 'Anonymous',
           identity ? identity.color : '#3498db',
           identity ? { os: identity.os, browser: identity.browser } : null,
-          content,
+          submittedContent,
+          submittedBaseContent,
         );
 
-        if (!resp || !resp.applied) {
-          console.log('[saveFile] changes not applied', resp);
-          if (resp && resp.errorCode) {
-            markDirty();
-            throw new Error(resp.message || 'Unable to save file');
+        if (!resp || typeof resp !== 'object') {
+          throw new Error('Invalid response from server');
+        }
+        if (resp.errorCode) {
+          throw new Error(resp.message || 'Unable to save file');
+        }
+        if (resp.error) {
+          throw new Error(resp.error);
+        }
+
+        const hasValidOutcome =
+          typeof resp.applied === 'boolean' &&
+          (resp.resyncRequired === undefined || typeof resp.resyncRequired === 'boolean') &&
+          !(resp.applied && resp.resyncRequired);
+        const hasValidSnapshot =
+          Number.isSafeInteger(resp.newVersion) &&
+          resp.newVersion >= 0 &&
+          typeof resp.content === 'string';
+        if (!hasValidOutcome || ((resp.applied || resp.resyncRequired) && !hasValidSnapshot)) {
+          throw new Error('Invalid response from server');
+        }
+
+        if (resp.resyncRequired) {
+          handledResync = true;
+          const liveEditorContent = window._vditor.getValue();
+          const rebasedContent = window.nasmdDiff.rebaseContent(
+            submittedBaseContent,
+            liveEditorContent,
+            resp.content,
+          );
+          retryAfterResync =
+            resp.newVersion !== submittedBaseVersion || resp.content !== submittedBaseContent;
+
+          state.baseVersion = resp.newVersion;
+          state.baseContent = resp.content;
+          state.fileVersions[fileKey] = resp.newVersion;
+          window._originalContent = resp.content;
+          window._lastSavedContent = resp.content;
+          window._vditor.setValue(rebasedContent);
+          if (
+            state.pendingRemoteVersion !== null &&
+            Number(state.pendingRemoteVersion) <= resp.newVersion
+          ) {
+            state.pendingRemoteVersion = null;
           }
-          if (resp && resp.resyncRequired) {
-            markDirty();
-            saveToLocalStorage(state.currentPath, content);
-          }
-          if (resp && resp.error) {
-            throw new Error(resp.error);
-          }
+          markDirty();
+          saveToLocalStorage(state.currentPath, rebasedContent);
           return;
         }
 
-        // 更新版本号和基线内容
+        if (!resp.applied) {
+          console.log('[saveFile] changes not applied', resp);
+          markDirty();
+          saveToLocalStorage(state.currentPath, window._vditor.getValue());
+          return;
+        }
+
+        // Adopt only the server-confirmed snapshot as the next collaboration baseline.
         state.baseVersion = resp.newVersion;
         state.baseContent = resp.content;
         state.fileVersions[fileKey] = resp.newVersion;
         window._originalContent = resp.content;
+        window._lastSavedContent = resp.content;
+        state.pendingRemoteVersion = null;
 
-        // ISSUE-04 Fix: Check if user typed new characters while save was in flight
+        // Reconcile edits made while this request was in flight with the canonical response.
         const currentContentNow = window._vditor.getValue();
-        if (_normContent(currentContentNow) === _normContent(content)) {
+        if (_normContent(currentContentNow) === _normContent(submittedContent)) {
+          window._vditor.setValue(resp.content);
           markClean();
           clearLocalStorage(state.currentPath);
         } else {
-          state.dirty = true;
+          const rebasedContent = window.nasmdDiff.rebaseContent(
+            submittedContent,
+            currentContentNow,
+            resp.content,
+          );
+          window._vditor.setValue(rebasedContent);
           markDirty();
+          saveToLocalStorage(state.currentPath, rebasedContent);
         }
 
         if (resp.merged) {
@@ -3564,8 +3624,9 @@ async function saveFile({ silent = false } = {}) {
         }
       }
     } catch (e) {
-      if (e instanceof DiffWorkLimitError) markDirty();
-      saveToLocalStorage(state.currentPath, content);
+      markDirty();
+      const draftContent = window._vditor ? window._vditor.getValue() : content;
+      saveToLocalStorage(state.currentPath, draftContent);
       if (!silent) showToast('保存失败，已缓存到本地');
       else showToast('自动保存失败');
       console.error(e);
@@ -3576,7 +3637,9 @@ async function saveFile({ silent = false } = {}) {
       btn.classList.remove('saving');
       btn.disabled = false;
     }
-    if (state.dirty && state.autoSave && state.currentPath) {
+    if (retryAfterResync && state.dirty && state.currentPath) {
+      setTimeout(() => saveFile({ silent: true }), 0);
+    } else if (!handledResync && state.dirty && state.autoSave && state.currentPath) {
       scheduleAutoSave();
     }
   }
@@ -4946,7 +5009,13 @@ function cleanExpiredDrafts() {
 
 function saveToLocalStorage(path, content) {
   const key = 'nasmd_draft_' + path;
-  const data = JSON.stringify({ content, mountId: state.currentMountId, savedAt: Date.now() });
+  const data = JSON.stringify({
+    content,
+    mountId: state.currentMountId,
+    baseVersion: state.baseVersion,
+    baseContent: state.baseContent,
+    savedAt: Date.now(),
+  });
   try {
     localStorage.setItem(key, data);
   } catch (_e) {
