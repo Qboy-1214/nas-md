@@ -605,6 +605,122 @@ test('clean remote pending version starts empty and resets after an explicit fil
   expect(await page.evaluate(() => window.state.pendingRemoteVersion)).toBeNull();
 });
 
+test('offline save scopes its draft to the current mount for collaboration gating', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/shared-offline-draft.md';
+    const draftContent = 'offline draft from mount A';
+    const editor = {
+      value: draftContent,
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    const onlineDescriptor = Object.getOwnPropertyDescriptor(navigator, 'onLine');
+    localStorage.removeItem(`nasmd_draft_${path}`);
+    Object.assign(window.state, {
+      currentMountId: 'mount-a',
+      currentPath: path,
+      mounts: [
+        { id: 'mount-a', readonly: false },
+        { id: 'mount-b', readonly: false },
+      ],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'mount-a-v1',
+      fileVersions: {
+        [`mount-a:${path}`]: 1,
+        [`mount-b:${path}`]: 1,
+      },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'mount-a-v1';
+    window._lastSavedContent = 'mount-a-v1';
+    window._vditor = editor;
+
+    try {
+      Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+      await window.saveFile();
+      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${path}`));
+
+      window.nasmdSync.handleRemoteEdit({
+        type: 'remote_edit',
+        mountId: 'mount-a',
+        path,
+        newVersion: 2,
+        changes: [{ type: 'replace', paraIdx: 0, content: 'remote-a-v2' }],
+      });
+      const sameMount = {
+        editor: editor.getValue(),
+        pendingRemoteVersion: window.state.pendingRemoteVersion,
+      };
+
+      Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+      Object.assign(window.state, {
+        currentMountId: 'mount-b',
+        baseVersion: 1,
+        baseContent: 'mount-b-v1',
+        pendingRemoteVersion: null,
+        dirty: false,
+      });
+      editor.value = 'mount-b-v1';
+      window._originalContent = 'mount-b-v1';
+      window._lastSavedContent = 'mount-b-v1';
+
+      window.nasmdSync.handleRemoteEdit({
+        type: 'remote_edit',
+        mountId: 'mount-b',
+        path,
+        newVersion: 2,
+        changes: [{ type: 'replace', paraIdx: 0, content: 'remote-b-v2' }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      return {
+        draft,
+        sameMount,
+        otherMount: {
+          editor: editor.getValue(),
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+          pendingRemoteVersion: window.state.pendingRemoteVersion,
+        },
+      };
+    } finally {
+      localStorage.removeItem(`nasmd_draft_${path}`);
+      if (onlineDescriptor) {
+        Object.defineProperty(navigator, 'onLine', onlineDescriptor);
+      } else {
+        delete navigator.onLine;
+      }
+    }
+  });
+
+  expect(result.draft).toMatchObject({
+    mountId: 'mount-a',
+    content: 'offline draft from mount A',
+  });
+  expect(result.sameMount).toEqual({
+    editor: 'offline draft from mount A',
+    pendingRemoteVersion: 2,
+  });
+  expect(result.otherMount).toEqual({
+    editor: 'remote-b-v2',
+    baseVersion: 2,
+    baseContent: 'remote-b-v2',
+    pendingRemoteVersion: null,
+  });
+});
+
 test('save keeps an over-budget document dirty without submitting changes', async ({ page }) => {
   await page.goto('/admin');
 

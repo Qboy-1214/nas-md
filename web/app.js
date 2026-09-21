@@ -4946,7 +4946,7 @@ function cleanExpiredDrafts() {
 
 function saveToLocalStorage(path, content) {
   const key = 'nasmd_draft_' + path;
-  const data = JSON.stringify({ content, savedAt: Date.now() });
+  const data = JSON.stringify({ content, mountId: state.currentMountId, savedAt: Date.now() });
   try {
     localStorage.setItem(key, data);
   } catch (_e) {
