@@ -303,6 +303,71 @@ def test_create_empty_file_resyncs_without_overwriting_persisted_version(store, 
     assert store.get_current_snapshot(file_key) == {"version": 1, "content": "B"}
 
 
+def test_create_empty_file_recreates_deleted_file_at_a_new_version(store, tmp_path):
+    file_path = tmp_path / "deleted-before-empty-put.md"
+    file_path.write_text("A", encoding="utf-8")
+    file_key = "mount-0:/deleted-before-empty-put.md"
+    store.init_file(file_key, str(file_path), "A")
+    write_result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "B"}],
+        author_id="writer",
+        author_name="Writer",
+        author_color="#fff",
+    )
+    assert write_result["newVersion"] == 1
+    file_path.unlink()
+
+    result = store.create_empty_file(file_key, str(file_path))
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "newVersion": 2,
+        "content": "",
+    }
+    assert file_path.read_text(encoding="utf-8") == ""
+    assert store.get_current_snapshot(file_key) == {"version": 2, "content": ""}
+    assert _history_count(store, file_key) == 3
+
+
+def test_init_file_does_not_reassign_existing_unpersisted_version(store, tmp_path):
+    file_path = tmp_path / "external-create.md"
+    file_key = "mount-0:/external-create.md"
+    store.init_file(file_key, str(file_path), "", persisted=False)
+    file_path.write_text("external", encoding="utf-8")
+
+    version = store.init_file(file_key, str(file_path), "external", persisted=True)
+
+    assert version == 0
+    assert store.get_current_snapshot(file_key) == {"version": 0, "content": ""}
+    result = store.apply_external_change(file_key, str(file_path))
+    assert result == {"applied": True, "newVersion": 1, "content": "external"}
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": "external"}
+    assert _history_count(store, file_key) == 2
+
+
+def test_create_empty_file_resyncs_invalid_utf8_external_creation(store, tmp_path):
+    file_path = tmp_path / "invalid-external.md"
+    file_key = "mount-0:/invalid-external.md"
+    store.init_file(file_key, str(file_path), "", persisted=False)
+    file_path.write_bytes(b"\xff")
+
+    result = store.create_empty_file(file_key, str(file_path))
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": "\ufffd",
+    }
+    assert file_path.read_bytes() == b"\xff"
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": "\ufffd"}
+
+
 def test_directory_sync_failure_after_replace_does_not_report_save_failure(
     store, test_file, monkeypatch
 ):
@@ -2280,6 +2345,34 @@ def test_init_file_restores_max_version_after_server_restart(tmp_path, test_file
         author_color="#fff",
     )
     assert result["newVersion"] == 4
+
+
+def test_init_file_restores_confirmed_content_before_applying_offline_change(tmp_path):
+    storage_dir = str(tmp_path / ".version_history")
+    file_path = tmp_path / "offline-change.md"
+    file_key = "mount-0:/offline-change.md"
+    file_path.write_text("A", encoding="utf-8")
+    first_store = FileVersionStore(storage_dir=storage_dir)
+    first_store.init_file(file_key, str(file_path), "A")
+    result = first_store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "B"}],
+        author_id="writer",
+        author_name="Writer",
+        author_color="#fff",
+    )
+    assert result["newVersion"] == 1
+    file_path.write_text("external", encoding="utf-8")
+
+    restarted_store = FileVersionStore(storage_dir=storage_dir)
+    version = restarted_store.init_file(file_key, str(file_path), "external", persisted=True)
+
+    assert version == 1
+    assert restarted_store.get_current_snapshot(file_key) == {"version": 1, "content": "B"}
+    external_result = restarted_store.apply_external_change(file_key, str(file_path))
+    assert external_result == {"applied": True, "newVersion": 2, "content": "external"}
 
 
 def test_version_history_lru_cache_eviction(tmp_path, monkeypatch):

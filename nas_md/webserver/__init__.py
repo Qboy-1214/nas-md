@@ -1391,10 +1391,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
                 file_key = f"{mount_id}:{rel_path}"
                 store = get_store()
-                version = store.get_current_version(file_key)
-                if version == 0:
-                    # Lazy-init so future writes track version
-                    store.init_file(file_key, abs_path, data.decode("utf-8", errors="replace"))
+                content = data.decode("utf-8", errors="replace")
+                store.init_file(file_key, abs_path, content)
+                version = store.apply_external_change(file_key, abs_path, content)["newVersion"]
             except Exception:
                 version = 0
             # Tier 3: no-store + Gzip for text/markdown files > 512 bytes
@@ -1535,7 +1534,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         if not file_existed and not new_text:
             try:
-                result = store.create_empty_file(file_key, abs_path, mark_expected)
+                result = store.create_empty_file(
+                    file_key,
+                    abs_path,
+                    mark_expected,
+                    author_id=session_id,
+                    author_name=author_name,
+                    author_color=author_color,
+                )
             except OSError:
                 logger.exception("Failed to write file %s", abs_path)
                 snapshot = store.get_current_snapshot(file_key)
@@ -1762,7 +1768,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         # Lazy-init store with current disk content
         try:
-            with open(abs_path, encoding="utf-8") as f:
+            with open(abs_path, encoding="utf-8", errors="replace") as f:
                 current_content = f.read()
             content_loaded = True
         except OSError:
@@ -2857,8 +2863,8 @@ def serve(
                 if abs_path is None:
                     return
                 store = get_store()
-                store.init_file(file_key, abs_path, content)
-                result = store.apply_external_change(file_key, abs_path)
+                store.init_file(file_key, abs_path, "", persisted=False)
+                result = store.apply_external_change(file_key, abs_path, content)
                 if result.get("applied"):
                     sse_broadcast(
                         file_key,

@@ -67,6 +67,20 @@ def test_is_expected_missing_file(tmp_path):
     assert w.is_expected("mount-0", "x.md", str(tmp_path / "nonexistent.md")) is False
 
 
+def test_external_invalid_utf8_is_reported_with_replacement_text(tmp_path):
+    watcher = FileWatcher()
+    target = tmp_path / "invalid.md"
+    target.write_bytes(b"\xff")
+    changes = []
+    handler = _MountWatchHandler(
+        "mount-0", str(tmp_path), lambda *args: changes.append(args), watcher
+    )
+
+    handler.on_created(SimpleNamespace(is_directory=False, src_path=str(target)))
+
+    assert changes == [("mount-0", "/invalid.md", "\ufffd")]
+
+
 def test_get_watcher_singleton():
     """get_watcher returns the same instance across calls."""
     a = get_watcher()

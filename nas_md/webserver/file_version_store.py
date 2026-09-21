@@ -282,46 +282,76 @@ class FileVersionStore:
             fv = self._files.get(file_key)
         if fv is not None:
             with fv.lock:
-                if persisted and not fv.persisted:
-                    fv.content = content
-                    fv.persisted = True
                 return fv.version
 
         # Check if there is existing persisted history to maintain version monotonicity
         base_version = 0
+        base_content = content
+        base_persisted = persisted
         try:
             from nas_md.webserver.version_history import _load
 
             hist = _load(file_key, storage_dir=self._storage_dir)
             if hist and hist.versions:
-                base_version = max((v.version for v in hist.versions), default=0)
+                latest = max(hist.versions, key=lambda entry: entry.version)
+                base_version = latest.version
+                base_content = latest.content_snapshot
+                base_persisted = persisted and content == base_content
         except Exception:
             base_version = 0
 
         candidate = _FileVersion(
             version=base_version,
-            content=content,
-            persisted=persisted,
+            content=base_content,
+            persisted=base_persisted,
             changes_by_version={},
         )
         with self._lock:
             fv = self._files.setdefault(file_key, candidate)
         with fv.lock:
-            if persisted and not fv.persisted:
-                fv.content = content
-                fv.persisted = True
             return fv.version
 
-    @staticmethod
-    def _refresh_unpersisted(fv: _FileVersion, file_path: str) -> None:
-        if fv.persisted:
-            return
-        try:
-            with open(file_path, encoding="utf-8") as f:
-                fv.content = f.read()
-        except OSError:
-            return
+    def _apply_external_content(
+        self,
+        fv: _FileVersion,
+        file_key: str,
+        file_path: str,
+        new_content: str,
+    ) -> bool:
+        """Apply content observed outside the store while ``fv.lock`` is held."""
         fv.persisted = True
+        if new_content == fv.content:
+            return False
+
+        previous_content = fv.content
+        fv.version += 1
+        fv.content = new_content
+        fv.changes_by_version[fv.version] = [
+            {"type": "external_reload", "paraIdx": 0, "content": new_content}
+        ]
+        self._prune_changes_history(fv)
+        self._record_version_history(
+            file_key=file_key,
+            file_path=file_path,
+            author_id="system",
+            author_name="外部修改",
+            author_color="#95a5a6",
+            changes=[],
+            content_snapshot=new_content,
+            previous_content=previous_content,
+            version=fv.version,
+        )
+        return True
+
+    def _refresh_unpersisted(self, fv: _FileVersion, file_key: str, file_path: str) -> bool:
+        if fv.persisted:
+            return False
+        try:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
+                new_content = f.read()
+        except OSError:
+            return False
+        return self._apply_external_content(fv, file_key, file_path, new_content)
 
     def _get_or_load_file(self, file_key: str, file_path: str) -> _FileVersion:
         with self._lock:
@@ -331,7 +361,7 @@ class FileVersionStore:
 
         persisted = False
         try:
-            with open(file_path, encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 disk_content = f.read()
             persisted = True
         except OSError:
@@ -350,17 +380,41 @@ class FileVersionStore:
         file_key: str,
         file_path: str,
         before_write: Callable[[str], Callable[[], None] | None] | None = None,
+        *,
+        author_id: str = "system",
+        author_name: str = "File recreation",
+        author_color: str = "#95a5a6",
     ) -> dict:
         """Persist an empty file only if it is still missing."""
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            self._refresh_unpersisted(fv, file_path)
+            if fv.persisted and not os.path.isfile(file_path):
+                fv.persisted = False
+            self._refresh_unpersisted(fv, file_key, file_path)
             if fv.persisted:
                 return self._resync_result(fv)
 
             _write_text_atomically(file_path, "", before_write)
+            previous_content = fv.content
             fv.content = ""
             fv.persisted = True
+            if previous_content:
+                fv.version += 1
+                fv.changes_by_version[fv.version] = [
+                    {"type": "external_reload", "paraIdx": 0, "content": ""}
+                ]
+                self._prune_changes_history(fv)
+                self._record_version_history(
+                    file_key=file_key,
+                    file_path=file_path,
+                    author_id=author_id,
+                    author_name=author_name,
+                    author_color=author_color,
+                    changes=[],
+                    content_snapshot="",
+                    previous_content=previous_content,
+                    version=fv.version,
+                )
             return {
                 "applied": False,
                 "merged": False,
@@ -395,7 +449,11 @@ class FileVersionStore:
         """
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            self._refresh_unpersisted(fv, file_path)
+            refreshed = self._refresh_unpersisted(fv, file_key, file_path)
+            # Legacy requests without baseContent describe the disk content that
+            # this operation just discovered, now confirmed as the next version.
+            if refreshed and base_content is None and base_version == fv.version - 1:
+                base_version = fv.version
             if base_version < 0 or base_version > fv.version:
                 return self._resync_result(fv)
 
@@ -519,7 +577,12 @@ class FileVersionStore:
             "content": fv.content,
         }
 
-    def apply_external_change(self, file_key: str, file_path: str) -> dict:
+    def apply_external_change(
+        self,
+        file_key: str,
+        file_path: str,
+        content: str | None = None,
+    ) -> dict:
         """Apply an external file modification (e.g., from watchdog).
 
         Reads the current disk content and bumps the version number,
@@ -529,51 +592,24 @@ class FileVersionStore:
         """
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            try:
-                with open(file_path, encoding="utf-8") as f:
-                    new_content = f.read()
-            except OSError as e:
-                logger.error("Failed to read external change %s: %s", file_path, e)
-                return {
-                    "applied": False,
-                    "newVersion": fv.version,
-                    "content": fv.content,
-                }
+            if content is None:
+                try:
+                    with open(file_path, encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                except OSError as e:
+                    logger.error("Failed to read external change %s: %s", file_path, e)
+                    return {
+                        "applied": False,
+                        "newVersion": fv.version,
+                        "content": fv.content,
+                    }
 
-            fv.persisted = True
-            if new_content == fv.content:
-                # No actual change
-                return {
-                    "applied": False,
-                    "newVersion": fv.version,
-                    "content": fv.content,
-                }
-
-            previous_content = fv.content
-            fv.version += 1
-            fv.content = new_content
-            # External changes have no author changes; represent as full replace
-            fv.changes_by_version[fv.version] = [
-                {"type": "external_reload", "paraIdx": 0, "content": new_content}
-            ]
-            self._prune_changes_history(fv)
-
-            self._record_version_history(
-                file_key=file_key,
-                file_path=file_path,
-                author_id="system",
-                author_name="外部修改",
-                author_color="#95a5a6",
-                changes=[],
-                content_snapshot=new_content,
-                previous_content=previous_content,
-                version=fv.version,
-            )
+            applied = self._apply_external_content(fv, file_key, file_path, content)
 
             return {
-                "applied": True,
+                "applied": applied,
                 "newVersion": fv.version,
-                "content": new_content,
+                "content": fv.content,
             }
 
     def get_current_version(self, file_key: str) -> int:

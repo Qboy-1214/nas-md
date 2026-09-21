@@ -131,7 +131,7 @@ class _MountWatchHandler(FileSystemEventHandler if WATCHDOG_AVAILABLE else objec
             return
         # Read content (best-effort)
         try:
-            with open(abs_path, encoding="utf-8") as f:
+            with open(abs_path, encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except OSError as e:
             logger.warning("file_watcher: failed to read %s: %s", abs_path, e)

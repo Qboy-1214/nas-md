@@ -453,6 +453,57 @@ def writable_server_url(web_root, writable_dir):
     server.shutdown()
 
 
+def test_watcher_external_creation_increments_once_and_broadcasts(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from nas_md.webserver import version_history
+    import nas_md.webserver.file_version_store as file_version_store_module
+    from nas_md.webserver.file_version_store import FileVersionStore
+
+    mount_dir = tmp_path / "watched"
+    mount_dir.mkdir()
+    target = mount_dir / "external.md"
+    watcher = Mock()
+    server = Mock()
+    broadcast = Mock()
+    store = FileVersionStore(storage_dir=str(tmp_path / ".version_history"))
+    monkeypatch.setattr(file_version_store_module, "_store", store)
+    with version_history._lock:
+        version_history._histories.clear()
+
+    monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+    monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+    monkeypatch.setattr("nas_md.webserver._create_server", lambda *args, **kwargs: server)
+    monkeypatch.setattr("nas_md.webserver._init_search_index", lambda _dirs: None)
+
+    def stop_server(_delay):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("nas_md.webserver.time.sleep", stop_server)
+
+    serve([str(mount_dir)], web_root=str(tmp_path), port=0, https_port=0)
+
+    mount_id, _watched_path, on_change = watcher.watch_mount.call_args.args
+    file_key = f"{mount_id}:/external.md"
+    store.init_file(file_key, str(target), "", persisted=False)
+    target.write_text("external", encoding="utf-8")
+
+    on_change(mount_id, "/external.md", "external")
+
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": "external"}
+    broadcast.assert_called_once_with(
+        file_key,
+        exclude_id=None,
+        event={
+            "type": "external_reload",
+            "mountId": mount_id,
+            "path": "/external.md",
+            "newVersion": 1,
+            "content": "external",
+        },
+    )
+
+
 # --- Write operation API tests ---
 
 
@@ -471,6 +522,34 @@ class TestWriteFileAPI:
         assert os.path.isfile(os.path.join(writable_dir, "new.md"))
         with open(os.path.join(writable_dir, "new.md"), encoding="utf-8") as f:
             assert f.read() == content
+
+    def test_get_external_creation_advances_existing_unpersisted_version(
+        self, writable_server_url, writable_dir
+    ):
+        from nas_md.webserver.file_version_store import get_store
+
+        name = f"get-external-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        store = get_store()
+        store.init_file(file_key, path, "", persisted=False)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("external")
+
+        status, body, headers = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}"
+        )
+
+        assert status == 200
+        assert body == "external"
+        assert headers["x-file-version"] == "1"
+        assert store.get_current_snapshot(file_key) == {"version": 1, "content": "external"}
+
+        status, body, headers = _get(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}"
+        )
+        assert (status, body, headers["x-file-version"]) == (200, "external", "1")
 
     def test_write_file_creates_missing_empty_markdown_without_history_or_broadcast(
         self, writable_server_url, writable_dir, monkeypatch
@@ -510,6 +589,112 @@ class TestWriteFileAPI:
         assert file_key not in version_history._histories
         assert prepared_calls == [("writable", rel_path, b"")]
         broadcast.assert_not_called()
+
+    def test_empty_put_recreates_deleted_version_at_a_new_version(
+        self, writable_server_url, writable_dir
+    ):
+        from nas_md.webserver.file_version_store import get_store
+
+        name = f"deleted-empty-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}", data=b"B"
+        )
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 1
+
+        status, _body = _delete(f"{writable_server_url}/api/mounts/writable/file?path={rel_path}")
+        assert status == 200
+        assert not os.path.exists(path)
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}", data=b""
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 2
+        assert os.path.isfile(path)
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == ""
+        assert get_store().get_current_snapshot(file_key) == {"version": 2, "content": ""}
+
+    def test_deleted_empty_put_resyncs_when_post_recreates_first(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from nas_md.webserver.file_version_store import FileVersionStore, get_store
+
+        name = f"deleted-empty-race-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}", data=b"B"
+        )
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 1
+        status, _body = _delete(f"{writable_server_url}/api/mounts/writable/file?path={rel_path}")
+        assert status == 200
+
+        original_create_empty_file = FileVersionStore.create_empty_file
+        empty_before_create = threading.Event()
+        release_empty_create = threading.Event()
+        empty_result = {}
+        errors = []
+
+        def pause_empty_before_create(self, *args, **kwargs):
+            if args[0] == file_key:
+                empty_before_create.set()
+                if not release_empty_create.wait(timeout=5):
+                    raise TimeoutError("empty PUT was not released")
+            return original_create_empty_file(self, *args, **kwargs)
+
+        def run_empty_put():
+            try:
+                empty_result["response"] = _put(
+                    f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+                    data=b"",
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        monkeypatch.setattr(FileVersionStore, "create_empty_file", pause_empty_before_create)
+        empty_thread = threading.Thread(target=run_empty_put, daemon=True)
+        try:
+            empty_thread.start()
+            assert empty_before_create.wait(timeout=5)
+            post_status, post_body = _post(
+                f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+                data={
+                    "baseVersion": 1,
+                    "baseContent": "B",
+                    "content": "C",
+                    "changes": [{"type": "replace", "paraIdx": 0, "content": "C"}],
+                },
+            )
+            assert post_status == 200
+            assert json.loads(post_body)["newVersion"] == 2
+            assert json.loads(post_body)["content"] == "C"
+        finally:
+            release_empty_create.set()
+            empty_thread.join(timeout=5)
+
+        assert not empty_thread.is_alive()
+        assert errors == []
+        empty_status, empty_body = empty_result["response"]
+        assert empty_status == 409
+        assert json.loads(empty_body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 2,
+            "content": "C",
+        }
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == "C"
+        assert get_store().get_current_snapshot(file_key) == {"version": 2, "content": "C"}
 
     def test_missing_empty_markdown_replace_failure_rolls_back_mark_and_returns_stable_500(
         self, writable_server_url, writable_dir, monkeypatch
@@ -810,6 +995,63 @@ class TestWriteFileAPI:
         with open(path, encoding="utf-8") as f:
             assert f.read() == "B"
         assert get_store().get_current_snapshot(file_key) == {"version": 1, "content": "B"}
+
+    def test_missing_empty_put_resyncs_invalid_utf8_external_creation(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from nas_md.webserver.file_version_store import FileVersionStore, get_store
+
+        name = f"empty-invalid-race-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        original_create_empty_file = FileVersionStore.create_empty_file
+        empty_before_create = threading.Event()
+        release_empty_create = threading.Event()
+        empty_result = {}
+        errors = []
+
+        def pause_empty_before_create(self, *args, **kwargs):
+            if args[0] == file_key:
+                empty_before_create.set()
+                if not release_empty_create.wait(timeout=5):
+                    raise TimeoutError("empty PUT was not released")
+            return original_create_empty_file(self, *args, **kwargs)
+
+        def run_empty_put():
+            try:
+                empty_result["response"] = _put(
+                    f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+                    data=b"",
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        monkeypatch.setattr(FileVersionStore, "create_empty_file", pause_empty_before_create)
+        empty_thread = threading.Thread(target=run_empty_put, daemon=True)
+        try:
+            empty_thread.start()
+            assert empty_before_create.wait(timeout=5)
+            with open(path, "wb") as f:
+                f.write(b"\xff")
+        finally:
+            release_empty_create.set()
+            empty_thread.join(timeout=5)
+
+        assert not empty_thread.is_alive()
+        assert errors == []
+        status, body = empty_result["response"]
+        assert status == 409
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 1,
+            "content": "\ufffd",
+        }
+        with open(path, "rb") as f:
+            assert f.read() == b"\xff"
+        assert get_store().get_current_snapshot(file_key) == {"version": 1, "content": "\ufffd"}
 
     def test_write_file_existing_empty_markdown_remains_side_effect_free(
         self, writable_server_url, writable_dir, monkeypatch
