@@ -733,6 +733,11 @@ test('offline save stays dirty and automatically submits after the browser recon
   const mount = await getWritableAdminMount(page);
   const path = uniqueTestPath('collaboration-offline-reconnect');
   const base = 'server before offline';
+  const changesRequests = [];
+  await page.route(/\/api\/mounts\/[^/]+\/changes\?/, async (route) => {
+    changesRequests.push(route.request().postDataJSON());
+    await route.continue();
+  });
   await putAdminFile(page, mount.id, path, base);
 
   try {
@@ -748,20 +753,12 @@ test('offline save stays dirty and automatically submits after the browser recon
       { mountId: mount.id, filePath: path },
     );
 
+    const acknowledged = await page.evaluate(() => ({
+      baseVersion: window.state.baseVersion,
+      baseContent: window.state.baseContent,
+    }));
     const edited = await page.evaluate(() => {
       window.toggleAutoSave(false);
-      const submitChanges = API.submitChanges.bind(API);
-      window.__offlineSubmitCalls = [];
-      API.submitChanges = async (...args) => {
-        const response = await submitChanges(...args);
-        window.__offlineSubmitCalls.push({
-          baseVersion: args[2],
-          content: args[7],
-          baseContent: args[8],
-          response,
-        });
-        return response;
-      };
       window._vditor.setValue('edited while offline');
       window.onEditorInput();
       return window._vditor.getValue();
@@ -789,7 +786,7 @@ test('offline save stays dirty and automatically submits after the browser recon
     expect(offline.draft.savedAt).toEqual(expect.any(Number));
 
     await context.setOffline(false);
-    await page.waitForFunction(() => window.__offlineSubmitCalls.length > 0);
+    await expect.poll(() => changesRequests.length).toBeGreaterThan(0);
     await page.waitForFunction(
       (filePath) =>
         window.state.dirty === false && localStorage.getItem(`nasmd_draft_${filePath}`) === null,
@@ -803,13 +800,17 @@ test('offline save stays dirty and automatically submits after the browser recon
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
         draft: localStorage.getItem(`nasmd_draft_${filePath}`),
-        calls: window.__offlineSubmitCalls,
       }),
       path,
     );
     expect(reconnected).toMatchObject({
       dirty: false,
       draft: null,
+    });
+    expect(changesRequests[0]).toMatchObject({
+      baseVersion: acknowledged.baseVersion,
+      baseContent: acknowledged.baseContent,
+      content: edited,
     });
 
     const response = await page.request.get(
@@ -824,6 +825,214 @@ test('offline save stays dirty and automatically submits after the browser recon
   }
 });
 
+test('a persisted offline draft reloads with its acknowledged baseline and submits on reconnect', async ({
+  context,
+  page,
+}) => {
+  const mount = await getWritableAdminMount(page);
+  const path = uniqueTestPath('collaboration-draft-reload');
+  const base = 'server before reload';
+  const changesRequests = [];
+  await page.route(/\/api\/mounts\/[^/]+\/changes\?/, async (route) => {
+    changesRequests.push(route.request().postDataJSON());
+    await route.continue();
+  });
+  await putAdminFile(page, mount.id, path, base);
+
+  try {
+    await page.evaluate(async ({ mountId, filePath }) => window.openFile(filePath, mountId), {
+      mountId: mount.id,
+      filePath: path,
+    });
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+    const acknowledged = await page.evaluate(() => ({
+      baseVersion: window.state.baseVersion,
+      baseContent: window.state.baseContent,
+    }));
+
+    const edited = await page.evaluate((value) => {
+      window.toggleAutoSave(false);
+      window._vditor.setValue(value);
+      window.onEditorInput();
+      return window._vditor.getValue();
+    }, 'draft restored after reload');
+    await context.setOffline(true);
+    await page.evaluate(() => window.saveFile({ silent: true }));
+    const persistedDraft = await page.evaluate((filePath) => {
+      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`));
+      window.state.currentPath = null;
+      return draft;
+    }, path);
+    expect(persistedDraft).toMatchObject({
+      content: edited,
+      mountId: mount.id,
+      baseVersion: acknowledged.baseVersion,
+      baseContent: acknowledged.baseContent,
+    });
+
+    await context.setOffline(false);
+    await page.reload();
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+    const restored = await page.evaluate(
+      (filePath) => ({
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`)),
+      }),
+      path,
+    );
+    expect(restored).toMatchObject({
+      dirty: true,
+      editor: edited,
+      baseVersion: acknowledged.baseVersion,
+      baseContent: acknowledged.baseContent,
+      originalContent: acknowledged.baseContent,
+      draft: {
+        content: edited,
+        mountId: mount.id,
+        baseVersion: acknowledged.baseVersion,
+        baseContent: acknowledged.baseContent,
+      },
+    });
+
+    await page.evaluate(() => window._reinitEditor('sv'));
+    await page.waitForFunction(
+      (expectedContent) =>
+        window._vditor &&
+        window._vditor.getCurrentMode() === 'sv' &&
+        window._vditor.getValue().includes(expectedContent),
+      edited,
+    );
+    const afterModeSwitch = await page.evaluate(() => ({
+      dirty: window.state.dirty,
+      editor: window._vditor.getValue(),
+      baseVersion: window.state.baseVersion,
+      baseContent: window.state.baseContent,
+      originalContent: window._originalContent,
+    }));
+    expect(afterModeSwitch).toMatchObject({
+      dirty: true,
+      baseVersion: acknowledged.baseVersion,
+      baseContent: acknowledged.baseContent,
+      originalContent: acknowledged.baseContent,
+    });
+    expect(afterModeSwitch.editor.replace(/\r\n/g, '\n').replace(/\n+$/, '')).toBe(
+      edited.replace(/\r\n/g, '\n').replace(/\n+$/, ''),
+    );
+
+    await context.setOffline(true);
+    await context.setOffline(false);
+    await expect.poll(() => changesRequests.length).toBeGreaterThan(0);
+    await page.waitForFunction(
+      (filePath) =>
+        window.state.dirty === false && localStorage.getItem(`nasmd_draft_${filePath}`) === null,
+      path,
+    );
+    expect(changesRequests[0]).toMatchObject({
+      baseVersion: acknowledged.baseVersion,
+      baseContent: acknowledged.baseContent,
+      content: afterModeSwitch.editor,
+    });
+
+    const response = await page.request.get(
+      `/api/mounts/${mount.id}/file?path=${encodeURIComponent(path)}&_t=${Date.now()}`,
+      { headers: { 'X-Admin': '1' } },
+    );
+    expect(response.ok()).toBe(true);
+    expect(await response.text()).toBe(afterModeSwitch.editor);
+  } finally {
+    await context.setOffline(false);
+    await deleteAdminFile(page, mount.id, path);
+  }
+});
+
+test('a legacy draft reloads with the fetched server baseline', async ({ page }) => {
+  const mount = await getWritableAdminMount(page);
+  const path = uniqueTestPath('collaboration-legacy-draft-reload');
+  const base = 'server baseline for legacy draft';
+  const draftContent = 'legacy draft after reload';
+  await putAdminFile(page, mount.id, path, base);
+
+  try {
+    await page.evaluate(async ({ mountId, filePath }) => window.openFile(filePath, mountId), {
+      mountId: mount.id,
+      filePath: path,
+    });
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+    const acknowledged = await page.evaluate(
+      ({ filePath, mountId, content }) => {
+        window.toggleAutoSave(false);
+        localStorage.setItem(
+          `nasmd_draft_${filePath}`,
+          JSON.stringify({ content, mountId, savedAt: Date.now() }),
+        );
+        return {
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+        };
+      },
+      { filePath: path, mountId: mount.id, content: draftContent },
+    );
+
+    await page.reload();
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+    const restored = await page.evaluate(
+      (filePath) => ({
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`)),
+      }),
+      path,
+    );
+
+    expect(restored).toMatchObject({
+      dirty: true,
+      baseVersion: acknowledged.baseVersion,
+      baseContent: base,
+      originalContent: base,
+      draft: {
+        content: draftContent,
+        mountId: mount.id,
+      },
+    });
+    expect(restored.editor.replace(/\r\n/g, '\n').replace(/\n+$/, '')).toBe(draftContent);
+    expect(restored.draft).not.toHaveProperty('baseVersion');
+    expect(restored.draft).not.toHaveProperty('baseContent');
+  } finally {
+    await deleteAdminFile(page, mount.id, path);
+  }
+});
+
 test('stale save sends its base content and preserves disjoint remote and local edits', async ({
   page,
 }) => {
@@ -831,6 +1040,11 @@ test('stale save sends its base content and preserves disjoint remote and local 
   const path = uniqueTestPath('collaboration-stale-merge');
   const base = 'A\n\nB';
   const remote = 'A-remote\n\nB';
+  const changesRequests = [];
+  await page.route(/\/api\/mounts\/[^/]+\/changes\?/, async (route) => {
+    changesRequests.push(route.request().postDataJSON());
+    await route.continue();
+  });
   await putAdminFile(page, mount.id, path, base);
 
   try {
@@ -839,9 +1053,7 @@ test('stale save sends its base content and preserves disjoint remote and local 
       filePath: path,
     });
     await page.waitForFunction(() => window._vditor && window.state.currentPath !== null);
-    const submittedBase = await page.evaluate(() =>
-      window.state.baseContent.replace(/\r\n/g, '\n').replace(/\n+$/, ''),
-    );
+    const submittedBase = await page.evaluate(() => window.state.baseContent);
     const submittedVersion = await page.evaluate(() => window.state.baseVersion);
 
     await page.evaluate(() => {
@@ -849,6 +1061,7 @@ test('stale save sends its base content and preserves disjoint remote and local 
       window._vditor.setValue('A\n\nB-local');
       window.onEditorInput();
     });
+    const submittedContent = await page.evaluate(() => window._vditor.getValue());
     await putAdminFile(page, mount.id, path, remote);
     await page.evaluate(() => window.saveFile({ silent: true }));
 
@@ -869,8 +1082,14 @@ test('stale save sends its base content and preserves disjoint remote and local 
     const server = await response.text();
     const normalizedServer = server.replace(/\r\n/g, '\n').replace(/\n+$/, '');
 
-    expect(submittedBase).toBe(base);
+    expect(submittedBase.replace(/\r\n/g, '\n').replace(/\n+$/, '')).toBe(base);
     expect(submittedVersion).toBeGreaterThanOrEqual(1);
+    expect(changesRequests).toHaveLength(1);
+    expect(changesRequests[0]).toMatchObject({
+      baseVersion: submittedVersion,
+      baseContent: submittedBase,
+      content: submittedContent,
+    });
     expect(normalizedServer).toBe('A-remote\n\nB-local');
     expect(client.dirty).toBe(false);
     expect(client.editor.replace(/\r\n/g, '\n').replace(/\n+$/, '')).toBe(normalizedServer);
@@ -1096,6 +1315,87 @@ test('an unchanged resync snapshot stops automatic retries', async ({ page }) =>
   });
 });
 
+test('a save transaction retries at most once across changing resync snapshots', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/bounded-resync.md';
+    const calls = [];
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], baseContent: args[8], content: args[7] });
+      if (calls.length > 2) return new Promise(() => {});
+      return {
+        applied: false,
+        merged: false,
+        resyncRequired: true,
+        newVersion: 7 + calls.length,
+        content: `A-remote-${calls.length}\n\nB`,
+      };
+    };
+    localStorage.removeItem(`nasmd_draft_${path}`);
+    Object.assign(window.state, {
+      currentMountId: 'bounded-resync-mount',
+      currentPath: path,
+      mounts: [{ id: 'bounded-resync-mount', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 7,
+      baseContent: 'A\n\nB',
+      fileVersions: { [`bounded-resync-mount:${path}`]: 7 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A\n\nB';
+    window._vditor = {
+      value: 'A\n\nB-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+
+    try {
+      await window.saveFile({ silent: true });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return {
+        calls,
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${path}`)),
+      };
+    } finally {
+      window.state.currentPath = null;
+      API.submitChanges = originalSubmitChanges;
+      localStorage.removeItem(`nasmd_draft_${path}`);
+    }
+  });
+
+  expect(result.calls).toEqual([
+    { baseVersion: 7, baseContent: 'A\n\nB', content: 'A\n\nB-local' },
+    { baseVersion: 8, baseContent: 'A-remote-1\n\nB', content: 'A-remote-1\n\nB-local' },
+  ]);
+  expect(result).toMatchObject({
+    dirty: true,
+    editor: 'A-remote-2\n\nB-local',
+    baseVersion: 9,
+    baseContent: 'A-remote-2\n\nB',
+    draft: {
+      content: 'A-remote-2\n\nB-local',
+      mountId: 'bounded-resync-mount',
+      baseVersion: 9,
+      baseContent: 'A-remote-2\n\nB',
+    },
+  });
+});
+
 test('applied save writes canonical server content back into a clean editor', async ({ page }) => {
   await page.goto('/admin');
 
@@ -1124,7 +1424,7 @@ test('applied save writes canonical server content back into a clean editor', as
       baseVersion: 2,
       baseContent: base,
       fileVersions: { [`canonical-mount:${path}`]: 2 },
-      pendingRemoteVersion: 9,
+      pendingRemoteVersion: null,
       dirty: true,
       autoSave: false,
     });
@@ -1168,7 +1468,120 @@ test('applied save writes canonical server content back into a clean editor', as
   });
 });
 
-test('applied save rebases input typed in flight and keeps its draft dirty', async ({ page }) => {
+test('an applied response preserves a newer in-flight pending version and starts clean catch-up', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/pending-during-save.md';
+    let resolveSubmit;
+    let resolveCatchUp;
+    const submitResponse = new Promise((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const catchUpResponse = new Promise((resolve) => {
+      resolveCatchUp = resolve;
+    });
+    const originalSubmitChanges = API.submitChanges;
+    const originalGetFile = API.getFile;
+    const getFileCalls = [];
+    API.submitChanges = async () => submitResponse;
+    API.getFile = async (...args) => {
+      getFileCalls.push(args);
+      return catchUpResponse;
+    };
+    localStorage.setItem(
+      `nasmd_draft_${path}`,
+      JSON.stringify({ content: 'local-v5', mountId: 'pending-save-mount', savedAt: Date.now() }),
+    );
+    Object.assign(window.state, {
+      currentMountId: 'pending-save-mount',
+      currentPath: path,
+      mounts: [{ id: 'pending-save-mount', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 4,
+      baseContent: 'base-v4',
+      fileVersions: { [`pending-save-mount:${path}`]: 4 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'base-v4';
+    window._vditor = {
+      value: 'local-v5',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+
+    try {
+      const saving = window.saveFile({ silent: true });
+      window.nasmdSync.handleRemoteEdit({
+        type: 'remote_edit',
+        mountId: 'pending-save-mount',
+        path,
+        newVersion: 9,
+        changes: [{ type: 'replace', paraIdx: 0, content: 'event-v9' }],
+      });
+      resolveSubmit({ applied: true, merged: false, newVersion: 5, content: 'local-v5' });
+      await saving;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const afterApplied = {
+        dirty: window.state.dirty,
+        baseVersion: window.state.baseVersion,
+        pendingRemoteVersion: window.state.pendingRemoteVersion,
+        draft: localStorage.getItem(`nasmd_draft_${path}`),
+        getFileCalls: getFileCalls.map(([mountId, filePath]) => [mountId, filePath]),
+      };
+
+      resolveCatchUp({ content: 'server-v9', version: 9, mtime: 0 });
+      const deadline = Date.now() + 5000;
+      while (window.state.baseVersion !== 9 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return {
+        afterApplied,
+        final: {
+          dirty: window.state.dirty,
+          editor: window._vditor.getValue(),
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+          pendingRemoteVersion: window.state.pendingRemoteVersion,
+          draft: localStorage.getItem(`nasmd_draft_${path}`),
+        },
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      API.getFile = originalGetFile;
+      localStorage.removeItem(`nasmd_draft_${path}`);
+    }
+  });
+
+  expect(result.afterApplied).toEqual({
+    dirty: false,
+    baseVersion: 5,
+    pendingRemoteVersion: 9,
+    draft: null,
+    getFileCalls: [['pending-save-mount', '/pending-during-save.md']],
+  });
+  expect(result.final).toEqual({
+    dirty: false,
+    editor: 'server-v9',
+    baseVersion: 9,
+    baseContent: 'server-v9',
+    pendingRemoteVersion: null,
+    draft: null,
+  });
+});
+
+test('manual save continues once for input typed in flight and clears the confirmed draft', async ({
+  page,
+}) => {
   await page.goto('/admin');
 
   const result = await page.evaluate(async () => {
@@ -1181,8 +1594,13 @@ test('applied save rebases input typed in flight and keeps its draft dirty', asy
     const response = new Promise((resolve) => {
       resolveSubmit = resolve;
     });
+    const calls = [];
     const originalSubmitChanges = API.submitChanges;
-    API.submitChanges = async () => response;
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      if (calls.length === 1) return response;
+      return { applied: true, merged: false, newVersion: 6, content: args[7] };
+    };
     localStorage.removeItem(`nasmd_draft_${path}`);
     Object.assign(window.state, {
       currentMountId: 'in-flight-mount',
@@ -1193,7 +1611,7 @@ test('applied save rebases input typed in flight and keeps its draft dirty', asy
       baseVersion: 4,
       baseContent: base,
       fileVersions: { [`in-flight-mount:${path}`]: 4 },
-      pendingRemoteVersion: 7,
+      pendingRemoteVersion: null,
       dirty: true,
       autoSave: false,
     });
@@ -1215,23 +1633,19 @@ test('applied save rebases input typed in flight and keeps its draft dirty', asy
       window.onEditorInput();
       resolveSubmit({ applied: true, merged: true, newVersion: 5, content: canonical });
       await saving;
-      const draftBeforeRemote = localStorage.getItem(`nasmd_draft_${path}`);
-      window.nasmdSync.handleRemoteEdit({
-        type: 'remote_edit',
-        mountId: 'in-flight-mount',
-        path,
-        newVersion: 6,
-        changes: [{ type: 'replace', paraIdx: 1, content: 'B-newer-remote' }],
-      });
+      const deadline = Date.now() + 1000;
+      while ((calls.length < 2 || window.state.dirty) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       return {
+        calls,
         dirty: window.state.dirty,
         editor: window._vditor.getValue(),
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
         pendingRemoteVersion: window.state.pendingRemoteVersion,
-        draftBeforeRemote,
-        draftAfterRemote: localStorage.getItem(`nasmd_draft_${path}`),
+        draft: localStorage.getItem(`nasmd_draft_${path}`),
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
@@ -1239,21 +1653,336 @@ test('applied save rebases input typed in flight and keeps its draft dirty', asy
     }
   });
 
-  expect(result).toMatchObject({
-    dirty: true,
+  expect(result).toEqual({
+    calls: [
+      { baseVersion: 4, content: 'A-local\n\nB', baseContent: 'A\n\nB' },
+      {
+        baseVersion: 5,
+        content: 'A-local\n\nB-remote\n\nC-new',
+        baseContent: 'A-local\n\nB-remote',
+      },
+    ],
+    dirty: false,
     editor: 'A-local\n\nB-remote\n\nC-new',
-    baseVersion: 5,
-    baseContent: 'A-local\n\nB-remote',
-    originalContent: 'A-local\n\nB-remote',
-    pendingRemoteVersion: 6,
+    baseVersion: 6,
+    baseContent: 'A-local\n\nB-remote\n\nC-new',
+    originalContent: 'A-local\n\nB-remote\n\nC-new',
+    pendingRemoteVersion: null,
+    draft: null,
   });
-  expect(JSON.parse(result.draftBeforeRemote)).toMatchObject({
-    content: 'A-local\n\nB-remote\n\nC-new',
-    mountId: 'in-flight-mount',
-    baseVersion: 5,
-    baseContent: 'A-local\n\nB-remote',
+});
+
+test('manual save continuation is bounded when input also arrives during the continuation', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/bounded-in-flight-save.md';
+    const calls = [];
+    const resolvers = [];
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      return new Promise((resolve) => resolvers.push(resolve));
+    };
+    localStorage.removeItem(`nasmd_draft_${path}`);
+    Object.assign(window.state, {
+      currentMountId: 'bounded-in-flight-mount',
+      currentPath: path,
+      mounts: [{ id: 'bounded-in-flight-mount', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'A',
+      fileVersions: { [`bounded-in-flight-mount:${path}`]: 1 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A';
+    window._vditor = {
+      value: 'A-one',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+
+    try {
+      const firstSave = window.saveFile({ silent: true });
+      while (resolvers.length < 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      window._vditor.value = 'A-one\n\nB-two';
+      window.onEditorInput();
+      resolvers[0]({ applied: true, merged: false, newVersion: 2, content: 'A-one' });
+      await firstSave;
+
+      const continuationDeadline = Date.now() + 500;
+      while (resolvers.length < 2 && Date.now() < continuationDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      if (resolvers.length < 2) {
+        return { calls, missingContinuation: true };
+      }
+      window._vditor.value = 'A-one\n\nB-two\n\nC-three';
+      window.onEditorInput();
+      resolvers[1]({
+        applied: true,
+        merged: false,
+        newVersion: 3,
+        content: 'A-one\n\nB-two',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return {
+        calls,
+        missingContinuation: false,
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${path}`)),
+      };
+    } finally {
+      window.state.currentPath = null;
+      API.submitChanges = originalSubmitChanges;
+      localStorage.removeItem(`nasmd_draft_${path}`);
+    }
   });
-  expect(result.draftAfterRemote).toBe(result.draftBeforeRemote);
+
+  expect(result).toMatchObject({
+    missingContinuation: false,
+    dirty: true,
+    editor: 'A-one\n\nB-two\n\nC-three',
+    baseVersion: 3,
+    baseContent: 'A-one\n\nB-two',
+    draft: {
+      content: 'A-one\n\nB-two\n\nC-three',
+      mountId: 'bounded-in-flight-mount',
+      baseVersion: 3,
+      baseContent: 'A-one\n\nB-two',
+    },
+  });
+  expect(result.calls).toHaveLength(2);
+});
+
+test('an in-flight save response and continuation stay bound to their originating file', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const pathA = '/in-flight-a.md';
+    const pathB = '/in-flight-b.md';
+    let resolveSubmit;
+    const response = new Promise((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const calls = [];
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async (...args) => {
+      calls.push({
+        mountId: args[0],
+        path: args[1],
+        baseVersion: args[2],
+        content: args[7],
+        baseContent: args[8],
+      });
+      return response;
+    };
+    const editorA = {
+      value: 'A-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    const editorB = {
+      value: 'B-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    Object.assign(window.state, {
+      currentMountId: 'mount-a',
+      currentPath: pathA,
+      mounts: [
+        { id: 'mount-a', readonly: false },
+        { id: 'mount-b', readonly: false },
+      ],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'A-base',
+      fileVersions: { ['mount-a:' + pathA]: 1, ['mount-b:' + pathB]: 10 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A-base';
+    window._vditor = editorA;
+
+    try {
+      const saving = window.saveFile({ silent: true });
+      while (calls.length < 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      editorA.value = 'A-local\n\nA-new';
+      window.onEditorInput();
+
+      Object.assign(window.state, {
+        currentMountId: 'mount-b',
+        currentPath: pathB,
+        baseVersion: 10,
+        baseContent: 'B-base',
+        pendingRemoteVersion: null,
+        dirty: false,
+      });
+      window._originalContent = 'B-base';
+      window._lastSavedContent = 'B-base';
+      window._vditor = editorB;
+
+      resolveSubmit({ applied: true, merged: false, newVersion: 2, content: 'A-local' });
+      await saving;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return {
+        calls,
+        currentMountId: window.state.currentMountId,
+        currentPath: window.state.currentPath,
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+        draftA: JSON.parse(localStorage.getItem(`nasmd_draft_${pathA}`)),
+        draftB: localStorage.getItem(`nasmd_draft_${pathB}`),
+      };
+    } finally {
+      window.state.currentPath = null;
+      API.submitChanges = originalSubmitChanges;
+      localStorage.removeItem(`nasmd_draft_${pathA}`);
+      localStorage.removeItem(`nasmd_draft_${pathB}`);
+    }
+  });
+
+  expect(result).toEqual({
+    calls: [
+      {
+        mountId: 'mount-a',
+        path: '/in-flight-a.md',
+        baseVersion: 1,
+        content: 'A-local',
+        baseContent: 'A-base',
+      },
+    ],
+    currentMountId: 'mount-b',
+    currentPath: '/in-flight-b.md',
+    dirty: false,
+    editor: 'B-local',
+    baseVersion: 10,
+    baseContent: 'B-base',
+    originalContent: 'B-base',
+    draftA: {
+      content: 'A-local\n\nA-new',
+      mountId: 'mount-a',
+      baseVersion: 1,
+      baseContent: 'A-base',
+      savedAt: expect.any(Number),
+    },
+    draftB: null,
+  });
+});
+
+test('a failed save spanning editor reinitialization retains its draft and baseline', async ({
+  page,
+}) => {
+  const mount = await getWritableAdminMount(page);
+  const path = uniqueTestPath('collaboration-reinit-failure');
+  await putAdminFile(page, mount.id, path, 'server-base');
+
+  try {
+    await page.evaluate(async ({ mountId, filePath }) => window.openFile(filePath, mountId), {
+      mountId: mount.id,
+      filePath: path,
+    });
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+
+    const result = await page.evaluate(async (filePath) => {
+      let rejectSubmit;
+      const calls = [];
+      const originalSubmitChanges = API.submitChanges;
+      API.submitChanges = async (...args) => {
+        calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+        return new Promise((_resolve, reject) => {
+          rejectSubmit = reject;
+        });
+      };
+      localStorage.removeItem(`nasmd_draft_${filePath}`);
+      window.toggleAutoSave(false);
+      const acknowledged = {
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+      };
+      window._vditor.setValue('local-draft');
+      window.onEditorInput();
+
+      try {
+        const saving = window.saveFile({ silent: true });
+        while (!rejectSubmit) await new Promise((resolve) => setTimeout(resolve, 0));
+        window._reinitEditor('sv');
+        const deadline = Date.now() + 3000;
+        while (
+          (!window._vditor || window._vditor.getCurrentMode() !== 'sv') &&
+          Date.now() < deadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        const editor = window._vditor.getValue();
+        rejectSubmit(new Error('network failed after mode switch'));
+        await saving;
+        return {
+          acknowledged,
+          calls,
+          editor,
+          dirty: window.state.dirty,
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+          originalContent: window._originalContent,
+          draft: JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`)),
+        };
+      } finally {
+        API.submitChanges = originalSubmitChanges;
+        localStorage.removeItem(`nasmd_draft_${filePath}`);
+      }
+    }, path);
+
+    expect(result.calls).toHaveLength(1);
+    expect(result).toMatchObject({
+      dirty: true,
+      baseVersion: result.acknowledged.baseVersion,
+      baseContent: result.acknowledged.baseContent,
+      originalContent: result.acknowledged.baseContent,
+      draft: {
+        content: result.editor,
+        mountId: mount.id,
+        baseVersion: result.acknowledged.baseVersion,
+        baseContent: result.acknowledged.baseContent,
+        savedAt: expect.any(Number),
+      },
+    });
+  } finally {
+    await deleteAdminFile(page, mount.id, path);
+  }
 });
 
 test('network and invalid save responses retain dirty content and its draft', async ({ page }) => {

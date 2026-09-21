@@ -508,21 +508,26 @@ window._reinitEditor = (mode) => {
   teardownOutlineHighlight();
   _vditor.destroy();
   window._pendingRestore = restore;
-  initEditor(content, mode);
+  initEditor(content, mode, undefined, window._originalContent);
 };
 
-function initEditor(content, mode, readonly) {
+function initEditor(content, mode, readonly, confirmedContent) {
   const editorGeneration = ++_editorGeneration;
   const restore = window._pendingRestore;
   window._pendingRestore = null;
   _editorMode = mode || 'ir';
-  _originalContent = content || '';
+  const initialContent = content || '';
+  const preserveConfirmedContent = typeof confirmedContent === 'string';
+  const initialConfirmedContent = preserveConfirmedContent ? confirmedContent : initialContent;
+  _originalContent = initialConfirmedContent;
+  window._originalContent = initialConfirmedContent;
+  window._lastSavedContent = initialConfirmedContent;
   const vditorEl = document.getElementById('vditor');
   vditorEl.innerHTML = '';
 
   _vditor = new Vditor('vditor', {
     mode: _editorMode,
-    value: _originalContent,
+    value: initialContent,
     height: '100%',
     width: '100%',
     placeholder: '开始写作...',
@@ -635,14 +640,16 @@ function initEditor(content, mode, readonly) {
     cache: { enable: false },
     upload: { url: '', linkToImgUrl: '' },
     after: () => {
+      const editorContent = _vditor.getValue();
+      const baselineContent = preserveConfirmedContent ? initialConfirmedContent : editorContent;
       // Sync window._originalContent with Vditor's normalized content
       // (Vditor may add trailing newline or normalize content)
-      window._originalContent = _vditor.getValue();
-      window._lastSavedContent = _vditor.getValue();
-      _originalContent = _vditor.getValue();
+      window._originalContent = baselineContent;
+      window._lastSavedContent = baselineContent;
+      _originalContent = baselineContent;
       // Also sync state.baseContent so diff computation uses the same baseline
       if (window.state && window.state.currentPath) {
-        window.state.baseContent = _vditor.getValue();
+        window.state.baseContent = baselineContent;
       }
       // Hide Vditor's preview toolbar (Desktop/Tablet/Mobile buttons)
       const style = document.createElement('style');

@@ -330,7 +330,26 @@ document.addEventListener('DOMContentLoaded', async () => {
           } catch (_) {
             /* ignore */
           }
-          initEditor(content, state.editorMode, !!mount.readonly);
+          const draftRestore = resolveDraftRestore(
+            lastPath,
+            mount.id,
+            content,
+            state.baseVersion,
+            content,
+          );
+          state.baseVersion = draftRestore.baseVersion;
+          state.baseContent = draftRestore.baseContent;
+          state.fileVersions[mount.id + ':' + lastPath] = draftRestore.baseVersion;
+          setFileInfo(mount.id, lastPath);
+          initEditor(
+            draftRestore.content,
+            state.editorMode,
+            !!mount.readonly,
+            draftRestore.hasDraft ? draftRestore.baseContent : undefined,
+          );
+          if (draftRestore.hasDraft) {
+            showToast('已恢复本地缓存版本');
+          }
           // Connect to SSE for collaborative editing (non-readonly files)
           if (!mount.readonly && window.nasmdSSE) {
             window.nasmdSSE.connect(mount.id, lastPath);
@@ -367,9 +386,12 @@ document.addEventListener('DOMContentLoaded', async () => {
               console.log('[restore] server mount: no mtime from API response');
             }
           }
-          setFileInfo(mount.id, lastPath);
-          state.dirty = false;
           state.pendingRemoteVersion = null;
+          if (draftRestore.hasDraft) {
+            markDirty();
+          } else {
+            state.dirty = false;
+          }
           startDirtyCheck();
           // Expand sidebar to show the current file
           if (!state.expandedMounts.includes(mount.id)) {
@@ -3106,20 +3128,37 @@ async function openFile(path, preferredMountId, searchKeyword) {
     // Vditor's render/after callbacks) knows whether this is a local mount.
     setFileInfo(mount.id, path);
     // Check for offline draft
-    const draft = loadFromLocalStorage(path);
-    const finalContent = draft ? draft.content : content;
-    if (draft) {
+    const draftRestore = resolveDraftRestore(
+      path,
+      mount.id,
+      content,
+      state.baseVersion,
+      state.baseContent,
+    );
+    state.baseVersion = draftRestore.baseVersion;
+    state.baseContent = draftRestore.baseContent;
+    state.fileVersions[mount.id + ':' + path] = draftRestore.baseVersion;
+    if (draftRestore.hasDraft) {
       showToast('已恢复本地缓存版本');
     }
-    initEditor(finalContent, state.editorMode, !!mount.readonly);
+    initEditor(
+      draftRestore.content,
+      state.editorMode,
+      !!mount.readonly,
+      draftRestore.hasDraft ? draftRestore.baseContent : undefined,
+    );
     // Connect to SSE for collaborative editing (non-readonly files)
     if (!mount.readonly && window.nasmdSSE) {
       window.nasmdSSE.connect(mount.id, path);
     }
     // Note: window._originalContent is set by Vditor's after() callback
     // to match Vditor's normalized content (e.g. trailing newline handling)
-    state.dirty = false;
     state.pendingRemoteVersion = null;
+    if (draftRestore.hasDraft) {
+      markDirty();
+    } else {
+      state.dirty = false;
+    }
     startDirtyCheck();
     renderSidebar();
     loadBacklinks(path);
@@ -3201,6 +3240,9 @@ function onEditorInput() {
     // Debounce auto-save for all mount types to avoid race condition
     // with pollCurrentFile reading stale disk content
     scheduleAutoSave();
+  }
+  if (isDirty && _saveInProgress && state.currentPath) {
+    saveToLocalStorage(state.currentPath, window._vditor.getValue());
   }
 }
 window.onEditorInput = onEditorInput;
@@ -3369,7 +3411,27 @@ function toggleBacklinks() {
 // === Save-in-progress flag to prevent pollCurrentFile race condition ===
 let _saveInProgress = false;
 
-async function saveFile({ silent = false } = {}) {
+async function saveFile(options = {}) {
+  const normalizedOptions =
+    typeof options === 'boolean'
+      ? { silent: options }
+      : options && typeof options === 'object'
+        ? options
+        : {};
+  const silent = normalizedOptions.silent || false;
+  const transaction = normalizedOptions.transaction || {
+    mountId: state.currentMountId,
+    path: state.currentPath,
+    resyncRetriesRemaining: 1,
+    followUpSavesRemaining: 1,
+  };
+  if (
+    normalizedOptions.transaction &&
+    (transaction.mountId !== state.currentMountId || transaction.path !== state.currentPath)
+  ) {
+    console.log('[saveFile] skipped: save transaction belongs to another file');
+    return;
+  }
   console.log('[saveFile] called:', {
     silent,
     currentPath: state.currentPath,
@@ -3387,6 +3449,32 @@ async function saveFile({ silent = false } = {}) {
   let content;
   let handledResync = false;
   let retryAfterResync = false;
+  let retryAfterConcurrentInput = false;
+  let saveContext = null;
+  const isCurrentSaveContext = () =>
+    !saveContext ||
+    (state.currentMountId === saveContext.mountId &&
+      state.currentPath === saveContext.path &&
+      window._vditor === saveContext.editor);
+  const persistSaveContextDraft = (fallbackContent) => {
+    if (!saveContext) return;
+    let draftContent = fallbackContent;
+    const currentFileMatches =
+      state.currentMountId === saveContext.mountId && state.currentPath === saveContext.path;
+    const draftEditor = currentFileMatches ? window._vditor : saveContext.editor;
+    if (draftEditor && typeof draftEditor.getValue === 'function') {
+      try {
+        draftContent = draftEditor.getValue();
+      } catch (_e) {
+        // A destroyed editor may no longer expose its live value; keep the submitted snapshot.
+      }
+    }
+    saveToLocalStorage(saveContext.path, draftContent, {
+      mountId: saveContext.mountId,
+      baseVersion: saveContext.baseVersion,
+      baseContent: saveContext.baseContent,
+    });
+  };
 
   setTimeout(() => {
     if (_saveInProgress) {
@@ -3417,6 +3505,14 @@ async function saveFile({ silent = false } = {}) {
     }
 
     if (!state.currentPath || !state.currentMountId || !window._vditor) return;
+    saveContext = {
+      mountId: state.currentMountId,
+      path: state.currentPath,
+      editor: window._vditor,
+      baseVersion: state.baseVersion,
+      baseContent:
+        typeof state.baseContent === 'string' ? state.baseContent : window._originalContent || '',
+    };
     const mount = state.mounts.find((m) => m.id === state.currentMountId);
     if (mount && mount.readonly) {
       if (!silent) showToast('此文件不允许修改');
@@ -3528,6 +3624,12 @@ async function saveFile({ silent = false } = {}) {
           submittedBaseContent,
         );
 
+        if (!isCurrentSaveContext()) {
+          persistSaveContextDraft(submittedContent);
+          console.log('[saveFile] ignored response: active file changed');
+          return;
+        }
+
         if (!resp || typeof resp !== 'object') {
           throw new Error('Invalid response from server');
         }
@@ -3559,7 +3661,11 @@ async function saveFile({ silent = false } = {}) {
             resp.content,
           );
           retryAfterResync =
-            resp.newVersion !== submittedBaseVersion || resp.content !== submittedBaseContent;
+            transaction.resyncRetriesRemaining > 0 &&
+            (resp.newVersion !== submittedBaseVersion || resp.content !== submittedBaseContent);
+          if (retryAfterResync) {
+            transaction.resyncRetriesRemaining -= 1;
+          }
 
           state.baseVersion = resp.newVersion;
           state.baseContent = resp.content;
@@ -3591,14 +3697,19 @@ async function saveFile({ silent = false } = {}) {
         state.fileVersions[fileKey] = resp.newVersion;
         window._originalContent = resp.content;
         window._lastSavedContent = resp.content;
-        state.pendingRemoteVersion = null;
+        if (
+          state.pendingRemoteVersion !== null &&
+          Number(state.pendingRemoteVersion) <= resp.newVersion
+        ) {
+          state.pendingRemoteVersion = null;
+        }
 
         // Reconcile edits made while this request was in flight with the canonical response.
         const currentContentNow = window._vditor.getValue();
         if (_normContent(currentContentNow) === _normContent(submittedContent)) {
           window._vditor.setValue(resp.content);
-          markClean();
           clearLocalStorage(state.currentPath);
+          markClean();
         } else {
           const rebasedContent = window.nasmdDiff.rebaseContent(
             submittedContent,
@@ -3608,6 +3719,10 @@ async function saveFile({ silent = false } = {}) {
           window._vditor.setValue(rebasedContent);
           markDirty();
           saveToLocalStorage(state.currentPath, rebasedContent);
+          retryAfterConcurrentInput = transaction.followUpSavesRemaining > 0;
+          if (retryAfterConcurrentInput) {
+            transaction.followUpSavesRemaining -= 1;
+          }
         }
 
         if (resp.merged) {
@@ -3624,6 +3739,11 @@ async function saveFile({ silent = false } = {}) {
         }
       }
     } catch (e) {
+      if (!isCurrentSaveContext()) {
+        persistSaveContextDraft(content);
+        console.warn('[saveFile] ignored failure: active file changed', e);
+        return;
+      }
       markDirty();
       const draftContent = window._vditor ? window._vditor.getValue() : content;
       saveToLocalStorage(state.currentPath, draftContent);
@@ -3637,9 +3757,27 @@ async function saveFile({ silent = false } = {}) {
       btn.classList.remove('saving');
       btn.disabled = false;
     }
-    if (retryAfterResync && state.dirty && state.currentPath) {
-      setTimeout(() => saveFile({ silent: true }), 0);
-    } else if (!handledResync && state.dirty && state.autoSave && state.currentPath) {
+    if (
+      (retryAfterResync || retryAfterConcurrentInput) &&
+      isCurrentSaveContext() &&
+      state.dirty &&
+      state.currentPath
+    ) {
+      setTimeout(() => {
+        if (
+          state.currentMountId === transaction.mountId &&
+          state.currentPath === transaction.path
+        ) {
+          saveFile({ silent: true, transaction });
+        }
+      }, 0);
+    } else if (
+      !handledResync &&
+      isCurrentSaveContext() &&
+      state.dirty &&
+      state.autoSave &&
+      state.currentPath
+    ) {
       scheduleAutoSave();
     }
   }
@@ -5007,13 +5145,13 @@ function cleanExpiredDrafts() {
   }
 }
 
-function saveToLocalStorage(path, content) {
+function saveToLocalStorage(path, content, draftContext = null) {
   const key = 'nasmd_draft_' + path;
   const data = JSON.stringify({
     content,
-    mountId: state.currentMountId,
-    baseVersion: state.baseVersion,
-    baseContent: state.baseContent,
+    mountId: draftContext ? draftContext.mountId : state.currentMountId,
+    baseVersion: draftContext ? draftContext.baseVersion : state.baseVersion,
+    baseContent: draftContext ? draftContext.baseContent : state.baseContent,
     savedAt: Date.now(),
   });
   try {
@@ -5047,6 +5185,39 @@ function loadFromLocalStorage(path) {
   } catch (_e) {
     return null;
   }
+}
+
+function resolveDraftRestore(path, mountId, fallbackContent, fallbackVersion, fallbackBaseContent) {
+  const draft = loadFromLocalStorage(path);
+  const hasMatchingDraft =
+    draft && typeof draft.content === 'string' && (!draft.mountId || draft.mountId === mountId);
+  if (!hasMatchingDraft) {
+    return {
+      hasDraft: false,
+      content: fallbackContent,
+      baseVersion: Number.isSafeInteger(fallbackVersion) ? fallbackVersion : 0,
+      baseContent: typeof fallbackBaseContent === 'string' ? fallbackBaseContent : fallbackContent,
+    };
+  }
+
+  const hasPersistedBaseline =
+    Number.isSafeInteger(draft.baseVersion) &&
+    draft.baseVersion >= 0 &&
+    typeof draft.baseContent === 'string';
+  return {
+    hasDraft: true,
+    content: draft.content,
+    baseVersion: hasPersistedBaseline
+      ? draft.baseVersion
+      : Number.isSafeInteger(fallbackVersion)
+        ? fallbackVersion
+        : 0,
+    baseContent: hasPersistedBaseline
+      ? draft.baseContent
+      : typeof fallbackBaseContent === 'string'
+        ? fallbackBaseContent
+        : fallbackContent,
+  };
 }
 
 function clearLocalStorage(path) {
