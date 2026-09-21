@@ -1,67 +1,98 @@
 """Paragraph-level diff engine for real-time collaborative editing."""
 
+from dataclasses import dataclass
 
-def split_paragraphs_with_delims(text: str) -> tuple[list[str], list[str]]:
-    """Split text into paragraphs while preserving exact delimiters between them."""
-    if not text:
-        return [], []
 
-    # Normalize CRLF -> LF
+@dataclass(frozen=True)
+class _ParsedDocument:
+    prefix: str
+    paragraphs: list[str]
+    delimiters: list[str]
+
+
+def _parse_document(text: str) -> _ParsedDocument:
+    """Parse normalized text without discarding non-paragraph whitespace."""
     text_norm = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not text_norm:
+        return _ParsedDocument("", [], [])
 
-    lines = text_norm.split("\n")
+    # Each span is (line start, content end, line end, content without LF).
+    lines: list[tuple[int, int, int, str]] = []
+    start = 0
+    while start < len(text_norm):
+        newline = text_norm.find("\n", start)
+        if newline < 0:
+            content_end = len(text_norm)
+            line_end = len(text_norm)
+        else:
+            content_end = newline
+            line_end = newline + 1
+        lines.append((start, content_end, line_end, text_norm[start:content_end]))
+        start = line_end
+
+    line_count = len(lines)
+    first_content = 0
+    while first_content < line_count and not lines[first_content][3].strip():
+        first_content += 1
+
+    if first_content == line_count:
+        return _ParsedDocument(text_norm, [], [])
+
+    prefix_end = lines[first_content][0]
+    prefix = text_norm[:prefix_end]
     paragraphs: list[str] = []
     delimiters: list[str] = []
-    current_lines: list[str] = []
+    i = first_content
 
-    in_fence: str | None = None  # '```' or '~~~'
-    fence_len: int = 0
-    in_math: bool = False
-
-    # Check if document starts with YAML frontmatter
-    if lines and lines[0].strip() == "---":
+    # Preserve the established rule: frontmatter is special only at the actual
+    # beginning of the document. Leading prefix whitespace does not opt in.
+    if not prefix and lines[0][3].strip() == "---":
         closing_idx = -1
-        for idx in range(1, min(50, len(lines))):
-            s = lines[idx].strip()
-            if s in ("---", "..."):
+        for idx in range(1, min(50, line_count)):
+            marker = lines[idx][3].strip()
+            if marker in ("---", "..."):
                 closing_idx = idx
                 break
-            if s.startswith("#") or s.startswith("```"):
+            if marker.startswith("#") or marker.startswith("```"):
                 break
         if closing_idx > 0:
-            paragraphs.append("\n".join(lines[: closing_idx + 1]))
-            # Count following empty lines for delimiter
-            post_idx = closing_idx + 1
-            sep_count = 0
-            while post_idx < len(lines) and lines[post_idx].strip() == "":
-                sep_count += 1
-                post_idx += 1
-            has_following_content = post_idx < len(lines)
-            delimiters.append("\n" * (sep_count + (1 if has_following_content else 0)))
-            lines = lines[post_idx:]
+            paragraph_end = lines[closing_idx][1]
+            paragraphs.append(text_norm[:paragraph_end])
+            i = closing_idx + 1
+            while i < line_count and not lines[i][3].strip():
+                i += 1
+            delimiter_end = lines[i][0] if i < line_count else len(text_norm)
+            delimiters.append(text_norm[paragraph_end:delimiter_end])
 
-    i = 0
-    num_lines = len(lines)
-    while i < num_lines:
-        line = lines[i]
+    current_start: int | None = None
+    current_end: int | None = None
+    in_fence: str | None = None
+    fence_len = 0
+    in_math = False
+
+    while i < line_count:
+        line = lines[i][3]
         stripped = line.strip()
 
-        # Handle Fenced Code Blocks
         if in_fence is None:
             if stripped.startswith("```"):
+                if current_start is None:
+                    current_start = i
+                current_end = i
                 in_fence = "```"
                 fence_len = len(stripped) - len(stripped.lstrip("`"))
-                current_lines.append(line)
                 i += 1
                 continue
-            elif stripped.startswith("~~~"):
+            if stripped.startswith("~~~"):
+                if current_start is None:
+                    current_start = i
+                current_end = i
                 in_fence = "~~~"
                 fence_len = len(stripped) - len(stripped.lstrip("~"))
-                current_lines.append(line)
                 i += 1
                 continue
         else:
-            current_lines.append(line)
+            current_end = i
             if in_fence == "```" and stripped.startswith("```"):
                 closing_len = len(stripped) - len(stripped.lstrip("`"))
                 if closing_len >= fence_len:
@@ -73,57 +104,55 @@ def split_paragraphs_with_delims(text: str) -> tuple[list[str], list[str]]:
             i += 1
             continue
 
-        # Handle Math Blocks ($$)
         if not in_math:
             if stripped.startswith("$$"):
-                if stripped.endswith("$$") and len(stripped) > 2:
-                    current_lines.append(line)
-                    i += 1
-                    continue
-                else:
+                if current_start is None:
+                    current_start = i
+                current_end = i
+                if not (stripped.endswith("$$") and len(stripped) > 2):
                     in_math = True
-                    current_lines.append(line)
-                    i += 1
-                    continue
+                i += 1
+                continue
         else:
-            current_lines.append(line)
+            current_end = i
             if stripped.endswith("$$") or stripped == "$$":
                 in_math = False
             i += 1
             continue
 
-        # Normal markdown text
-        if stripped == "":
-            if current_lines:
-                paragraphs.append("\n".join(current_lines))
-                current_lines = []
-                sep_count = 1
-                while i + 1 < num_lines and lines[i + 1].strip() == "":
-                    sep_count += 1
+        if not stripped:
+            if current_start is not None and current_end is not None:
+                paragraph_start = lines[current_start][0]
+                paragraph_end = lines[current_end][1]
+                paragraphs.append(text_norm[paragraph_start:paragraph_end])
+                i += 1
+                while i < line_count and not lines[i][3].strip():
                     i += 1
-                if i == num_lines - 1:
-                    delimiters.append("\n" * sep_count)
-                else:
-                    delimiters.append("\n" * (sep_count + 1))
+                delimiter_end = lines[i][0] if i < line_count else len(text_norm)
+                delimiters.append(text_norm[paragraph_end:delimiter_end])
+                current_start = None
+                current_end = None
+                continue
         else:
-            current_lines.append(line)
+            if current_start is None:
+                current_start = i
+            current_end = i
 
         i += 1
 
-    if current_lines:
-        paragraphs.append("\n".join(current_lines))
-        if text_norm.endswith("\n"):
-            delimiters.append("\n")
-        else:
-            delimiters.append("")
+    if current_start is not None and current_end is not None:
+        paragraph_start = lines[current_start][0]
+        paragraph_end = lines[current_end][1]
+        paragraphs.append(text_norm[paragraph_start:paragraph_end])
+        delimiters.append(text_norm[paragraph_end:])
 
-    while len(delimiters) < len(paragraphs):
-        delimiters.append("\n\n")
+    return _ParsedDocument(prefix, paragraphs, delimiters)
 
-    if not paragraphs and text_norm:
-        return [""], [text_norm]
 
-    return paragraphs, delimiters
+def split_paragraphs_with_delims(text: str) -> tuple[list[str], list[str]]:
+    """Split text into paragraphs while preserving exact delimiters between them."""
+    parsed = _parse_document(text)
+    return parsed.paragraphs, parsed.delimiters
 
 
 def split_paragraphs(text: str) -> list[str]:
@@ -134,11 +163,19 @@ def split_paragraphs(text: str) -> list[str]:
 
 def compute_diff(old_text: str, new_text: str) -> list[dict]:
     """Compute a deterministic text diff plus non-content delimiter changes."""
-    old_paras, old_delimiters = split_paragraphs_with_delims(old_text)
-    new_paras, new_delimiters = split_paragraphs_with_delims(new_text)
+    old_document = _parse_document(old_text)
+    new_document = _parse_document(new_text)
+    old_paras = old_document.paragraphs
+    old_delimiters = old_document.delimiters
+    new_paras = new_document.paragraphs
+    new_delimiters = new_document.delimiters
+
+    changes = []
+    if old_document.prefix != new_document.prefix:
+        changes.append({"type": "prefix", "content": new_document.prefix})
 
     if old_paras == new_paras and old_delimiters == new_delimiters:
-        return []
+        return changes
 
     m = len(old_paras)
     n = len(new_paras)
@@ -155,8 +192,6 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
         and old_paras[m - 1 - suffix] == new_paras[n - 1 - suffix]
     ):
         suffix += 1
-
-    changes = []
 
     def add_delimiter_change(old_idx: int, new_idx: int) -> None:
         if old_delimiters[old_idx] != new_delimiters[new_idx]:
@@ -262,7 +297,10 @@ def apply_changes(text: str, changes: list) -> str:
     if not changes:
         return text
 
-    paragraphs, delimiters = split_paragraphs_with_delims(text)
+    document = _parse_document(text)
+    prefix = document.prefix
+    paragraphs = document.paragraphs
+    delimiters = document.delimiters
 
     # 分类 changes
     missing_delimiter = object()
@@ -274,7 +312,9 @@ def apply_changes(text: str, changes: list) -> str:
     for ch in changes:
         t = ch.get("type")
         idx = ch.get("paraIdx", 0)
-        if t == "replace":
+        if t == "prefix":
+            prefix = ch.get("content", "")
+        elif t == "replace":
             replaces[idx] = (ch.get("content", ""), ch.get("delimiter", missing_delimiter))
         elif t == "delete":
             deletes.add(idx)
@@ -290,6 +330,7 @@ def apply_changes(text: str, changes: list) -> str:
 
     result_paras = []
     result_delims = []
+    result_delims_explicit = []
     n = len(paragraphs)
     for i in range(n):
         # 先插入"在此段落之前"的 inserts
@@ -297,6 +338,7 @@ def apply_changes(text: str, changes: list) -> str:
             for content, delimiter in inserts_by_idx[i]:
                 result_paras.append(content)
                 result_delims.append("\n\n" if delimiter is missing_delimiter else delimiter)
+                result_delims_explicit.append(delimiter is not missing_delimiter)
         # 处理原段落
         if i in deletes:
             continue
@@ -308,16 +350,25 @@ def apply_changes(text: str, changes: list) -> str:
             delimiter = missing_delimiter
         if i in delimiter_changes:
             result_delims.append(delimiter_changes[i])
+            result_delims_explicit.append(True)
         elif delimiter is not missing_delimiter:
             result_delims.append(delimiter)
+            result_delims_explicit.append(True)
         elif i < len(delimiters):
             result_delims.append(delimiters[i])
+            result_delims_explicit.append(False)
         else:
             result_delims.append("\n\n")
+            result_delims_explicit.append(False)
 
     # 处理 paraIdx >= n 的 inserts（追加到末尾）
     trailing_indices = [idx for idx in sorted(inserts_by_idx.keys()) if idx >= n]
-    if trailing_indices and result_delims and result_delims[-1] in ("", "\n"):
+    if (
+        trailing_indices
+        and result_delims
+        and not result_delims_explicit[-1]
+        and result_delims[-1] in ("", "\n")
+    ):
         result_delims[-1] = "\n\n"
 
     last_trailing_delimiter = missing_delimiter
@@ -325,6 +376,7 @@ def apply_changes(text: str, changes: list) -> str:
         for content, delimiter in inserts_by_idx[idx]:
             result_paras.append(content)
             result_delims.append("\n\n" if delimiter is missing_delimiter else delimiter)
+            result_delims_explicit.append(delimiter is not missing_delimiter)
             last_trailing_delimiter = delimiter
 
     if (
@@ -335,7 +387,7 @@ def apply_changes(text: str, changes: list) -> str:
     ):
         result_delims[-1] = ""
 
-    result_parts = []
+    result_parts = [prefix]
     for idx, p in enumerate(result_paras):
         result_parts.append(p)
         if idx < len(result_delims):
@@ -408,8 +460,17 @@ def validate_changes(
             raise TypeError(f"each {changes_name} entry must be a dict")
 
         change_type = change.get("type")
-        if change_type not in {"insert", "delete", "replace", "delimiter"}:
+        if change_type not in {"insert", "delete", "replace", "delimiter", "prefix"}:
             raise ValueError(f"invalid change type: {change_type!r}")
+
+        if change_type == "prefix":
+            if "paraIdx" in change:
+                raise ValueError("prefix changes must not include paraIdx")
+            if "delimiter" in change:
+                raise ValueError("prefix changes must not include delimiter")
+            if not isinstance(change.get("content"), str):
+                raise TypeError("prefix content must be a string")
+            continue
 
         para_idx = change.get("paraIdx")
         if isinstance(para_idx, bool) or not isinstance(para_idx, int):
@@ -465,6 +526,9 @@ def transform_changes(
     transformed = []
     for ch in incoming_changes:
         t = ch["type"]
+        if t == "prefix":
+            transformed.append(dict(ch))
+            continue
         idx = ch["paraIdx"]
         target_idx = map_position(idx)
         if t == "insert":

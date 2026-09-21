@@ -17,20 +17,22 @@ test('paragraph contract matches the backend', async ({ page }) => {
   }
 });
 
-test('paragraph contract preserves frontmatter delimiters', async ({ page }) => {
+test('lossless parser reconstructs normalized input', async ({ page }) => {
   await page.goto('/admin');
 
   for (const testCase of paragraphSplitCases.filter((item) => item.delimiters)) {
     const result = await page.evaluate((text) => {
-      const split = window.nasmdDiff.splitParagraphsWithDelims(text);
+      const split = window.nasmdDiff.parseDocument(text);
       return {
         ...split,
-        roundTrip: split.paragraphs
-          .map((paragraph, idx) => paragraph + split.delimiters[idx])
-          .join(''),
+        roundTrip:
+          split.prefix +
+          split.paragraphs.map((paragraph, idx) => paragraph + split.delimiters[idx]).join(''),
       };
     }, testCase.text);
 
+    expect(result.prefix, testCase.name).toBe(testCase.prefix || '');
+    expect(result.paragraphs, testCase.name).toEqual(testCase.paragraphs);
     expect(result.delimiters, testCase.name).toEqual(testCase.delimiters);
     expect(result.roundTrip, testCase.name).toBe(testCase.text);
   }
@@ -45,8 +47,18 @@ test('paragraph diff and apply round-trip exact content', async ({ page }) => {
     ['change-blank-line-delimiter', 'A\n\nB', 'A\n\n\n\nB'],
     ['change-frontmatter-boundary', '---\ntitle: Doc\n---\nBody', '---\ntitle: Doc\n---\n\nBody'],
     ['empty-content', 'A', ''],
+    ['leading-blank-content', '', '\nA'],
+    ['delete-leading-blank-content', '\nA', ''],
+    ['leading-whitespace-content', '', ' \nA'],
+    ['single-newline-separator', 'A', 'A\nB'],
+    ['whitespace-separator', 'A', 'A\n \nB'],
+    ['delete-whitespace-separated-paragraph', 'A\n \nB', 'A'],
     ['blank-only-content', '', '\n'],
     ['delete-blank-only-content', '\n', ''],
+    ['blank-only-whitespace-content', '', ' \n'],
+    ['delete-blank-only-whitespace-content', ' \n', ''],
+    ['multiple-blank-lines', '', '\n\n\n'],
+    ['blank-prefix-to-frontmatter', '\n', '---\nx: y\n---\nA'],
   ];
 
   const results = await page.evaluate((roundTripCases) => {
@@ -65,12 +77,18 @@ test('paragraph diff operations match the backend contract', async ({ page }) =>
   const results = await page.evaluate(() => ({
     delimiterOnly: window.nasmdDiff.computeParagraphDiff('A\n\nB', 'A\n\n\nB'),
     multiReplace: window.nasmdDiff.computeParagraphDiff('A\n\nB', 'X\n\nY'),
+    prefixMultiReplace: window.nasmdDiff.computeParagraphDiff('\nA\n\nB', ' \nX\n \nY'),
   }));
 
   expect(results).toEqual({
     delimiterOnly: [{ type: 'delimiter', paraIdx: 0, delimiter: '\n\n\n' }],
     multiReplace: [
       { type: 'replace', paraIdx: 0, content: 'X', delimiter: '\n\n' },
+      { type: 'replace', paraIdx: 1, content: 'Y', delimiter: '' },
+    ],
+    prefixMultiReplace: [
+      { type: 'prefix', content: ' \n' },
+      { type: 'replace', paraIdx: 0, content: 'X', delimiter: '\n \n' },
       { type: 'replace', paraIdx: 1, content: 'Y', delimiter: '' },
     ],
   });
@@ -86,6 +104,14 @@ test.describe('rebase', () => {
       window.nasmdDiff.transformParagraphChanges(
         [{ type: 'replace', paraIdx: 2, content: 'C-local' }],
         [{ type: 'insert', paraIdx: 0, content: 'HEADER' }],
+        3,
+      ),
+      window.nasmdDiff.transformParagraphChanges(
+        [{ type: 'prefix', content: '\n', operationId: 'local-prefix-1' }],
+        [
+          { type: 'prefix', content: ' \n' },
+          { type: 'insert', paraIdx: 0, content: 'HEADER' },
+        ],
         3,
       ),
       window.nasmdDiff.transformParagraphChanges(
@@ -119,6 +145,7 @@ test.describe('rebase', () => {
 
     expect(results).toEqual([
       [{ type: 'replace', paraIdx: 3, content: 'C-local' }],
+      [{ type: 'prefix', content: '\n', operationId: 'local-prefix-1' }],
       [{ type: 'replace', paraIdx: 1, content: 'C-local' }],
       [{ type: 'insert', paraIdx: 1, content: 'B-local' }],
       [],
@@ -164,6 +191,15 @@ test.describe('rebase', () => {
     ]);
 
     expect(results).toEqual(['A-remote\n\n\nB', 'A\n\nB-remote']);
+  });
+
+  test('lossless formatting rebases preserve remote paragraph text', async ({ page }) => {
+    const results = await page.evaluate(() => [
+      window.nasmdDiff.rebaseContent('A', '\nA', 'A-remote'),
+      window.nasmdDiff.rebaseContent('A\n\nB', 'A\n \nB', 'A-remote\n\nB'),
+    ]);
+
+    expect(results).toEqual(['\nA-remote', 'A-remote\n \nB']);
   });
 
   test('handles batched remote changes in base coordinates', async ({ page }) => {
@@ -293,6 +329,32 @@ test.describe('rebase', () => {
             ),
         ],
         [
+          'prefix-change-missing-content',
+          () => window.nasmdDiff.transformParagraphChanges([{ type: 'prefix' }], [], 1),
+        ],
+        [
+          'prefix-change-non-string-content',
+          () => window.nasmdDiff.transformParagraphChanges([{ type: 'prefix', content: 7 }], [], 1),
+        ],
+        [
+          'prefix-change-with-index',
+          () =>
+            window.nasmdDiff.transformParagraphChanges(
+              [{ type: 'prefix', content: '\n', paraIdx: 0 }],
+              [],
+              1,
+            ),
+        ],
+        [
+          'prefix-change-with-delimiter',
+          () =>
+            window.nasmdDiff.transformParagraphChanges(
+              [{ type: 'prefix', content: '\n', delimiter: '' }],
+              [],
+              1,
+            ),
+        ],
+        [
           'invalid-accumulated-change',
           () =>
             window.nasmdDiff.transformParagraphChanges([], [{ type: 'delete', paraIdx: -1 }], 1),
@@ -331,6 +393,10 @@ test.describe('rebase', () => {
       ['delete-with-delimiter', true],
       ['delimiter-change-missing-delimiter', true],
       ['delimiter-change-with-content', true],
+      ['prefix-change-missing-content', true],
+      ['prefix-change-non-string-content', true],
+      ['prefix-change-with-index', true],
+      ['prefix-change-with-delimiter', true],
       ['invalid-accumulated-change', true],
       ['unsafe-change-index', true],
     ]);

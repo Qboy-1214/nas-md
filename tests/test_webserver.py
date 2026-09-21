@@ -519,6 +519,33 @@ class TestWriteFileAPI:
         with open(path, "rb") as f:
             assert f.read() == os.linesep.encode("utf-8")
 
+    @pytest.mark.parametrize(
+        ("name", "base", "target"),
+        [
+            ("leading", "", "\nA"),
+            ("embedded", "A\n\nB", "A\n \nB"),
+            ("blank-only-whitespace", "", " \n"),
+            ("blank-only-multiple", "", "\n\n\n"),
+        ],
+        ids=["leading", "embedded", "blank-only-whitespace", "blank-only-multiple"],
+    )
+    def test_write_file_preserves_lossless_whitespace(
+        self, writable_server_url, writable_dir, name, base, target
+    ):
+        path = os.path.join(writable_dir, f"lossless-{name}.md")
+        with open(path, "wb") as f:
+            f.write(base.encode("utf-8"))
+
+        status, body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path=/lossless-{name}.md",
+            data=target.encode("utf-8"),
+        )
+
+        assert status == 200
+        assert json.loads(body)["newVersion"] == 1
+        with open(path, "rb") as f:
+            assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
+
     def test_write_file_normalized_line_endings_remain_a_successful_noop(
         self, writable_server_url, writable_dir
     ):
@@ -736,6 +763,40 @@ class TestSubmitChangesAPI:
         assert data["appliedChanges"] == [
             {"type": "delimiter", "paraIdx": 0, "delimiter": "\n\n\n"}
         ]
+        with open(path, "rb") as f:
+            assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
+
+    @pytest.mark.parametrize(
+        ("name", "base", "change", "target"),
+        [
+            ("prefix", "A", {"type": "prefix", "content": "\n"}, "\nA"),
+            (
+                "embedded",
+                "A\n\nB",
+                {"type": "delimiter", "paraIdx": 0, "delimiter": "\n \n"},
+                "A\n \nB",
+            ),
+            ("blank-only", "", {"type": "prefix", "content": " \n"}, " \n"),
+        ],
+        ids=["prefix", "embedded", "blank-only"],
+    )
+    def test_submit_changes_preserves_lossless_whitespace(
+        self, writable_server_url, writable_dir, name, base, change, target
+    ):
+        path = os.path.join(writable_dir, f"post-lossless-{name}.md")
+        with open(path, "wb") as f:
+            f.write(base.encode("utf-8"))
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path=/post-lossless-{name}.md",
+            data={"baseVersion": 0, "changes": [change]},
+        )
+
+        assert status == 200
+        data = json.loads(body)
+        assert data["applied"] is True
+        assert data["newVersion"] == 1
+        assert data["content"] == target
         with open(path, "rb") as f:
             assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
 
@@ -957,6 +1018,22 @@ class TestSubmitChangesAPI:
                 {"type": "delimiter", "paraIdx": 0},
                 "Invalid changes: delimiter must be a string",
             ),
+            (
+                {"type": "prefix"},
+                "Invalid changes: prefix content must be a string",
+            ),
+            (
+                {"type": "prefix", "content": 7},
+                "Invalid changes: prefix content must be a string",
+            ),
+            (
+                {"type": "prefix", "content": "\n", "paraIdx": 0},
+                "Invalid changes: prefix changes must not include paraIdx",
+            ),
+            (
+                {"type": "prefix", "content": "\n", "delimiter": ""},
+                "Invalid changes: prefix changes must not include delimiter",
+            ),
         ],
         ids=[
             "negative-index",
@@ -965,6 +1042,10 @@ class TestSubmitChangesAPI:
             "delete-with-delimiter",
             "delimiter-change-with-content",
             "delimiter-change-missing-delimiter",
+            "prefix-change-missing-content",
+            "prefix-change-non-string-content",
+            "prefix-change-with-index",
+            "prefix-change-with-delimiter",
         ],
     )
     def test_submit_changes_rejects_invalid_changes_without_side_effects(

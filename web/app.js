@@ -3558,23 +3558,48 @@ async function saveFile({ silent = false } = {}) {
 }
 
 // Markdown 块级段落切分：保留段落与其原始分隔空白符
-function splitParagraphsWithDelims(text) {
-  if (!text) return { paragraphs: [], delimiters: [] };
+function parseDocument(text) {
   const textNorm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!textNorm) return { prefix: '', paragraphs: [], delimiters: [] };
 
-  var lines = textNorm.split('\n');
-  var paragraphs = [];
-  var delimiters = [];
-  var currentLines = [];
+  const lines = [];
+  let start = 0;
+  while (start < textNorm.length) {
+    const newline = textNorm.indexOf('\n', start);
+    const contentEnd = newline < 0 ? textNorm.length : newline;
+    const lineEnd = newline < 0 ? textNorm.length : newline + 1;
+    lines.push({
+      start,
+      contentEnd,
+      lineEnd,
+      content: textNorm.slice(start, contentEnd),
+    });
+    start = lineEnd;
+  }
 
-  var inFence = null;
-  var fenceLen = 0;
-  var inMath = false;
+  let firstContent = 0;
+  while (firstContent < lines.length && !lines[firstContent].content.trim()) {
+    firstContent++;
+  }
 
-  if (lines.length > 0 && lines[0].trim() === '---') {
+  if (firstContent === lines.length) {
+    return { prefix: textNorm, paragraphs: [], delimiters: [] };
+  }
+
+  const prefixEnd = lines[firstContent].start;
+  const prefix = textNorm.slice(0, prefixEnd);
+  const paragraphs = [];
+  const delimiters = [];
+  let i = firstContent;
+
+  let inFence = null;
+  let fenceLen = 0;
+  let inMath = false;
+
+  if (!prefix && lines[0].content.trim() === '---') {
     let closingIdx = -1;
     for (let idx = 1; idx < Math.min(50, lines.length); idx++) {
-      const marker = lines[idx].trim();
+      const marker = lines[idx].content.trim();
       if (marker === '---' || marker === '...') {
         closingIdx = idx;
         break;
@@ -3582,48 +3607,48 @@ function splitParagraphsWithDelims(text) {
       if (marker.startsWith('#') || marker.startsWith('```')) break;
     }
     if (closingIdx > 0) {
-      paragraphs.push(lines.slice(0, closingIdx + 1).join('\n'));
-      let postIdx = closingIdx + 1;
-      let blankCount = 0;
-      while (postIdx < lines.length && lines[postIdx].trim() === '') {
-        blankCount++;
-        postIdx++;
+      const paragraphEnd = lines[closingIdx].contentEnd;
+      paragraphs.push(textNorm.slice(0, paragraphEnd));
+      i = closingIdx + 1;
+      while (i < lines.length && !lines[i].content.trim()) {
+        i++;
       }
-      const hasFollowingContent = postIdx < lines.length;
-      delimiters.push('\n'.repeat(blankCount + (hasFollowingContent ? 1 : 0)));
-      lines = lines.slice(postIdx);
+      const delimiterEnd = i < lines.length ? lines[i].start : textNorm.length;
+      delimiters.push(textNorm.slice(paragraphEnd, delimiterEnd));
     }
   }
 
-  var i = 0;
-  var numLines = lines.length;
-  while (i < numLines) {
-    var line = lines[i];
-    var stripped = line.trim();
+  let currentStart = null;
+  let currentEnd = null;
+  while (i < lines.length) {
+    const line = lines[i].content;
+    const stripped = line.trim();
 
     if (!inFence) {
       if (stripped.startsWith('```')) {
+        if (currentStart === null) currentStart = i;
+        currentEnd = i;
         inFence = '```';
         fenceLen = stripped.length - stripped.replace(/^`+/, '').length;
-        currentLines.push(line);
         i++;
         continue;
       } else if (stripped.startsWith('~~~')) {
+        if (currentStart === null) currentStart = i;
+        currentEnd = i;
         inFence = '~~~';
         fenceLen = stripped.length - stripped.replace(/^~+/, '').length;
-        currentLines.push(line);
         i++;
         continue;
       }
     } else {
-      currentLines.push(line);
+      currentEnd = i;
       if (inFence === '```' && stripped.startsWith('```')) {
-        var closingLen1 = stripped.length - stripped.replace(/^`+/, '').length;
+        const closingLen1 = stripped.length - stripped.replace(/^`+/, '').length;
         if (closingLen1 >= fenceLen) {
           inFence = null;
         }
       } else if (inFence === '~~~' && stripped.startsWith('~~~')) {
-        var closingLen2 = stripped.length - stripped.replace(/^~+/, '').length;
+        const closingLen2 = stripped.length - stripped.replace(/^~+/, '').length;
         if (closingLen2 >= fenceLen) {
           inFence = null;
         }
@@ -3634,19 +3659,14 @@ function splitParagraphsWithDelims(text) {
 
     if (!inMath) {
       if (stripped.startsWith('$$')) {
-        if (stripped.endsWith('$$') && stripped.length > 2) {
-          currentLines.push(line);
-          i++;
-          continue;
-        } else {
-          inMath = true;
-          currentLines.push(line);
-          i++;
-          continue;
-        }
+        if (currentStart === null) currentStart = i;
+        currentEnd = i;
+        if (!(stripped.endsWith('$$') && stripped.length > 2)) inMath = true;
+        i++;
+        continue;
       }
     } else {
-      currentLines.push(line);
+      currentEnd = i;
       if (stripped.endsWith('$$') || stripped === '$$') {
         inMath = false;
       }
@@ -3654,45 +3674,41 @@ function splitParagraphsWithDelims(text) {
       continue;
     }
 
-    if (stripped === '') {
-      if (currentLines.length > 0) {
-        paragraphs.push(currentLines.join('\n'));
-        currentLines = [];
-        var sepCount = 1;
-        while (i + 1 < numLines && lines[i + 1].trim() === '') {
-          sepCount++;
+    if (!stripped) {
+      if (currentStart !== null && currentEnd !== null) {
+        const paragraphStart = lines[currentStart].start;
+        const paragraphEnd = lines[currentEnd].contentEnd;
+        paragraphs.push(textNorm.slice(paragraphStart, paragraphEnd));
+        i++;
+        while (i < lines.length && !lines[i].content.trim()) {
           i++;
         }
-        if (i === numLines - 1) {
-          delimiters.push('\n'.repeat(sepCount));
-        } else {
-          delimiters.push('\n'.repeat(sepCount + 1));
-        }
+        const delimiterEnd = i < lines.length ? lines[i].start : textNorm.length;
+        delimiters.push(textNorm.slice(paragraphEnd, delimiterEnd));
+        currentStart = null;
+        currentEnd = null;
+        continue;
       }
     } else {
-      currentLines.push(line);
+      if (currentStart === null) currentStart = i;
+      currentEnd = i;
     }
 
     i++;
   }
 
-  if (currentLines.length > 0) {
-    paragraphs.push(currentLines.join('\n'));
-    if (textNorm.endsWith('\n')) {
-      delimiters.push('\n');
-    } else {
-      delimiters.push('');
-    }
+  if (currentStart !== null && currentEnd !== null) {
+    const paragraphStart = lines[currentStart].start;
+    const paragraphEnd = lines[currentEnd].contentEnd;
+    paragraphs.push(textNorm.slice(paragraphStart, paragraphEnd));
+    delimiters.push(textNorm.slice(paragraphEnd));
   }
 
-  while (delimiters.length < paragraphs.length) {
-    delimiters.push('\n\n');
-  }
+  return { prefix, paragraphs, delimiters };
+}
 
-  if (paragraphs.length === 0 && textNorm) {
-    return { paragraphs: [''], delimiters: [textNorm] };
-  }
-
+function splitParagraphsWithDelims(text) {
+  const { paragraphs, delimiters } = parseDocument(text);
   return { paragraphs, delimiters };
 }
 
@@ -3703,7 +3719,9 @@ function splitParagraphs(text) {
 // 客户端本地验证 diff 是否能准确还原目标文本
 function applyChangesLocally(text, changes) {
   if (!changes || changes.length === 0) return text;
-  const { paragraphs, delimiters } = splitParagraphsWithDelims(text);
+  const document = parseDocument(text);
+  let prefix = document.prefix;
+  const { paragraphs, delimiters } = document;
 
   const missingDelimiter = Symbol('missing delimiter');
   const replaces = {};
@@ -3717,7 +3735,8 @@ function applyChangesLocally(text, changes) {
     const delimiter = Object.prototype.hasOwnProperty.call(ch, 'delimiter')
       ? ch.delimiter
       : missingDelimiter;
-    if (t === 'replace') replaces[idx] = { content: ch.content || '', delimiter };
+    if (t === 'prefix') prefix = ch.content || '';
+    else if (t === 'replace') replaces[idx] = { content: ch.content || '', delimiter };
     else if (t === 'delete') deletes.add(idx);
     else if (t === 'delimiter') delimiterChanges[idx] = ch.delimiter || '';
     else if (t === 'insert') {
@@ -3728,6 +3747,7 @@ function applyChangesLocally(text, changes) {
 
   const resultParas = [];
   const resultDelims = [];
+  const resultDelimsExplicit = [];
   const n = paragraphs.length;
 
   for (let i = 0; i < n; i++) {
@@ -3735,6 +3755,7 @@ function applyChangesLocally(text, changes) {
       for (const insert of insertsByIdx[i]) {
         resultParas.push(insert.content);
         resultDelims.push(insert.delimiter === missingDelimiter ? '\n\n' : insert.delimiter);
+        resultDelimsExplicit.push(insert.delimiter !== missingDelimiter);
       }
     }
     if (deletes.has(i)) continue;
@@ -3747,12 +3768,16 @@ function applyChangesLocally(text, changes) {
     }
     if (delimiterChanges[i] !== undefined) {
       resultDelims.push(delimiterChanges[i]);
+      resultDelimsExplicit.push(true);
     } else if (delimiter !== missingDelimiter) {
       resultDelims.push(delimiter);
+      resultDelimsExplicit.push(true);
     } else if (i < delimiters.length) {
       resultDelims.push(delimiters[i]);
+      resultDelimsExplicit.push(false);
     } else {
       resultDelims.push('\n\n');
+      resultDelimsExplicit.push(false);
     }
   }
 
@@ -3763,6 +3788,7 @@ function applyChangesLocally(text, changes) {
   if (
     trailingIndices.length > 0 &&
     resultDelims.length > 0 &&
+    !resultDelimsExplicit[resultDelimsExplicit.length - 1] &&
     (resultDelims[resultDelims.length - 1] === '' || resultDelims[resultDelims.length - 1] === '\n')
   ) {
     resultDelims[resultDelims.length - 1] = '\n\n';
@@ -3773,6 +3799,7 @@ function applyChangesLocally(text, changes) {
     for (const insert of insertsByIdx[idx]) {
       resultParas.push(insert.content);
       resultDelims.push(insert.delimiter === missingDelimiter ? '\n\n' : insert.delimiter);
+      resultDelimsExplicit.push(insert.delimiter !== missingDelimiter);
       lastTrailingDelimiter = insert.delimiter;
     }
   }
@@ -3786,7 +3813,7 @@ function applyChangesLocally(text, changes) {
     resultDelims[resultDelims.length - 1] = '';
   }
 
-  const resultParts = [];
+  const resultParts = [prefix];
   for (let i = 0; i < resultParas.length; i++) {
     resultParts.push(resultParas[i]);
     if (i < resultDelims.length) {
@@ -3801,10 +3828,15 @@ function applyChangesLocally(text, changes) {
 function computeParagraphDiff(oldText, newText) {
   if (oldText === newText) return [];
 
-  const oldParts = splitParagraphsWithDelims(oldText);
-  const newParts = splitParagraphsWithDelims(newText);
+  const oldParts = parseDocument(oldText);
+  const newParts = parseDocument(newText);
   const oldParas = oldParts.paragraphs;
   const newParas = newParts.paragraphs;
+  const changes = [];
+
+  if (oldParts.prefix !== newParts.prefix) {
+    changes.push({ type: 'prefix', content: newParts.prefix });
+  }
 
   if (
     oldParas.length === newParas.length &&
@@ -3813,7 +3845,7 @@ function computeParagraphDiff(oldText, newText) {
         paragraph === newParas[idx] && oldParts.delimiters[idx] === newParts.delimiters[idx],
     )
   ) {
-    return [];
+    return changes;
   }
 
   const m = oldParas.length;
@@ -3835,7 +3867,6 @@ function computeParagraphDiff(oldText, newText) {
     suffix++;
   }
 
-  const changes = [];
   const addDelimiterChange = (oldIdx, newIdx) => {
     if (oldParts.delimiters[oldIdx] !== newParts.delimiters[newIdx]) {
       changes.push({
@@ -3964,8 +3995,20 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
       if (change === null || typeof change !== 'object' || Array.isArray(change)) {
         throw new TypeError(`each ${changesName} entry must be an object`);
       }
-      if (!['insert', 'delete', 'replace', 'delimiter'].includes(change.type)) {
+      if (!['insert', 'delete', 'replace', 'delimiter', 'prefix'].includes(change.type)) {
         throw new TypeError(`invalid change type: ${change.type}`);
+      }
+      if (change.type === 'prefix') {
+        if (Object.prototype.hasOwnProperty.call(change, 'paraIdx')) {
+          throw new TypeError('prefix changes must not include paraIdx');
+        }
+        if (Object.prototype.hasOwnProperty.call(change, 'delimiter')) {
+          throw new TypeError('prefix changes must not include delimiter');
+        }
+        if (typeof change.content !== 'string') {
+          throw new TypeError('prefix content must be a string');
+        }
+        continue;
       }
       if (typeof change.paraIdx !== 'number' || !Number.isInteger(change.paraIdx)) {
         throw new TypeError('paraIdx must be an integer');
@@ -4029,6 +4072,10 @@ function transformParagraphChanges(incoming, accumulated, baseCount = 1000) {
   const transformed = [];
   for (const change of incoming) {
     const type = change.type;
+    if (type === 'prefix') {
+      transformed.push({ ...change });
+      continue;
+    }
     const idx = change.paraIdx;
     const targetIdx = mapPosition(idx);
     if (type === 'insert') {
@@ -4073,6 +4120,7 @@ function rebaseContent(baseContent, localContent, remoteContent) {
 }
 
 window.nasmdDiff = {
+  parseDocument,
   splitParagraphs,
   splitParagraphsWithDelims,
   applyChangesLocally,

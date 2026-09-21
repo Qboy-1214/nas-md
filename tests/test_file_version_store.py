@@ -678,10 +678,27 @@ def test_stale_exact_delimiter_edit_three_way_merges(store, test_file):
             "A\n\nB-remote\n\nC",
             "A\n\nB-remote",
         ),
+        (
+            "A",
+            "\nA",
+            "A-remote",
+            "\nA-remote",
+        ),
+        (
+            "A\n\nB",
+            "A\n \nB",
+            "A-remote\n\nB",
+            "A-remote\n \nB",
+        ),
     ],
-    ids=["delimiter-edit-with-remote-text-edit", "final-delete-with-remote-preceding-edit"],
+    ids=[
+        "delimiter-edit-with-remote-text-edit",
+        "final-delete-with-remote-preceding-edit",
+        "prefix-edit-with-remote-text-edit",
+        "whitespace-separator-edit-with-remote-text-edit",
+    ],
 )
-def test_stale_delimiter_only_edits_preserve_remote_text(
+def test_stale_formatting_only_edits_preserve_remote_text(
     store, test_file, base, local_content, remote_content, expected
 ):
     key = "mount-0:/test.md"

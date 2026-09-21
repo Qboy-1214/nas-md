@@ -2,42 +2,85 @@
   {
     "name": "blank-only-single-newline",
     "text": "\n",
-    "paragraphs": [""],
-    "delimiters": ["\n"]
+    "prefix": "\n",
+    "paragraphs": [],
+    "delimiters": []
   },
   {
     "name": "blank-only-multiple-newlines",
     "text": "\n\n",
-    "paragraphs": [""],
-    "delimiters": ["\n\n"]
+    "prefix": "\n\n",
+    "paragraphs": [],
+    "delimiters": []
+  },
+  {
+    "name": "blank-only-whitespace-line",
+    "text": " \n",
+    "prefix": " \n",
+    "paragraphs": [],
+    "delimiters": []
+  },
+  {
+    "name": "leading-blank-line",
+    "text": "\nA",
+    "prefix": "\n",
+    "paragraphs": ["A"],
+    "delimiters": [""]
+  },
+  {
+    "name": "leading-whitespace-line",
+    "text": " \nA",
+    "prefix": " \n",
+    "paragraphs": ["A"],
+    "delimiters": [""]
+  },
+  {
+    "name": "embedded-and-trailing-whitespace-lines",
+    "text": " \nA\n \nB\n\t\n",
+    "prefix": " \n",
+    "paragraphs": ["A", "B"],
+    "delimiters": ["\n \n", "\n\t\n"]
+  },
+  {
+    "name": "leading-whitespace-keeps-frontmatter-rule",
+    "text": " \n---\nx: y\n---\nA",
+    "prefix": " \n",
+    "paragraphs": ["---\nx: y\n---\nA"],
+    "delimiters": [""]
   },
   {
     "name": "frontmatter-without-blank-line",
     "text": "---\ntitle: Doc\n---\nBody",
+    "prefix": "",
     "paragraphs": ["---\ntitle: Doc\n---", "Body"],
     "delimiters": ["\n", ""]
   },
   {
     "name": "frontmatter-dot-close-with-blank-line",
     "text": "---\ntitle: Doc\n...\n\nBody",
+    "prefix": "",
     "paragraphs": ["---\ntitle: Doc\n...", "Body"],
     "delimiters": ["\n\n", ""]
   },
   {
     "name": "frontmatter-only",
     "text": "---\ntitle: Doc\n---",
+    "prefix": "",
     "paragraphs": ["---\ntitle: Doc\n---"],
     "delimiters": [""]
   },
   {
     "name": "frontmatter-only-with-trailing-newline",
     "text": "---\ntitle: Doc\n---\n",
+    "prefix": "",
     "paragraphs": ["---\ntitle: Doc\n---"],
     "delimiters": ["\n"]
   },
   {
     "name": "fence-and-math-blank-lines",
     "text": "```js\na();\n\nb();\n```\n\n$$\na\n\nb\n$$",
-    "paragraphs": ["```js\na();\n\nb();\n```", "$$\na\n\nb\n$$"]
+    "prefix": "",
+    "paragraphs": ["```js\na();\n\nb();\n```", "$$\na\n\nb\n$$"],
+    "delimiters": ["\n\n", ""]
   }
 ]
