@@ -35,7 +35,9 @@ class _ExpectedWriteToken:
     """Opaque identity for one expected watcher event."""
 
     key: str
-    content: str
+    fingerprint: _FileFingerprint
+    digest: bytes
+    expires_at: float
 
 
 @dataclass(frozen=True)
@@ -148,9 +150,15 @@ class FileWatcher:
         self,
         *,
         monotonic: Callable[[], float] | None = None,
+        expected_ttl: float = 30.0,
+        expected_limit: int = 1024,
         recent_expected_ttl: float = 2.0,
         recent_expected_limit: int = 1024,
     ):
+        if expected_ttl < 0:
+            raise ValueError("expected_ttl must be non-negative")
+        if expected_limit < 1:
+            raise ValueError("expected_limit must be positive")
         if recent_expected_ttl < 0:
             raise ValueError("recent_expected_ttl must be non-negative")
         if recent_expected_limit < 1:
@@ -158,8 +166,11 @@ class FileWatcher:
         self._observers: dict = {}
         self._handlers: dict = {}
         self._expected: dict[str, deque[_ExpectedWriteToken]] = {}
+        self._expected_order: OrderedDict[_ExpectedWriteToken, None] = OrderedDict()
         self._recent_expected: OrderedDict[str, _RecentExpectedWrite] = OrderedDict()
         self._monotonic = monotonic or time.monotonic
+        self._expected_ttl = expected_ttl
+        self._expected_limit = expected_limit
         self._recent_expected_ttl = recent_expected_ttl
         self._recent_expected_limit = recent_expected_limit
         self._expected_lock = threading.Lock()
@@ -207,7 +218,8 @@ class FileWatcher:
         key_prefix = f"{mount_id}:"
         with self._expected_lock:
             for key in [key for key in self._expected if key.startswith(key_prefix)]:
-                self._expected.pop(key, None)
+                for token in self._expected.pop(key):
+                    self._expected_order.pop(token, None)
             for key in [key for key in self._recent_expected if key.startswith(key_prefix)]:
                 self._recent_expected.pop(key, None)
 
@@ -217,15 +229,31 @@ class FileWatcher:
             ids = list(self._observers.keys())
         for mid in ids:
             self.stop_mount(mid)
+        with self._expected_lock:
+            self._expected.clear()
+            self._expected_order.clear()
+            self._recent_expected.clear()
 
-    def mark_expected(self, mount_id: str, rel_path: str, content: str) -> _ExpectedWriteToken:
+    def mark_expected(self, mount_id: str, rel_path: str, abs_path: str) -> _ExpectedWriteToken:
         """Mark an upcoming server write so watchdog doesn't flag it as external."""
         key = f"{mount_id}:{rel_path}"
-        token = _ExpectedWriteToken(key=key, content=content)
+        _content, fingerprint, digest = self._read_state(abs_path)
+        now = self._monotonic()
+        token = _ExpectedWriteToken(
+            key=key,
+            fingerprint=fingerprint,
+            digest=digest,
+            expires_at=now + self._expected_ttl,
+        )
         with self._expected_lock:
+            self._prune_expected(now)
             if key not in self._expected:
-                self._expected[key] = deque(maxlen=10)
+                self._expected[key] = deque()
             self._expected[key].append(token)
+            self._expected_order[token] = None
+            while len(self._expected_order) > self._expected_limit:
+                oldest = next(iter(self._expected_order))
+                self._discard_expected(oldest)
         return token
 
     def unmark_expected(self, token: _ExpectedWriteToken) -> bool:
@@ -233,16 +261,7 @@ class FileWatcher:
         if not isinstance(token, _ExpectedWriteToken):
             return False
         with self._expected_lock:
-            q = self._expected.get(token.key)
-            if not q:
-                return False
-            for index, item in enumerate(q):
-                if item is token:
-                    del q[index]
-                    if not q:
-                        self._expected.pop(token.key, None)
-                    return True
-            return False
+            return self._discard_expected(token)
 
     def is_expected(self, mount_id: str, rel_path: str, abs_path: str) -> bool:
         """Check if the file content matches any expected (server's own) write.
@@ -250,26 +269,34 @@ class FileWatcher:
         Pops the matching mark from FIFO queue. Returns True if content matches.
         """
         key = f"{mount_id}:{rel_path}"
+        now = self._monotonic()
         with self._expected_lock:
+            self._prune_expected(now)
             q = self._expected.get(key)
             if not q:
                 return False
 
         try:
-            actual, fingerprint, digest = self._read_state(abs_path)
+            _actual, fingerprint, digest = self._read_state(abs_path)
         except OSError:
             return False
 
         with self._expected_lock:
+            self._prune_expected(self._monotonic())
             q = self._expected.get(key)
             if not q:
                 return False
 
-            if any(mark.content == actual for mark in q):
+            matching = next(
+                (mark for mark in q if mark.fingerprint == fingerprint and mark.digest == digest),
+                None,
+            )
+            if matching is not None:
                 # Remove up to and including the matched item
                 while q:
                     mark = q.popleft()
-                    if mark.content == actual:
+                    self._expected_order.pop(mark, None)
+                    if mark is matching:
                         break
                 if not q:
                     self._expected.pop(key, None)
@@ -284,24 +311,24 @@ class FileWatcher:
                 while len(self._recent_expected) > self._recent_expected_limit:
                     self._recent_expected.popitem(last=False)
                 return True
-            else:
-                # Top item did not match; pop one to avoid stale queue buildup
-                q.popleft()
-                if not q:
-                    self._expected.pop(key, None)
-                return False
+            return False
 
     def is_duplicate_expected_event(self, mount_id: str, rel_path: str, abs_path: str) -> bool:
         """Return True while an event still describes the last expected write."""
         key = f"{mount_id}:{rel_path}"
+        now = self._monotonic()
+        with self._expected_lock:
+            self._prune_recent_expected(now)
+            if key not in self._recent_expected:
+                return False
+
         try:
             _content, fingerprint, digest = self._read_state(abs_path)
         except OSError:
             return False
 
-        now = self._monotonic()
         with self._expected_lock:
-            self._prune_recent_expected(now)
+            self._prune_recent_expected(self._monotonic())
             expected = self._recent_expected.get(key)
             if (
                 expected is not None
@@ -314,10 +341,25 @@ class FileWatcher:
                 self._recent_expected.pop(key, None)
             return False
 
+    def _discard_expected(self, token: _ExpectedWriteToken) -> bool:
+        q = self._expected.get(token.key)
+        if not q:
+            return False
+        for index, item in enumerate(q):
+            if item is token:
+                del q[index]
+                self._expected_order.pop(token, None)
+                if not q:
+                    self._expected.pop(token.key, None)
+                return True
+        return False
+
+    def _prune_expected(self, now: float) -> None:
+        for token in [token for token in self._expected_order if token.expires_at <= now]:
+            self._discard_expected(token)
+
     def _prune_recent_expected(self, now: float) -> None:
-        for key in [
-            key for key, item in self._recent_expected.items() if item.expires_at <= now
-        ]:
+        for key in [key for key, item in self._recent_expected.items() if item.expires_at <= now]:
             self._recent_expected.pop(key, None)
 
     @staticmethod

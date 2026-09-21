@@ -163,14 +163,14 @@ def test_replace_failure_cleans_temp_rolls_back_watcher_and_preserves_state(
     original_replace = os.replace
     normalized_target = os.path.normcase(os.path.abspath(test_file))
 
-    def fail_target_replace(src, dst, _target_existed):
+    def fail_target_replace(src, dst):
         if os.path.normcase(os.path.abspath(dst)) == normalized_target:
             replace_sources.append(os.fspath(src))
             raise OSError(f"replace failed for {test_file}")
         return original_replace(src, dst)
 
-    def mark_expected(content):
-        token = watcher.mark_expected("mount-0", "/test.md", content)
+    def mark_expected(prepared_path):
+        token = watcher.mark_expected("mount-0", "/test.md", prepared_path)
         tokens.append(token)
         return lambda: watcher.unmark_expected(token)
 
@@ -205,7 +205,7 @@ def test_successful_write_marks_immediately_before_atomic_replace(store, test_fi
     original_replace = os.replace
     normalized_target = os.path.normcase(os.path.abspath(test_file))
 
-    def observe_replace(src, dst, _target_existed):
+    def observe_replace(src, dst):
         if os.path.normcase(os.path.abspath(dst)) == normalized_target:
             with open(dst, encoding="utf-8") as f:
                 events.append(("before", f.read()))
@@ -215,8 +215,8 @@ def test_successful_write_marks_immediately_before_atomic_replace(store, test_fi
             return None
         return original_replace(src, dst)
 
-    def mark_expected(content):
-        events.append(("marked", content))
+    def mark_expected(prepared_path):
+        events.append(("marked", Path(prepared_path).read_text(encoding="utf-8")))
 
     monkeypatch.setattr(
         file_version_store_module, "_replace_target", observe_replace, raising=False
@@ -237,6 +237,39 @@ def test_successful_write_marks_immediately_before_atomic_replace(store, test_fi
     assert events == [("marked", target), ("before", original), ("after", target)]
     with open(test_file, encoding="utf-8") as f:
         assert f.read() == target
+
+
+def test_successful_write_marks_expected_from_prepared_temp_identity(store, test_file):
+    from nas_md.webserver.file_watcher import FileWatcher
+
+    file_key = "mount-0:/test.md"
+    original = "para one\n\npara two\n\npara three"
+    target = "CHANGED\n\npara two\n\npara three"
+    store.init_file(file_key, test_file, original)
+    watcher = FileWatcher()
+    tokens = []
+
+    def mark_prepared(prepared_path):
+        assert Path(prepared_path).read_text(encoding="utf-8") == target
+        token = watcher.mark_expected("mount-0", "/test.md", prepared_path)
+        tokens.append(token)
+        return lambda: watcher.unmark_expected(token)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=test_file,
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 0, "content": "CHANGED"}],
+        author_id="user1",
+        author_name="Tester",
+        author_color="#fff",
+        before_write=mark_prepared,
+    )
+
+    assert result["applied"] is True
+    assert len(tokens) == 1
+    _content, fingerprint, digest = watcher._read_state(test_file)
+    assert (tokens[0].fingerprint, tokens[0].digest) == (fingerprint, digest)
 
 
 def test_directory_sync_failure_after_replace_does_not_report_save_failure(
@@ -276,7 +309,7 @@ def test_directory_sync_happens_after_target_replace(store, test_file, monkeypat
     events = []
     original_replace = os.replace
 
-    def observe_replace(src, dst, _target_existed):
+    def observe_replace(src, dst):
         if os.path.abspath(dst) == os.path.abspath(test_file):
             events.append("replace")
         return original_replace(src, dst)
@@ -344,7 +377,7 @@ def test_existing_file_metadata_is_applied_before_replace(store, test_file, monk
             events.append(("file-fsync",))
         return original_fsync(fd)
 
-    def observe_replace(src, dst, _target_existed):
+    def observe_replace(src, dst):
         if os.path.abspath(dst) == os.path.abspath(test_file):
             events.append(("replace",))
             target_replaced[0] = True
@@ -363,7 +396,7 @@ def test_existing_file_metadata_is_applied_before_replace(store, test_file, monk
         author_id="user1",
         author_name="Tester",
         author_color="#fff",
-        before_write=lambda _content: events.append(("mark",)),
+        before_write=lambda _prepared_path: events.append(("mark",)),
     )
 
     assert result["applied"] is True
@@ -691,7 +724,7 @@ def test_windows_new_file_still_uses_os_replace(store, tmp_path, monkeypatch):
     calls = []
     original_replace = os.replace
 
-    def observe_replace(src, dst, _target_existed):
+    def observe_replace(src, dst):
         if os.path.abspath(dst) == os.path.abspath(file_path):
             calls.append((src, dst))
         return original_replace(src, dst)
@@ -753,7 +786,7 @@ def test_atomic_write_uses_fixed_short_temp_name(store, tmp_path, monkeypatch):
     original_replace = os.replace
     temp_names = []
 
-    def observe_replace(src, dst, _target_existed):
+    def observe_replace(src, dst):
         if os.path.abspath(dst) == os.path.abspath(file_path):
             temp_names.append(os.path.basename(src))
         return original_replace(src, dst)
@@ -838,7 +871,7 @@ def test_new_atomic_file_uses_normal_create_mode_under_umask(store, tmp_path):
     store.init_file(file_key, str(file_path), "")
     content_temp_modes = []
 
-    def observe_before_replace(_content):
+    def observe_before_replace(_prepared_path):
         content_temps = [
             path for path in tmp_path.glob(".nasmd-*") if not path.name.startswith(".nasmd-perm-")
         ]
@@ -1592,7 +1625,10 @@ def test_current_version_save_writes_exact_target_content(store, test_file):
     with open(test_file, "w", encoding="utf-8") as f:
         f.write(base)
     store.init_file(key, test_file, base)
-    before_write = Mock()
+    prepared_contents = []
+
+    def before_write(prepared_path):
+        prepared_contents.append(Path(prepared_path).read_text(encoding="utf-8"))
 
     result = store.apply_changes(
         key,
@@ -1613,7 +1649,7 @@ def test_current_version_save_writes_exact_target_content(store, test_file):
     assert store.get_current_content(key) == target
     with open(test_file, "rb") as f:
         assert f.read() == target.replace("\n", os.linesep).encode("utf-8")
-    before_write.assert_called_once_with(target)
+    assert prepared_contents == [target]
 
 
 @pytest.mark.parametrize(
@@ -1682,7 +1718,10 @@ def test_legacy_stale_text_edit_preserves_remote_tab_delimiter(store, test_file)
         base_content=base,
     )
     assert remote["applied"] is True
-    before_write = Mock()
+    prepared_contents = []
+
+    def before_write(prepared_path):
+        prepared_contents.append(Path(prepared_path).read_text(encoding="utf-8"))
 
     result = store.apply_changes(
         key,
@@ -1709,7 +1748,7 @@ def test_legacy_stale_text_edit_preserves_remote_tab_delimiter(store, test_file)
         }
     ]
     assert version_history.get_version_content(key, 0) == expected
-    before_write.assert_called_once_with(expected)
+    assert prepared_contents == [expected]
     with open(test_file, "rb") as f:
         assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
 

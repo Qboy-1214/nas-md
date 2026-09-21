@@ -145,7 +145,7 @@ def _copy_atomic_temp_windows(source_path: str, directory: str) -> tuple[int, st
     raise FileExistsError("unable to allocate atomic write temporary file")
 
 
-def _replace_target(temp_path: str, target_path: str, target_existed: bool) -> None:
+def _replace_target(temp_path: str, target_path: str) -> None:
     """Atomically move the fully prepared temporary file into place."""
     os.replace(temp_path, target_path)
 
@@ -211,9 +211,9 @@ def _write_text_atomically(
             _apply_xattrs(f.fileno(), xattrs)
             os.fsync(f.fileno())
         if before_replace is not None:
-            rollback_expected = before_replace(content)
+            rollback_expected = before_replace(temp_path)
         try:
-            _replace_target(temp_path, target_path, existing_stat is not None)
+            _replace_target(temp_path, target_path)
         except BaseException:
             if rollback_expected is not None:
                 try:
@@ -248,6 +248,7 @@ class _FileVersion:
 
     version: int = 0
     content: str = ""
+    persisted: bool = False
     # changes_by_version: version -> list of changes that produced this version
     # retained as a bounded record; stale merging uses submitted base content
     changes_by_version: dict = field(default_factory=dict)
@@ -262,15 +263,28 @@ class FileVersionStore:
         self._files: dict[str, _FileVersion] = {}
         self._storage_dir = storage_dir
 
-    def init_file(self, file_key: str, file_path: str, content: str) -> int:
+    def init_file(
+        self,
+        file_key: str,
+        file_path: str,
+        content: str,
+        *,
+        persisted: bool | None = None,
+    ) -> int:
         """Initialize a file in the store if not already present.
 
         Returns the current version number.
         """
+        if persisted is None:
+            persisted = os.path.isfile(file_path)
+
         with self._lock:
             fv = self._files.get(file_key)
         if fv is not None:
             with fv.lock:
+                if persisted and not fv.persisted:
+                    fv.content = content
+                    fv.persisted = True
                 return fv.version
 
         # Check if there is existing persisted history to maintain version monotonicity
@@ -284,11 +298,30 @@ class FileVersionStore:
         except Exception:
             base_version = 0
 
-        candidate = _FileVersion(version=base_version, content=content, changes_by_version={})
+        candidate = _FileVersion(
+            version=base_version,
+            content=content,
+            persisted=persisted,
+            changes_by_version={},
+        )
         with self._lock:
             fv = self._files.setdefault(file_key, candidate)
         with fv.lock:
+            if persisted and not fv.persisted:
+                fv.content = content
+                fv.persisted = True
             return fv.version
+
+    @staticmethod
+    def _refresh_unpersisted(fv: _FileVersion, file_path: str) -> None:
+        if fv.persisted:
+            return
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                fv.content = f.read()
+        except OSError:
+            return
+        fv.persisted = True
 
     def _get_or_load_file(self, file_key: str, file_path: str) -> _FileVersion:
         with self._lock:
@@ -296,12 +329,19 @@ class FileVersionStore:
         if fv is not None:
             return fv
 
+        persisted = False
         try:
             with open(file_path, encoding="utf-8") as f:
                 disk_content = f.read()
+            persisted = True
         except OSError:
             disk_content = ""
-        candidate = _FileVersion(version=0, content=disk_content, changes_by_version={})
+        candidate = _FileVersion(
+            version=0,
+            content=disk_content,
+            persisted=persisted,
+            changes_by_version={},
+        )
         with self._lock:
             return self._files.setdefault(file_key, candidate)
 
@@ -332,6 +372,7 @@ class FileVersionStore:
         """
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
+            self._refresh_unpersisted(fv, file_path)
             if base_version < 0 or base_version > fv.version:
                 return self._resync_result(fv)
 
@@ -414,6 +455,7 @@ class FileVersionStore:
 
             # Update in-memory state
             previous_content = fv.content
+            fv.persisted = True
             fv.version += 1
             fv.content = new_content
             fv.changes_by_version[fv.version] = list(changes_to_apply)
@@ -475,6 +517,7 @@ class FileVersionStore:
                     "content": fv.content,
                 }
 
+            fv.persisted = True
             if new_content == fv.content:
                 # No actual change
                 return {

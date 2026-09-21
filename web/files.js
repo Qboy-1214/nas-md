@@ -130,7 +130,18 @@ const API = {
       });
       console.log('[putFile] response status:', r ? r.status : 'null');
       if (!r) return null;
-      const response = await r.json().catch(() => null);
+      let response;
+      try {
+        response = await r.json();
+      } catch {
+        if (r.ok) {
+          const error = new Error('Invalid response from server');
+          error.code = 'invalid_response';
+          error.status = r.status;
+          throw error;
+        }
+        response = null;
+      }
       if (!r.ok) {
         const message =
           response && typeof response.message === 'string'
@@ -141,6 +152,12 @@ const API = {
           response && typeof response.errorCode === 'string'
             ? response.errorCode
             : 'request_failed';
+        error.status = r.status;
+        throw error;
+      }
+      if (!response || typeof response !== 'object') {
+        const error = new Error('Invalid response from server');
+        error.code = 'invalid_response';
         error.status = r.status;
         throw error;
       }

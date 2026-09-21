@@ -1488,15 +1488,17 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         file_key = f"{mount_id}:{rel_path}"
 
         old_content = ""
+        content_loaded = False
         file_existed = os.path.isfile(abs_path)
         if file_existed:
             try:
                 with open(abs_path, encoding="utf-8", errors="replace") as f:
                     old_content = f.read()
+                content_loaded = True
             except OSError:
                 pass
 
-        store.init_file(file_key, abs_path, old_content)
+        store.init_file(file_key, abs_path, old_content, persisted=content_loaded)
 
         try:
             changes = compute_diff(old_content, new_text) if old_content != new_text else []
@@ -1516,12 +1518,12 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         author_name = self.headers.get("X-Client-Name", "Anonymous")
         author_color = self.headers.get("X-Client-Color", "#3498db")
 
-        def mark_expected(content: str):
+        def mark_expected(prepared_path: str):
             try:
                 from nas_md.webserver.file_watcher import get_watcher
 
                 watcher = get_watcher()
-                token = watcher.mark_expected(mount_id, rel_path, content)
+                token = watcher.mark_expected(mount_id, rel_path, prepared_path)
             except Exception:
                 return None  # watcher optional
 
@@ -1545,6 +1547,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     "message": "Unable to save file",
                 }
             else:
+                store.init_file(file_key, abs_path, new_text, persisted=True)
                 result = {
                     "applied": False,
                     "merged": False,
@@ -1765,16 +1768,18 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         try:
             with open(abs_path, encoding="utf-8") as f:
                 current_content = f.read()
+            content_loaded = True
         except OSError:
             current_content = ""
-        store.init_file(file_key, abs_path, current_content)
+            content_loaded = False
+        store.init_file(file_key, abs_path, current_content, persisted=content_loaded)
 
-        def mark_expected(content: str):
+        def mark_expected(prepared_path: str):
             try:
                 from nas_md.webserver.file_watcher import get_watcher
 
                 watcher = get_watcher()
-                token = watcher.mark_expected(mount_id, rel_path, content)
+                token = watcher.mark_expected(mount_id, rel_path, prepared_path)
             except Exception:
                 return None  # watcher optional
 

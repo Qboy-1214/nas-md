@@ -36,3 +36,43 @@ test('putFile rejects a stable non-2xx write error', async () => {
     return true;
   });
 });
+
+test('putFile rejects a successful response whose JSON cannot be parsed', async () => {
+  const context = loadApi();
+  vm.runInContext(
+    `API.request = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+    })`,
+    context,
+  );
+  const putFile = vm.runInContext('API.putFile.bind(API)', context);
+
+  await assert.rejects(putFile('mount-0', '/invalid.md', 'content'), (error) => {
+    assert.equal(error.code, 'invalid_response');
+    assert.equal(error.status, 200);
+    assert.equal(error.message, 'Invalid response from server');
+    return true;
+  });
+});
+
+test('putFile rejects a successful response with an empty JSON body', async () => {
+  const context = loadApi();
+  vm.runInContext(
+    `API.request = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => null,
+    })`,
+    context,
+  );
+  const putFile = vm.runInContext('API.putFile.bind(API)', context);
+
+  await assert.rejects(putFile('mount-0', '/empty.md', 'content'), (error) => {
+    assert.equal(error.code, 'invalid_response');
+    assert.equal(error.status, 200);
+    assert.equal(error.message, 'Invalid response from server');
+    return true;
+  });
+});

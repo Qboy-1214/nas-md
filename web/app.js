@@ -1473,7 +1473,7 @@ function setupDragDrop() {
             }
             const writePath = destPath === '/' ? '/' + destName : destPath + '/' + destName;
             const result = await API.putFile(destMountId, writePath, content);
-            if (!result || result.status === 'error') {
+            if (result?.status !== 'ok') {
               showToast(result?.error || '导入失败');
               return;
             }
@@ -4477,7 +4477,10 @@ function confirmNewFile() {
   const fileName = name.endsWith('.md') ? name : name + '.md';
   const path = `/${fileName}`;
   API.putFile(mount.id, path, '')
-    .then(() => {
+    .then((result) => {
+      if (result?.status !== 'ok') {
+        throw new Error('File creation failed');
+      }
       clearTreeCache();
       loadTree(mount.id, '/').then(() => {
         renderSidebar();

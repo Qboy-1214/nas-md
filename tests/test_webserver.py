@@ -485,6 +485,13 @@ class TestWriteFileAPI:
         path = os.path.join(writable_dir, name)
         file_key = f"writable:{rel_path}"
         watcher = Mock()
+        prepared_calls = []
+
+        def mark_expected(mount_id, marked_path, prepared_path):
+            with open(prepared_path, "rb") as f:
+                prepared_calls.append((mount_id, marked_path, f.read()))
+
+        watcher.mark_expected.side_effect = mark_expected
         broadcast = Mock()
         monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
         monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
@@ -501,7 +508,7 @@ class TestWriteFileAPI:
             assert f.read() == b""
         assert get_store().get_current_version(file_key) == 0
         assert file_key not in version_history._histories
-        watcher.mark_expected.assert_called_once_with("writable", rel_path, "")
+        assert prepared_calls == [("writable", rel_path, b"")]
         broadcast.assert_not_called()
 
     def test_missing_empty_markdown_replace_failure_rolls_back_mark_and_returns_stable_500(
@@ -553,6 +560,89 @@ class TestWriteFileAPI:
         assert not os.path.exists(path)
         watcher.unmark_expected.assert_called_once_with(token)
         broadcast.assert_not_called()
+
+    def test_failed_missing_empty_put_refreshes_from_external_file_before_post(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        import nas_md.webserver.file_version_store as file_version_store_module
+
+        name = f"empty-ghost-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        original_replace = os.replace
+        normalized_target = os.path.normcase(os.path.abspath(path))
+        failed = False
+
+        def fail_first_target_replace(src, dst):
+            nonlocal failed
+            if not failed and os.path.normcase(os.path.abspath(dst)) == normalized_target:
+                failed = True
+                raise OSError("initial empty replace failed")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(file_version_store_module, "_replace_target", fail_first_target_replace)
+
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}", data=b""
+        )
+        assert status == 500
+
+        external = "external\n\nbase"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(external)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "changes": [{"type": "replace", "paraIdx": 1, "content": "updated"}],
+            },
+        )
+
+        assert status == 200
+        assert json.loads(body)["content"] == "external\n\nupdated"
+
+    def test_failed_missing_nonempty_put_does_not_become_post_baseline(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        import nas_md.webserver.file_version_store as file_version_store_module
+
+        name = f"nonempty-ghost-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        original_replace = os.replace
+        normalized_target = os.path.normcase(os.path.abspath(path))
+        failed = False
+
+        def fail_first_target_replace(src, dst):
+            nonlocal failed
+            if not failed and os.path.normcase(os.path.abspath(dst)) == normalized_target:
+                failed = True
+                raise OSError("initial nonempty replace failed")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(file_version_store_module, "_replace_target", fail_first_target_replace)
+
+        status, _body = _put(
+            f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
+            data=b"failed\n\ncontent",
+        )
+        assert status == 500
+
+        external = "external\n\nbase"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(external)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "changes": [{"type": "replace", "paraIdx": 1, "content": "updated"}],
+            },
+        )
+
+        assert status == 200
+        assert json.loads(body)["content"] == "external\n\nupdated"
 
     def test_write_file_existing_empty_markdown_remains_side_effect_free(
         self, writable_server_url, writable_dir, monkeypatch
@@ -615,14 +705,21 @@ class TestWriteFileAPI:
         original_replace = os.replace
         normalized_target = os.path.normcase(os.path.abspath(path))
 
-        def fail_target_replace(src, dst, _target_existed):
+        def fail_target_replace(src, dst):
             if os.path.normcase(os.path.abspath(dst)) == normalized_target:
                 raise OSError(f"cannot replace sensitive path {path}")
             return original_replace(src, dst)
 
         watcher = Mock()
         watcher_token = object()
-        watcher.mark_expected.return_value = watcher_token
+        prepared_calls = []
+
+        def mark_expected(mount_id, marked_path, prepared_path):
+            with open(prepared_path, "rb") as f:
+                prepared_calls.append((mount_id, marked_path, f.read()))
+            return watcher_token
+
+        watcher.mark_expected.side_effect = mark_expected
         broadcast = Mock()
         monkeypatch.setattr(
             file_version_store_module, "_replace_target", fail_target_replace, raising=False
@@ -647,7 +744,7 @@ class TestWriteFileAPI:
         assert path not in body
         with open(path, encoding="utf-8") as f:
             assert f.read() == original
-        watcher.mark_expected.assert_called_once_with("writable", rel_path, "after")
+        assert prepared_calls == [("writable", rel_path, b"after")]
         watcher.unmark_expected.assert_called_once_with(watcher_token)
         broadcast.assert_not_called()
 
@@ -983,14 +1080,21 @@ class TestSubmitChangesAPI:
         original_replace = os.replace
         normalized_target = os.path.normcase(os.path.abspath(path))
 
-        def fail_target_replace(src, dst, _target_existed):
+        def fail_target_replace(src, dst):
             if os.path.normcase(os.path.abspath(dst)) == normalized_target:
                 raise OSError(f"cannot replace sensitive path {path}")
             return original_replace(src, dst)
 
         watcher = Mock()
         watcher_token = object()
-        watcher.mark_expected.return_value = watcher_token
+        prepared_calls = []
+
+        def mark_expected(mount_id, marked_path, prepared_path):
+            with open(prepared_path, "rb") as f:
+                prepared_calls.append((mount_id, marked_path, f.read()))
+            return watcher_token
+
+        watcher.mark_expected.side_effect = mark_expected
         broadcast = Mock()
         monkeypatch.setattr(
             file_version_store_module, "_replace_target", fail_target_replace, raising=False
@@ -1020,7 +1124,7 @@ class TestSubmitChangesAPI:
         assert path not in body
         with open(path, encoding="utf-8") as f:
             assert f.read() == original
-        watcher.mark_expected.assert_called_once_with("writable", rel_path, "after")
+        assert prepared_calls == [("writable", rel_path, b"after")]
         watcher.unmark_expected.assert_called_once_with(watcher_token)
         broadcast.assert_not_called()
 
@@ -1103,6 +1207,13 @@ class TestSubmitChangesAPI:
         assert json.loads(body)["applied"] is True
 
         watcher = Mock()
+        prepared_calls = []
+
+        def mark_expected(mount_id, marked_path, prepared_path):
+            with open(prepared_path, "rb") as f:
+                prepared_calls.append((mount_id, marked_path, f.read()))
+
+        watcher.mark_expected.side_effect = mark_expected
         broadcast = Mock()
         monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
         monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
@@ -1133,7 +1244,9 @@ class TestSubmitChangesAPI:
         with open(path, "rb") as f:
             assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
         assert version_history.get_version_content(file_key, 0) == expected
-        watcher.mark_expected.assert_called_once_with("writable", rel_path, expected)
+        assert prepared_calls == [
+            ("writable", rel_path, expected.replace("\n", os.linesep).encode("utf-8"))
+        ]
         broadcast.assert_called_once()
 
     @pytest.mark.parametrize(
