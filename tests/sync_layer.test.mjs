@@ -27,6 +27,7 @@ function loadSyncLayer({
   dirty = false,
   fullResult,
   fullPromise,
+  fullPromises,
   manualTimers = false,
 } = {}) {
   const confirmedContent = baseContent === undefined ? content : baseContent;
@@ -58,6 +59,7 @@ function loadSyncLayer({
     API: {
       getFile(mountId, path) {
         apiCalls.push([mountId, path]);
+        if (fullPromises) return fullPromises.shift();
         if (fullPromise) return fullPromise;
         return Promise.resolve(fullResult || { content: 'full-v3', version: 3, mtime: 0 });
       },
@@ -257,6 +259,146 @@ test('a full-content fetch invalidates an older debounced incremental batch', as
     originalContent: 'full-v4',
   });
   assert.deepEqual(app.consoleErrors, []);
+});
+
+test('an acknowledged snapshot discards its already queued incremental batch', async () => {
+  const app = loadSyncLayer({ version: 1, content: 'A', manualTimers: true });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'insert', paraIdx: 0, content: 'X' }],
+  });
+
+  // A separate server reload acknowledges v2 before its incremental timer fires.
+  app.state.baseVersion = 2;
+  app.state.baseContent = 'X\n\nA';
+  app.state.fileVersions['mount-0:/doc.md'] = 2;
+  app.editor.value = 'X\n\nA';
+  app.context.window._originalContent = 'X\n\nA';
+  app.context.window._lastSavedContent = 'X\n\nA';
+
+  app.runTimers(300);
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'X\n\nA',
+    baseVersion: 2,
+    editor: 'X\n\nA',
+    fileVersion: 2,
+    lastSavedContent: 'X\n\nA',
+    originalContent: 'X\n\nA',
+  });
+  assert.deepEqual(app.consoleErrors, []);
+});
+
+test('an older gap fetch cannot erase a newer queued incremental version', async () => {
+  let resolveOlderFetch;
+  let resolveNewerFetch;
+  const olderFetch = new Promise((resolve) => {
+    resolveOlderFetch = resolve;
+  });
+  const newerFetch = new Promise((resolve) => {
+    resolveNewerFetch = resolve;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'A-v1',
+    fullPromises: [olderFetch, newerFetch],
+    manualTimers: true,
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 4,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v4' }],
+  });
+  assert.deepEqual(app.apiCalls, [
+    ['mount-0', '/doc.md'],
+    ['mount-0', '/doc.md'],
+  ]);
+
+  resolveNewerFetch({ content: 'A-v4', version: 4, mtime: 0 });
+  await flushPromises();
+  assert.equal(app.state.baseVersion, 4);
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 5,
+    changes: [{ type: 'insert', paraIdx: 0, content: 'V5' }],
+  });
+
+  resolveOlderFetch({ content: 'stale-v4', version: 4, mtime: 0 });
+  await flushPromises();
+  app.runTimers(300);
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'V5\n\nA-v4',
+    baseVersion: 5,
+    editor: 'V5\n\nA-v4',
+    fileVersion: 5,
+    lastSavedContent: 'V5\n\nA-v4',
+    originalContent: 'V5\n\nA-v4',
+  });
+  assert.deepEqual(app.consoleErrors, []);
+});
+
+test('a failed newer gap fetch does not invalidate an older sufficient response', async () => {
+  let resolveOlderFetch;
+  let rejectNewerFetch;
+  const olderFetch = new Promise((resolve) => {
+    resolveOlderFetch = resolve;
+  });
+  const newerFetch = new Promise((_resolve, reject) => {
+    rejectNewerFetch = reject;
+  });
+  const app = loadSyncLayer({
+    version: 1,
+    content: 'A-v1',
+    fullPromises: [olderFetch, newerFetch],
+  });
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 3,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v3' }],
+  });
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 4,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'event-v4' }],
+  });
+
+  rejectNewerFetch(new Error('newer fetch failed'));
+  await flushPromises();
+  resolveOlderFetch({ content: 'A-v4', version: 4, mtime: 0 });
+  await flushPromises();
+
+  assert.deepEqual(snapshotClient(app), {
+    baseContent: 'A-v4',
+    baseVersion: 4,
+    editor: 'A-v4',
+    fileVersion: 4,
+    lastSavedContent: 'A-v4',
+    originalContent: 'A-v4',
+  });
+  assert.equal(app.consoleErrors.length, 1);
 });
 
 test('consecutive remote versions apply in their own paragraph coordinates', async () => {

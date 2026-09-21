@@ -18,6 +18,7 @@
   var _applyTimer = null;
   var _pendingBatch = [];
   var _queuedVersions = {};
+  var _fullFetchRequiredVersions = {};
   // Active collaborators (authorId -> {name, color, lastActive})
   var _collaborators = {};
 
@@ -245,10 +246,20 @@
 
     if (window.state) {
       var currentKey = state.currentMountId + ':' + state.currentPath;
+      var acknowledgedVersion = Number(state.baseVersion) || 0;
       var currentBatch = [];
       for (var itemIdx = 0; itemIdx < batch.length; itemIdx++) {
         var item = batch[itemIdx];
         if (!item.versionKey || item.versionKey === currentKey) {
+          var itemVersion = Number(item.version);
+          if (
+            item.versionKey === currentKey &&
+            item.version !== undefined &&
+            Number.isFinite(itemVersion) &&
+            itemVersion <= acknowledgedVersion
+          ) {
+            continue;
+          }
           currentBatch.push(item);
         } else if (state.fileVersions) {
           state.fileVersions[item.versionKey] = Math.max(
@@ -440,16 +451,24 @@
 
   function fetchFullContent(mountId, path, expectedVersion) {
     if (!API || !window._vditor) return;
+    var key = mountId + ':' + path;
+    _fullFetchRequiredVersions[key] = Math.max(
+      Number(_fullFetchRequiredVersions[key]) || 0,
+      Number(expectedVersion) || 0,
+    );
     API.getFile(mountId, path)
       .then(function (result) {
         if (!result || result.content === undefined) return;
 
         var resultVersion = Number(result.version);
+        var requiredVersion = Number(_fullFetchRequiredVersions[key]) || 0;
         var currentVersion = window.state ? Number(state.baseVersion) || 0 : 0;
+        var queuedVersion = Number(_queuedVersions[key]) || 0;
         if (
           !Number.isFinite(resultVersion) ||
-          resultVersion < (Number(expectedVersion) || 0) ||
-          resultVersion < currentVersion
+          resultVersion < requiredVersion ||
+          resultVersion <= currentVersion ||
+          resultVersion < queuedVersion
         ) {
           return;
         }
@@ -463,7 +482,6 @@
           return;
         }
 
-        var key = mountId + ':' + path;
         if (_applyTimer) clearTimeout(_applyTimer);
         _applyTimer = null;
         _pendingBatch = [];
