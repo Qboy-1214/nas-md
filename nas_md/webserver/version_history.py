@@ -137,6 +137,7 @@ class FileHistory:
 
 _lock = threading.Lock()
 _histories: OrderedDict[str, FileHistory] = OrderedDict()
+_history_locations: dict[str, str] = {}
 _history_locks = weakref.WeakValueDictionary()
 
 
@@ -216,13 +217,19 @@ def _load(file_key: str, storage_dir: str | None = None) -> FileHistory | None:
 def _evict_lru_if_needed():
     """Evict least-recently used FileHistory if cache exceeds _MAX_CACHE_FILES."""
     while len(_histories) > _MAX_CACHE_FILES:
-        _histories.popitem(last=False)
+        file_key, _hist = _histories.popitem(last=False)
+        _history_locations.pop(file_key, None)
 
 
-def _cache_history(file_key: str, hist: FileHistory) -> None:
+def _history_location(storage_dir: str | None) -> str:
+    return os.path.normcase(os.path.abspath(storage_dir or _HISTORY_DIR))
+
+
+def _cache_history(file_key: str, hist: FileHistory, storage_dir: str | None = None) -> None:
     """Insert or touch one cache entry while holding the registry lock briefly."""
     with _lock:
         _histories[file_key] = hist
+        _history_locations[file_key] = _history_location(storage_dir)
         _histories.move_to_end(file_key)
         _evict_lru_if_needed()
 
@@ -233,7 +240,7 @@ def _get_or_load_history(
     """Get one history while the caller holds its per-key lock."""
     with _lock:
         hist = _histories.get(file_key)
-        if hist is not None:
+        if hist is not None and _history_locations.get(file_key) == _history_location(storage_dir):
             _histories.move_to_end(file_key)
             return hist
 
@@ -242,7 +249,7 @@ def _get_or_load_history(
         if not create:
             return None
         hist = FileHistory()
-    _cache_history(file_key, hist)
+    _cache_history(file_key, hist, storage_dir)
     return hist
 
 
@@ -290,7 +297,7 @@ def record_version(
             user_agent=user_agent,
         )
         _persist(file_key, hist, storage_dir=storage_dir)
-        _cache_history(file_key, hist)
+        _cache_history(file_key, hist, storage_dir)
         return entry
 
 
@@ -316,23 +323,25 @@ def get_history(file_key: str, limit: int = 20, storage_dir: str | None = None) 
             }
             for v in hist.list(limit)
         ]
-        _cache_history(file_key, hist)
+        _cache_history(file_key, hist, storage_dir)
         return result
 
 
-def get_version_content(file_key: str, index: int) -> str | None:
+def get_version_content(file_key: str, index: int, storage_dir: str | None = None) -> str | None:
     """Get full content of a specific version (0 = newest)."""
     file_lock = _history_lock_for(file_key)
     with file_lock:
-        hist = _get_or_load_history(file_key, None, create=False)
+        hist = _get_or_load_history(file_key, storage_dir, create=False)
         if not hist:
             return None
         v = hist.get(index)
-        _cache_history(file_key, hist)
+        _cache_history(file_key, hist, storage_dir)
         return v.content_snapshot if v else None
 
 
-def get_version_with_previous(file_key: str, index: int) -> dict | None:
+def get_version_with_previous(
+    file_key: str, index: int, storage_dir: str | None = None
+) -> dict | None:
     """Get version content and the previous version's content for diff.
 
     Returns {"content": str, "previousContent": str or None}.
@@ -340,7 +349,7 @@ def get_version_with_previous(file_key: str, index: int) -> dict | None:
     """
     file_lock = _history_lock_for(file_key)
     with file_lock:
-        hist = _get_or_load_history(file_key, None, create=False)
+        hist = _get_or_load_history(file_key, storage_dir, create=False)
         if not hist:
             return None
         v = hist.get(index)
@@ -359,5 +368,5 @@ def get_version_with_previous(file_key: str, index: int) -> dict | None:
             "clientOs": v.client_os,
             "clientBrowser": v.client_browser,
         }
-        _cache_history(file_key, hist)
+        _cache_history(file_key, hist, storage_dir)
         return result

@@ -413,21 +413,14 @@ def writable_dir():
 
 
 @pytest.fixture
-def writable_server_url(web_root, writable_dir):
+def writable_server_url(web_root, writable_dir, tmp_path):
     """Start a test server with a writable mount and a readonly mount."""
-    from nas_md.webserver.file_version_store import get_store
     from nas_md.webserver import version_history
-    import contextlib
-    import glob
+    from nas_md.webserver.file_version_store import _initialize_store
 
-    store = get_store()
-    with store._lock:
-        store._files.clear()
+    _initialize_store(str(tmp_path / ".version_history"))
     with version_history._lock:
         version_history._histories.clear()
-    for f in glob.glob("storage/.version_history/writable__*.json"):
-        with contextlib.suppress(OSError):
-            os.remove(f)
 
     port = _find_free_port()
     mgr = MountManager([])
@@ -482,6 +475,8 @@ def test_watcher_external_creation_increments_once_and_broadcasts(tmp_path, monk
     monkeypatch.setattr("nas_md.webserver.time.sleep", stop_server)
 
     serve([str(mount_dir)], web_root=str(tmp_path), port=0, https_port=0)
+    server.shutdown.assert_called_once_with()
+    server.server_close.assert_called_once_with()
 
     mount_id, _watched_path, on_change = watcher.watch_mount.call_args.args
     file_key = f"{mount_id}:/external.md"
@@ -854,7 +849,7 @@ class TestWriteFileAPI:
             assert f.read() == "C"
         assert get_store().get_current_snapshot(file_key) == {"version": 2, "content": "C"}
 
-    def test_missing_empty_markdown_replace_failure_rolls_back_mark_and_returns_stable_500(
+    def test_missing_empty_markdown_link_failure_rolls_back_mark_and_returns_stable_500(
         self, writable_server_url, writable_dir, monkeypatch
     ):
         from unittest.mock import Mock
@@ -864,14 +859,14 @@ class TestWriteFileAPI:
         name = f"empty-write-failure-{os.path.basename(writable_dir)}.md"
         rel_path = f"/{name}"
         path = os.path.join(writable_dir, name)
-        original_replace = os.replace
+        original_link = os.link
         original_open = open
         normalized_target = os.path.normcase(os.path.abspath(path))
 
-        def fail_target_replace(src, dst):
+        def fail_target_link(src, dst):
             if os.path.normcase(os.path.abspath(dst)) == normalized_target:
-                raise OSError("empty replace failed")
-            return original_replace(src, dst)
+                raise OSError("empty link failed")
+            return original_link(src, dst)
 
         def fail_direct_target_open(file, mode="r", *args, **kwargs):
             if mode == "w" and os.path.normcase(os.path.abspath(file)) == normalized_target:
@@ -883,7 +878,7 @@ class TestWriteFileAPI:
         watcher.mark_expected.return_value = token
         broadcast = Mock()
         monkeypatch.setattr("builtins.open", fail_direct_target_open)
-        monkeypatch.setattr(file_version_store_module.os, "replace", fail_target_replace)
+        monkeypatch.setattr(file_version_store_module, "_link_target", fail_target_link)
         monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
         monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
 
@@ -912,18 +907,18 @@ class TestWriteFileAPI:
         name = f"empty-ghost-{os.path.basename(writable_dir)}.md"
         rel_path = f"/{name}"
         path = os.path.join(writable_dir, name)
-        original_replace = os.replace
+        original_link = os.link
         normalized_target = os.path.normcase(os.path.abspath(path))
         failed = False
 
-        def fail_first_target_replace(src, dst):
+        def fail_first_target_link(src, dst):
             nonlocal failed
             if not failed and os.path.normcase(os.path.abspath(dst)) == normalized_target:
                 failed = True
-                raise OSError("initial empty replace failed")
-            return original_replace(src, dst)
+                raise OSError("initial empty link failed")
+            return original_link(src, dst)
 
-        monkeypatch.setattr(file_version_store_module, "_replace_target", fail_first_target_replace)
+        monkeypatch.setattr(file_version_store_module, "_link_target", fail_first_target_link)
 
         status, _body = _put(
             f"{writable_server_url}/api/mounts/writable/file?path={rel_path}", data=b""
@@ -972,18 +967,18 @@ class TestWriteFileAPI:
         name = f"nonempty-ghost-{os.path.basename(writable_dir)}.md"
         rel_path = f"/{name}"
         path = os.path.join(writable_dir, name)
-        original_replace = os.replace
+        original_link = os.link
         normalized_target = os.path.normcase(os.path.abspath(path))
         failed = False
 
-        def fail_first_target_replace(src, dst):
+        def fail_first_target_link(src, dst):
             nonlocal failed
             if not failed and os.path.normcase(os.path.abspath(dst)) == normalized_target:
                 failed = True
-                raise OSError("initial nonempty replace failed")
-            return original_replace(src, dst)
+                raise OSError("initial nonempty link failed")
+            return original_link(src, dst)
 
-        monkeypatch.setattr(file_version_store_module, "_replace_target", fail_first_target_replace)
+        monkeypatch.setattr(file_version_store_module, "_link_target", fail_first_target_link)
 
         status, _body = _put(
             f"{writable_server_url}/api/mounts/writable/file?path={rel_path}",
@@ -1036,28 +1031,28 @@ class TestWriteFileAPI:
         path = os.path.join(writable_dir, name)
         file_key = f"writable:{rel_path}"
         normalized_target = os.path.normcase(os.path.abspath(path))
-        original_replace = os.replace
+        original_link = os.link
         original_init_file = FileVersionStore.init_file
-        empty_at_replace = threading.Event()
-        release_empty_replace = threading.Event()
+        empty_at_publish = threading.Event()
+        release_empty_publish = threading.Event()
         post_at_init = threading.Event()
         post_finished = threading.Event()
         empty_result = {}
         post_result = {}
         errors = []
-        first_target_replace = True
+        first_target_link = True
 
-        def pause_empty_replace(src, dst):
-            nonlocal first_target_replace
-            if first_target_replace and os.path.normcase(os.path.abspath(dst)) == normalized_target:
-                first_target_replace = False
-                empty_at_replace.set()
-                if not release_empty_replace.wait(timeout=5):
+        def pause_empty_link(src, dst):
+            nonlocal first_target_link
+            if first_target_link and os.path.normcase(os.path.abspath(dst)) == normalized_target:
+                first_target_link = False
+                empty_at_publish.set()
+                if not release_empty_publish.wait(timeout=5):
                     raise TimeoutError("empty PUT was not released")
-            return original_replace(src, dst)
+            return original_link(src, dst)
 
         def observe_init_file(self, *args, **kwargs):
-            if args[0] == file_key and empty_at_replace.is_set():
+            if args[0] == file_key and empty_at_publish.is_set():
                 post_at_init.set()
             return original_init_file(self, *args, **kwargs)
 
@@ -1086,7 +1081,7 @@ class TestWriteFileAPI:
             finally:
                 post_finished.set()
 
-        monkeypatch.setattr(file_version_store_module, "_replace_target", pause_empty_replace)
+        monkeypatch.setattr(file_version_store_module, "_link_target", pause_empty_link)
         monkeypatch.setattr(FileVersionStore, "init_file", observe_init_file)
 
         empty_thread = threading.Thread(target=run_empty_put, daemon=True)
@@ -1094,7 +1089,7 @@ class TestWriteFileAPI:
         lock_was_available = None
         try:
             empty_thread.start()
-            assert empty_at_replace.wait(timeout=5)
+            assert empty_at_publish.wait(timeout=5)
             fv = get_store()._files[file_key]
 
             post_thread.start()
@@ -1106,7 +1101,7 @@ class TestWriteFileAPI:
             if lock_was_available:
                 assert post_finished.wait(timeout=5)
         finally:
-            release_empty_replace.set()
+            release_empty_publish.set()
             empty_thread.join(timeout=5)
             post_thread.join(timeout=5)
 
@@ -1294,7 +1289,7 @@ class TestWriteFileAPI:
         with open(os.path.join(writable_dir, "hello.md"), encoding="utf-8") as f:
             assert f.read() == new_content
 
-    def test_write_file_replace_failure_returns_stable_500_without_broadcast(
+    def test_write_file_exchange_failure_returns_stable_500_without_broadcast(
         self, writable_server_url, writable_dir, monkeypatch
     ):
         from unittest.mock import Mock
@@ -1307,13 +1302,13 @@ class TestWriteFileAPI:
         original = "before"
         with open(path, "w", encoding="utf-8") as f:
             f.write(original)
-        original_replace = os.replace
+        original_exchange = file_version_store_module._exchange_target
         normalized_target = os.path.normcase(os.path.abspath(path))
 
-        def fail_target_replace(src, dst):
+        def fail_target_exchange(src, dst):
             if os.path.normcase(os.path.abspath(dst)) == normalized_target:
-                raise OSError(f"cannot replace sensitive path {path}")
-            return original_replace(src, dst)
+                raise OSError(f"cannot exchange sensitive path {path}")
+            return original_exchange(src, dst)
 
         watcher = Mock()
         watcher_token = object()
@@ -1327,7 +1322,7 @@ class TestWriteFileAPI:
         watcher.mark_expected.side_effect = mark_expected
         broadcast = Mock()
         monkeypatch.setattr(
-            file_version_store_module, "_replace_target", fail_target_replace, raising=False
+            file_version_store_module, "_exchange_target", fail_target_exchange, raising=False
         )
         monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
         monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
@@ -1723,7 +1718,7 @@ class TestSubmitChangesAPI:
         with open(os.path.join(writable_dir, "created.md"), encoding="utf-8") as f:
             assert f.read() == "new para"
 
-    def test_submit_changes_replace_failure_returns_stable_500_without_broadcast(
+    def test_submit_changes_exchange_failure_returns_stable_500_without_broadcast(
         self, writable_server_url, writable_dir, monkeypatch
     ):
         from unittest.mock import Mock
@@ -1736,13 +1731,13 @@ class TestSubmitChangesAPI:
         original = "before"
         with open(path, "w", encoding="utf-8") as f:
             f.write(original)
-        original_replace = os.replace
+        original_exchange = file_version_store_module._exchange_target
         normalized_target = os.path.normcase(os.path.abspath(path))
 
-        def fail_target_replace(src, dst):
+        def fail_target_exchange(src, dst):
             if os.path.normcase(os.path.abspath(dst)) == normalized_target:
-                raise OSError(f"cannot replace sensitive path {path}")
-            return original_replace(src, dst)
+                raise OSError(f"cannot exchange sensitive path {path}")
+            return original_exchange(src, dst)
 
         watcher = Mock()
         watcher_token = object()
@@ -1756,7 +1751,7 @@ class TestSubmitChangesAPI:
         watcher.mark_expected.side_effect = mark_expected
         broadcast = Mock()
         monkeypatch.setattr(
-            file_version_store_module, "_replace_target", fail_target_replace, raising=False
+            file_version_store_module, "_exchange_target", fail_target_exchange, raising=False
         )
         monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
         monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
@@ -1786,6 +1781,67 @@ class TestSubmitChangesAPI:
         assert prepared_calls == [("writable", rel_path, b"after")]
         watcher.unmark_expected.assert_called_once_with(watcher_token)
         broadcast.assert_not_called()
+
+    def test_submit_changes_resyncs_external_write_before_publish(
+        self, writable_server_url, writable_dir, monkeypatch
+    ):
+        from unittest.mock import Mock
+
+        name = f"post-publish-race-{os.path.basename(writable_dir)}.md"
+        rel_path = f"/{name}"
+        path = os.path.join(writable_dir, name)
+        file_key = f"writable:{rel_path}"
+        base = "A\n\nB"
+        external = "A-external\n\nB"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(base)
+
+        watcher = Mock()
+        watcher_token = object()
+
+        def mark_expected(mount_id, marked_path, _prepared_path):
+            assert (mount_id, marked_path) == ("writable", rel_path)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(external)
+            return watcher_token
+
+        watcher.mark_expected.side_effect = mark_expected
+        broadcast = Mock()
+        monkeypatch.setattr("nas_md.webserver.file_watcher.get_watcher", lambda: watcher)
+        monkeypatch.setattr("nas_md.webserver.sse_handler.sse_broadcast", broadcast)
+
+        status, body = _post(
+            f"{writable_server_url}/api/mounts/writable/changes?path={rel_path}",
+            data={
+                "baseVersion": 0,
+                "baseContent": base,
+                "content": "A\n\nB-client",
+                "changes": [{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+            },
+        )
+
+        assert status == 200
+        assert json.loads(body) == {
+            "applied": False,
+            "merged": False,
+            "resyncRequired": True,
+            "newVersion": 1,
+            "content": external,
+        }
+        with open(path, encoding="utf-8") as f:
+            assert f.read() == external
+        watcher.unmark_expected.assert_called_once_with(watcher_token)
+        broadcast.assert_called_once_with(
+            file_key,
+            exclude_id=None,
+            event={
+                "type": "external_reload",
+                "mountId": "writable",
+                "path": rel_path,
+                "newVersion": 1,
+                "content": external,
+            },
+        )
 
     def test_submit_changes_replace_paragraph(self, writable_server_url, writable_dir):
         """POST /changes with replace should update the specified paragraph."""
@@ -1842,6 +1898,7 @@ class TestSubmitChangesAPI:
         from unittest.mock import Mock
 
         from nas_md.webserver import version_history
+        from nas_md.webserver.file_version_store import get_store
 
         name = f"legacy-tab-{os.path.basename(writable_dir)}.md"
         rel_path = f"/{name}"
@@ -1902,7 +1959,9 @@ class TestSubmitChangesAPI:
         ]
         with open(path, "rb") as f:
             assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
-        assert version_history.get_version_content(file_key, 0) == expected
+        assert (
+            version_history.get_version_content(file_key, 0, get_store()._storage_dir) == expected
+        )
         assert prepared_calls == [
             ("writable", rel_path, expected.replace("\n", os.linesep).encode("utf-8"))
         ]

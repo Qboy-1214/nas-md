@@ -17,6 +17,7 @@
   // Debounce timer for batching remote updates
   var _applyTimer = null;
   var _pendingBatch = [];
+  var _queuedVersions = {};
   // Active collaborators (authorId -> {name, color, lastActive})
   var _collaborators = {};
 
@@ -242,14 +243,64 @@
   function applyBatchRemoteChanges(batch) {
     if (!window._vditor || !batch || batch.length === 0) return;
 
+    if (window.state) {
+      var currentKey = state.currentMountId + ':' + state.currentPath;
+      var currentBatch = [];
+      for (var itemIdx = 0; itemIdx < batch.length; itemIdx++) {
+        var item = batch[itemIdx];
+        if (!item.versionKey || item.versionKey === currentKey) {
+          currentBatch.push(item);
+        } else if (state.fileVersions) {
+          state.fileVersions[item.versionKey] = Math.max(
+            Number(state.fileVersions[item.versionKey]) || 0,
+            Number(item.version) || 0,
+          );
+        }
+      }
+      batch = currentBatch;
+      if (batch.length === 0) return;
+    }
+
+    if (window.state && state.dirty) {
+      state.pendingRemoteUpdate = true;
+      var dirtyKey = batch[batch.length - 1].versionKey;
+      if (dirtyKey) _queuedVersions[dirtyKey] = Number(state.baseVersion) || 0;
+      if (window.showToast) {
+        window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
+      }
+      return;
+    }
+
     var currentContent = window._vditor.getValue();
-    var changes = batch.map(function (item) {
-      return item.change;
-    });
-    var newContent = applyChangesToContent(currentContent, changes);
+    var newContent = currentContent;
+    var batchIdx = 0;
+    while (batchIdx < batch.length) {
+      var version = batch[batchIdx].version;
+      var versionChanges = [];
+      while (batchIdx < batch.length && batch[batchIdx].version === version) {
+        versionChanges.push(batch[batchIdx].change);
+        batchIdx++;
+      }
+      newContent = applyChangesToContent(newContent, versionChanges);
+    }
+    var latest = batch[batch.length - 1];
+
+    function commitBaseline(content) {
+      window._originalContent = content;
+      window._lastSavedContent = content;
+      if (window.state) {
+        state.baseContent = content;
+        state.baseVersion = latest.version;
+        state.pendingRemoteUpdate = false;
+        if (state.fileVersions && latest.versionKey) {
+          state.fileVersions[latest.versionKey] = latest.version;
+        }
+      }
+    }
 
     // Skip if content didn't actually change
     if (newContent === currentContent) {
+      commitBaseline(currentContent);
       for (var b = 0; b < batch.length; b++) {
         showCollabNotification(batch[b].author, batch[b].change.type, batch[b].change.paraIdx);
       }
@@ -266,10 +317,7 @@
 
     // Apply to editor in ONE single setValue call
     window._vditor.setValue(newContent);
-    window._originalContent = window._vditor.getValue();
-    if (window.state) {
-      state.baseContent = newContent;
-    }
+    commitBaseline(window._vditor.getValue());
 
     // Clear the flag after Vditor finishes rendering
     setTimeout(function () {
@@ -305,6 +353,35 @@
   function handleRemoteEdit(data) {
     if (!data.changes || !Array.isArray(data.changes)) return;
 
+    var serverVersion = Number(data.newVersion) || 0;
+    var isCurrentFile = state.currentMountId === data.mountId && state.currentPath === data.path;
+    var versionKey = data.mountId + ':' + data.path;
+
+    if (isCurrentFile) {
+      var myVersion = Math.max(
+        Number(state.baseVersion) || 0,
+        Number(_queuedVersions[versionKey]) || 0,
+      );
+      if (serverVersion <= myVersion) return;
+      if (state.dirty) {
+        state.pendingRemoteUpdate = true;
+        if (window.showToast) {
+          window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
+        }
+        return;
+      }
+      if (serverVersion > myVersion + 1) {
+        fetchFullContent(data.mountId, data.path, serverVersion);
+        return;
+      }
+    } else {
+      var knownVersion = state.fileVersions ? Number(state.fileVersions[versionKey]) || 0 : 0;
+      if (state.fileVersions && serverVersion > knownVersion) {
+        state.fileVersions[versionKey] = serverVersion;
+      }
+      return;
+    }
+
     var author = {
       id: data.authorId,
       name: data.authorName,
@@ -314,82 +391,93 @@
     // Update collaborator presence
     updateCollaborator(author);
 
-    // Check if this is the currently open file
-    var isCurrentFile = state.currentMountId === data.mountId && state.currentPath === data.path;
+    _queuedVersions[versionKey] = serverVersion;
 
-    if (isCurrentFile && window._vditor) {
-      // Check version gap BEFORE updating baseVersion.
-      // If client's version is not exactly one behind server's new version,
-      // the incremental changes can't be safely applied (paragraph indices
-      // may have shifted). Fetch full content instead.
-      var myVersion = state.baseVersion || 0;
-      var serverVersion = data.newVersion || 0;
-      if (myVersion !== serverVersion - 1) {
-        // Version gap too large or client ahead of server: fetch full content
-        state.baseVersion = serverVersion;
-        var versionKey0 = data.mountId + ':' + data.path;
-        if (state.fileVersions) state.fileVersions[versionKey0] = serverVersion;
-        fetchFullContent(data.mountId, data.path, serverVersion);
-        return;
+    var deferVersion = false;
+    for (var pendingIdx = 0; pendingIdx < _pendingUpdates.length; pendingIdx++) {
+      if (_pendingUpdates[pendingIdx].versionKey === versionKey) {
+        deferVersion = true;
+        break;
       }
-      // Version matches: safe to apply incremental changes
-      state.baseVersion = serverVersion;
-      var versionKey1 = data.mountId + ':' + data.path;
-      if (state.fileVersions) state.fileVersions[versionKey1] = serverVersion;
-    } else if (data.newVersion && window.state && data.mountId && data.path) {
-      // Non-current file: just track the version
-      var versionKey2 = data.mountId + ':' + data.path;
-      if (state.fileVersions) state.fileVersions[versionKey2] = data.newVersion;
     }
-
-    for (var i = 0; i < data.changes.length; i++) {
-      var change = data.changes[i];
-      var isProtected = isActivelyEditing() && change.paraIdx === _cursorParaIdx;
-
-      if (isProtected) {
-        _pendingUpdates.push({
-          change: change,
-          author: author,
-        });
-      } else {
-        // Batch non-protected changes and apply with debounce to avoid rapid setValue calls
-        _pendingBatch.push({ change: change, author: author });
+    if (!deferVersion && isActivelyEditing()) {
+      for (var protectedIdx = 0; protectedIdx < data.changes.length; protectedIdx++) {
+        if (data.changes[protectedIdx].paraIdx === _cursorParaIdx) {
+          deferVersion = true;
+          break;
+        }
       }
     }
 
-    // Debounce: wait 300ms for more changes before applying batch
-    if (_applyTimer) clearTimeout(_applyTimer);
-    _applyTimer = setTimeout(function () {
-      var batch = _pendingBatch.slice();
-      _pendingBatch = [];
+    if (deferVersion && _pendingBatch.length > 0) {
+      if (_applyTimer) clearTimeout(_applyTimer);
       _applyTimer = null;
-      applyBatchRemoteChanges(batch);
-    }, 300);
+      _pendingUpdates = _pendingUpdates.concat(_pendingBatch);
+      _pendingBatch = [];
+    }
+
+    var destination = deferVersion ? _pendingUpdates : _pendingBatch;
+    for (var i = 0; i < data.changes.length; i++) {
+      destination.push({
+        change: data.changes[i],
+        author: author,
+        version: serverVersion,
+        versionKey: versionKey,
+      });
+    }
+
+    if (!deferVersion) {
+      // Debounce: wait 300ms for more changes before applying batch
+      if (_applyTimer) clearTimeout(_applyTimer);
+      _applyTimer = setTimeout(function () {
+        var batch = _pendingBatch.slice();
+        _pendingBatch = [];
+        _applyTimer = null;
+        applyBatchRemoteChanges(batch);
+      }, 300);
+    }
   }
 
-  function fetchFullContent(mountId, path, _expectedVersion) {
+  function fetchFullContent(mountId, path, expectedVersion) {
     if (!API || !window._vditor) return;
     API.getFile(mountId, path)
       .then(function (result) {
-        if (!result || !result.content) return;
+        if (!result || result.content === undefined) return;
+
+        var resultVersion = Number(result.version);
+        var currentVersion = window.state ? Number(state.baseVersion) || 0 : 0;
+        if (
+          !Number.isFinite(resultVersion) ||
+          resultVersion < (Number(expectedVersion) || 0) ||
+          resultVersion < currentVersion
+        ) {
+          return;
+        }
+        if (state.currentMountId !== mountId || state.currentPath !== path) return;
+
+        if (window.state && window.state.dirty) {
+          state.pendingRemoteUpdate = true;
+          if (window.showToast) {
+            window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
+          }
+          return;
+        }
+
+        var key = mountId + ':' + path;
+        if (_applyTimer) clearTimeout(_applyTimer);
+        _applyTimer = null;
+        _pendingBatch = [];
+        _pendingUpdates = [];
+        _queuedVersions[key] = resultVersion;
 
         // Update version metadata
         if (window.state) {
           if (result.version !== undefined) {
             state.baseVersion = result.version;
-            var key = mountId + ':' + path;
             if (state.fileVersions) {
               state.fileVersions[key] = result.version;
             }
           }
-        }
-
-        // ISSUE-01 Fix: If user has unsaved edits, do NOT blow them away!
-        if (window.state && window.state.dirty) {
-          if (window.showToast) {
-            window.showToast('检测到远端有更新，本地有未保存内容，将在下次保存时合并', 'info');
-          }
-          return;
         }
 
         _applyingRemote = true;
@@ -397,6 +485,7 @@
         window._originalContent = result.content;
         if (window.state) {
           state.baseContent = result.content;
+          state.pendingRemoteUpdate = false;
           window._lastSavedContent = result.content;
         }
         setTimeout(function () {
@@ -418,27 +507,43 @@
       return;
     }
 
-    // Update version state regardless of whether we reload
-    if (data.newVersion) {
-      state.baseVersion = data.newVersion;
-      var key = data.mountId + ':' + data.path;
-      if (state.fileVersions) {
-        state.fileVersions[key] = data.newVersion;
-      }
-    }
-
-    // If user has unsaved edits, don't blow them away — let next save merge.
+    var key = data.mountId + ':' + data.path;
+    var currentVersion = Math.max(
+      Number(state.baseVersion) || 0,
+      Number(_queuedVersions[key]) || 0,
+    );
+    var serverVersion = Number(data.newVersion) || 0;
+    if (serverVersion <= currentVersion) return;
     if (state.dirty) {
+      state.pendingRemoteUpdate = true;
       window.showToast('文件已被外部修改，你的未保存编辑将在下次保存时合并', 'info');
       return;
     }
+    if (serverVersion > currentVersion + 1) {
+      fetchFullContent(data.mountId, data.path, serverVersion);
+      return;
+    }
+
+    // Update version state regardless of whether we reload
+    if (serverVersion) {
+      state.baseVersion = serverVersion;
+      if (state.fileVersions) {
+        state.fileVersions[key] = serverVersion;
+      }
+    }
 
     // No unsaved edits — reload the editor with the new content
-    if (data.content && window._vditor) {
+    if (data.content !== undefined && window._vditor) {
+      if (_applyTimer) clearTimeout(_applyTimer);
+      _applyTimer = null;
+      _pendingBatch = [];
+      _pendingUpdates = [];
+      _queuedVersions[key] = serverVersion;
       _applyingRemote = true;
       window._vditor.setValue(data.content);
       window._originalContent = data.content;
       state.baseContent = data.content;
+      state.pendingRemoteUpdate = false;
       window._lastSavedContent = data.content;
       setTimeout(function () {
         _applyingRemote = false;

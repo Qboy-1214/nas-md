@@ -6,7 +6,7 @@ import stat
 import struct
 import threading
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import nas_md.webserver.file_version_store as file_version_store_module
 import pytest
@@ -149,7 +149,7 @@ def test_partial_write_keeps_target_store_and_history_unchanged(store, test_file
     assert [entry.name for entry in os.scandir(target_dir)] == [os.path.basename(test_file)]
 
 
-def test_replace_failure_cleans_temp_rolls_back_watcher_and_preserves_state(
+def test_exchange_failure_cleans_temp_rolls_back_watcher_and_preserves_state(
     store, test_file, monkeypatch
 ):
     from nas_md.webserver.file_watcher import FileWatcher
@@ -159,15 +159,14 @@ def test_replace_failure_cleans_temp_rolls_back_watcher_and_preserves_state(
     store.init_file(file_key, test_file, original)
     watcher = FileWatcher()
     tokens = []
-    replace_sources = []
-    original_replace = os.replace
+    exchange_sources = []
     normalized_target = os.path.normcase(os.path.abspath(test_file))
 
-    def fail_target_replace(src, dst):
+    def fail_target_exchange(src, dst):
         if os.path.normcase(os.path.abspath(dst)) == normalized_target:
-            replace_sources.append(os.fspath(src))
-            raise OSError(f"replace failed for {test_file}")
-        return original_replace(src, dst)
+            exchange_sources.append(os.fspath(src))
+            raise OSError(f"exchange failed for {test_file}")
+        raise AssertionError(f"unexpected exchange target: {dst}")
 
     def mark_expected(prepared_path):
         token = watcher.mark_expected("mount-0", "/test.md", prepared_path)
@@ -175,7 +174,7 @@ def test_replace_failure_cleans_temp_rolls_back_watcher_and_preserves_state(
         return lambda: watcher.unmark_expected(token)
 
     monkeypatch.setattr(
-        file_version_store_module, "_replace_target", fail_target_replace, raising=False
+        file_version_store_module, "_exchange_target", fail_target_exchange, raising=False
     )
 
     result = store.apply_changes(
@@ -189,37 +188,37 @@ def test_replace_failure_cleans_temp_rolls_back_watcher_and_preserves_state(
         before_write=mark_expected,
     )
 
-    assert replace_sources
-    assert all(not os.path.exists(path) for path in replace_sources)
+    assert exchange_sources
+    assert all(not os.path.exists(path) for path in exchange_sources)
     _assert_failed_write_preserves_state(store, file_key, test_file, original, result)
     assert tokens
     assert watcher.unmark_expected(tokens[0]) is False
 
 
-def test_successful_write_marks_immediately_before_atomic_replace(store, test_file, monkeypatch):
+def test_successful_write_marks_immediately_before_atomic_exchange(store, test_file, monkeypatch):
     file_key = "mount-0:/test.md"
     original = "para one\n\npara two\n\npara three"
     target = "CHANGED\n\npara two\n\npara three"
     store.init_file(file_key, test_file, original)
     events = []
-    original_replace = os.replace
+    original_exchange = file_version_store_module._exchange_target
     normalized_target = os.path.normcase(os.path.abspath(test_file))
 
-    def observe_replace(src, dst):
+    def observe_exchange(src, dst):
         if os.path.normcase(os.path.abspath(dst)) == normalized_target:
             with open(dst, encoding="utf-8") as f:
                 events.append(("before", f.read()))
-            original_replace(src, dst)
+            displaced_path = original_exchange(src, dst)
             with open(dst, encoding="utf-8") as f:
                 events.append(("after", f.read()))
-            return None
-        return original_replace(src, dst)
+            return displaced_path
+        raise AssertionError(f"unexpected exchange target: {dst}")
 
     def mark_expected(prepared_path):
         events.append(("marked", Path(prepared_path).read_text(encoding="utf-8")))
 
     monkeypatch.setattr(
-        file_version_store_module, "_replace_target", observe_replace, raising=False
+        file_version_store_module, "_exchange_target", observe_exchange, raising=False
     )
 
     result = store.apply_changes(
@@ -373,6 +372,288 @@ def test_create_empty_file_resyncs_invalid_utf8_external_creation(store, tmp_pat
     assert store.get_current_snapshot(file_key) == {"version": 1, "content": "\ufffd"}
 
 
+def test_create_empty_file_does_not_overwrite_external_creation_before_publish(store, tmp_path):
+    file_path = tmp_path / "create-race.md"
+    file_key = "mount-0:/create-race.md"
+    external = "external"
+    rollback = Mock()
+    prepared_paths = []
+    store.init_file(file_key, str(file_path), "", persisted=False)
+
+    def create_external_before_publish(prepared_path):
+        prepared_paths.append(prepared_path)
+        file_path.write_text(external, encoding="utf-8")
+        return rollback
+
+    result = store.create_empty_file(
+        file_key,
+        str(file_path),
+        before_write=create_external_before_publish,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": external,
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": external,
+        },
+    }
+    assert file_path.read_text(encoding="utf-8") == external
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": external}
+    rollback.assert_called_once_with()
+    assert len(prepared_paths) == 1
+    assert not Path(prepared_paths[0]).exists()
+
+
+def test_apply_changes_resyncs_external_write_before_publish(store, tmp_path):
+    file_path = tmp_path / "edit-race.md"
+    file_key = "mount-0:/edit-race.md"
+    base = "A\n\nB"
+    external = "A-external\n\nB"
+    rollback = Mock()
+    prepared_paths = []
+    file_path.write_text(base, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+
+    def write_external_before_publish(prepared_path):
+        prepared_paths.append(prepared_path)
+        file_path.write_text(external, encoding="utf-8")
+        return rollback
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content="A\n\nB-client",
+        base_content=base,
+        before_write=write_external_before_publish,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": external,
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": external,
+        },
+    }
+    assert file_path.read_text(encoding="utf-8") == external
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": external}
+    rollback.assert_called_once_with()
+    assert len(prepared_paths) == 1
+    assert not Path(prepared_paths[0]).exists()
+
+
+def test_apply_changes_restores_external_write_arriving_at_publish_syscall(
+    store, tmp_path, monkeypatch
+):
+    file_path = tmp_path / "publish-syscall-race.md"
+    file_key = "mount-0:/publish-syscall-race.md"
+    base = "A\n\nB"
+    external = "A-external\n\nB"
+    rollback = Mock()
+    file_path.write_text(base, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+
+    primitive_name = (
+        "_exchange_target"
+        if hasattr(file_version_store_module, "_exchange_target")
+        else "_replace_target"
+    )
+    original_publish = getattr(file_version_store_module, primitive_name)
+
+    def inject_external_at_publish(prepared_path, target_path):
+        file_path.write_text(external, encoding="utf-8")
+        return original_publish(prepared_path, target_path)
+
+    monkeypatch.setattr(file_version_store_module, primitive_name, inject_external_at_publish)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content="A\n\nB-client",
+        base_content=base,
+        before_write=lambda _prepared_path: rollback,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": external,
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": external,
+        },
+    }
+    assert file_path.read_text(encoding="utf-8") == external
+    rollback.assert_called_once_with()
+
+
+def test_apply_changes_resyncs_when_target_is_deleted_before_publish(store, tmp_path):
+    file_path = tmp_path / "deleted-before-publish.md"
+    file_key = "mount-0:/deleted-before-publish.md"
+    base = "A\n\nB"
+    rollback = Mock()
+    file_path.write_text(base, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+
+    def delete_before_publish(_prepared_path):
+        file_path.unlink()
+        return rollback
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content="A\n\nB-client",
+        base_content=base,
+        before_write=delete_before_publish,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 0,
+        "content": base,
+    }
+    assert not file_path.exists()
+    assert store.get_current_snapshot(file_key) == {"version": 0, "content": base}
+    rollback.assert_called_once_with()
+
+
+def test_apply_changes_reconciles_canonical_content_when_conflict_rollback_fails(
+    store, tmp_path, monkeypatch
+):
+    file_path = tmp_path / "rollback-failure.md"
+    file_key = "mount-0:/rollback-failure.md"
+    base = "A\n\nB"
+    external = "A-external\n\nB"
+    client = "A\n\nB-client"
+    rollback = Mock()
+    file_path.write_text(base, encoding="utf-8")
+    store.init_file(file_key, str(file_path), base)
+    original_exchange = file_version_store_module._exchange_target
+    exchange_count = 0
+
+    def fail_restore_exchange(prepared_path, target_path):
+        nonlocal exchange_count
+        exchange_count += 1
+        if exchange_count == 2:
+            raise OSError("rollback exchange failed")
+        return original_exchange(prepared_path, target_path)
+
+    def write_external_before_publish(_prepared_path):
+        file_path.write_text(external, encoding="utf-8")
+        return rollback
+
+    monkeypatch.setattr(file_version_store_module, "_exchange_target", fail_restore_exchange)
+
+    result = store.apply_changes(
+        file_key=file_key,
+        file_path=str(file_path),
+        base_version=0,
+        changes=[{"type": "replace", "paraIdx": 1, "content": "B-client"}],
+        author_id="client",
+        author_name="Client",
+        author_color="#fff",
+        client_content=client,
+        base_content=base,
+        before_write=write_external_before_publish,
+    )
+
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 1,
+        "content": client,
+        "_externalTransition": {
+            "applied": True,
+            "newVersion": 1,
+            "content": client,
+        },
+    }
+    assert file_path.read_text(encoding="utf-8") == client
+    assert store.get_current_snapshot(file_key) == {"version": 1, "content": client}
+    assert external in [
+        path.read_text(encoding="utf-8") for path in tmp_path.glob(".nasmd-recovery-*.tmp")
+    ]
+    rollback.assert_called_once_with()
+
+
+def test_reconciled_snapshot_comparison_includes_metadata():
+    expected = Mock(
+        identity=(1, 2, 3, 4, 5),
+        digest=b"same",
+        metadata=(0o600, 1000, 1000, 0, (("user.flag", b"old"),)),
+    )
+    actual = Mock(
+        identity=(1, 2, 3, 4, 6),
+        digest=b"same",
+        metadata=(0o640, 1000, 1000, 0, (("user.flag", b"new"),)),
+    )
+
+    assert not file_version_store_module._matches_reconciled_snapshot(actual, expected)
+
+
+def test_conflict_rollback_preserves_metadata_only_third_party_change(monkeypatch):
+    prepared_snapshot = Mock(
+        digest=b"same-content",
+        metadata=(0o600, 1000, 1000, 0, (("user.flag", b"old"),)),
+    )
+    preserved_current = Mock(
+        digest=b"same-content",
+        metadata=(0o640, 1000, 1000, 0, (("user.flag", b"new"),)),
+    )
+    exchange = Mock(side_effect=["preserved-current", "recovery-path"])
+    remove = Mock()
+    monkeypatch.setattr(file_version_store_module, "_exchange_target", exchange)
+    monkeypatch.setattr(
+        file_version_store_module,
+        "_read_disk_snapshot",
+        Mock(return_value=preserved_current),
+    )
+    monkeypatch.setattr(file_version_store_module, "_remove_transaction_file", remove)
+
+    with pytest.raises(file_version_store_module._ConditionalWriteConflict) as error:
+        file_version_store_module._rollback_conflicting_publish(
+            "displaced-external", "target", prepared_snapshot
+        )
+
+    assert error.value.preserve_paths == ("recovery-path",)
+    assert exchange.call_args_list == [
+        call("displaced-external", "target"),
+        call("preserved-current", "target"),
+    ]
+    remove.assert_not_called()
+
+
 def test_directory_sync_failure_after_replace_does_not_report_save_failure(
     store, test_file, monkeypatch
 ):
@@ -403,20 +684,20 @@ def test_directory_sync_failure_after_replace_does_not_report_save_failure(
         assert f.read() == target
 
 
-def test_directory_sync_happens_after_target_replace(store, test_file, monkeypatch):
+def test_directory_sync_happens_after_target_exchange(store, test_file, monkeypatch):
     file_key = "mount-0:/test.md"
     original = "para one\n\npara two\n\npara three"
     store.init_file(file_key, test_file, original)
     events = []
-    original_replace = os.replace
+    original_exchange = file_version_store_module._exchange_target
 
-    def observe_replace(src, dst):
+    def observe_exchange(src, dst):
         if os.path.abspath(dst) == os.path.abspath(test_file):
-            events.append("replace")
-        return original_replace(src, dst)
+            events.append("exchange")
+        return original_exchange(src, dst)
 
     monkeypatch.setattr(
-        file_version_store_module, "_replace_target", observe_replace, raising=False
+        file_version_store_module, "_exchange_target", observe_exchange, raising=False
     )
     monkeypatch.setattr(
         file_version_store_module,
@@ -435,7 +716,7 @@ def test_directory_sync_happens_after_target_replace(store, test_file, monkeypat
     )
 
     assert result["applied"] is True
-    assert events == ["replace", "directory-fsync"]
+    assert events == ["exchange", "directory-fsync"]
 
 
 def test_existing_file_metadata_is_applied_before_replace(store, test_file, monkeypatch):
@@ -444,8 +725,8 @@ def test_existing_file_metadata_is_applied_before_replace(store, test_file, monk
     store.init_file(file_key, test_file, original)
     target_stat = os.stat(test_file)
     events = []
-    target_replaced = [False]
-    original_replace = os.replace
+    target_exchanged = [False]
+    original_exchange = file_version_store_module._exchange_target
     original_fsync = os.fsync
 
     monkeypatch.setattr(
@@ -474,18 +755,18 @@ def test_existing_file_metadata_is_applied_before_replace(store, test_file, monk
     )
 
     def observe_fsync(fd):
-        if not target_replaced[0] and stat.S_ISREG(os.fstat(fd).st_mode):
+        if not target_exchanged[0] and stat.S_ISREG(os.fstat(fd).st_mode):
             events.append(("file-fsync",))
         return original_fsync(fd)
 
-    def observe_replace(src, dst):
+    def observe_exchange(src, dst):
         if os.path.abspath(dst) == os.path.abspath(test_file):
-            events.append(("replace",))
-            target_replaced[0] = True
-        return original_replace(src, dst)
+            events.append(("exchange",))
+            target_exchanged[0] = True
+        return original_exchange(src, dst)
 
     monkeypatch.setattr(
-        file_version_store_module, "_replace_target", observe_replace, raising=False
+        file_version_store_module, "_exchange_target", observe_exchange, raising=False
     )
     monkeypatch.setattr(file_version_store_module.os, "fsync", observe_fsync)
 
@@ -507,7 +788,7 @@ def test_existing_file_metadata_is_applied_before_replace(store, test_file, monk
         ("xattrs", (("user.nasmd", b"metadata"),)),
         ("file-fsync",),
         ("mark",),
-        ("replace",),
+        ("exchange",),
     ]
 
 
@@ -725,9 +1006,24 @@ def test_windows_existing_replace_preserves_dacl_descriptor(store, tmp_path):
             raise OSError(error_code, ctypes.FormatError(error_code), path)
         return descriptor.raw
 
+    def access_semantics(descriptor):
+        normalized = bytearray(descriptor)
+        control = int.from_bytes(normalized[2:4], "little")
+        control &= ~0x0400  # SE_DACL_AUTO_INHERITED is provenance, not access policy.
+        normalized[2:4] = control.to_bytes(2, "little")
+
+        dacl_offset = int.from_bytes(normalized[16:20], "little")
+        ace_count = int.from_bytes(normalized[dacl_offset + 4 : dacl_offset + 6], "little")
+        ace_offset = dacl_offset + 8
+        for _ in range(ace_count):
+            normalized[ace_offset + 1] &= ~0x10  # INHERITED_ACE is provenance only.
+            ace_size = int.from_bytes(normalized[ace_offset + 2 : ace_offset + 4], "little")
+            ace_offset += ace_size
+        return bytes(normalized)
+
     file_path = tmp_path / "dacl.md"
     file_path.write_text("before", encoding="utf-8")
-    expected_dacl = read_dacl(str(file_path))
+    expected_dacl = access_semantics(read_dacl(str(file_path)))
     file_key = "mount-0:/dacl.md"
     store.init_file(file_key, str(file_path), "before")
 
@@ -742,7 +1038,7 @@ def test_windows_existing_replace_preserves_dacl_descriptor(store, tmp_path):
     )
 
     assert result["applied"] is True
-    assert read_dacl(str(file_path)) == expected_dacl
+    assert access_semantics(read_dacl(str(file_path))) == expected_dacl
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows CopyFileW behavior")
@@ -818,20 +1114,24 @@ def test_windows_copy_failure_preserves_existing_target(store, tmp_path, monkeyp
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows replacement behavior")
-def test_windows_new_file_still_uses_os_replace(store, tmp_path, monkeypatch):
+def test_windows_new_file_uses_exclusive_link_publish(store, tmp_path, monkeypatch):
     file_path = tmp_path / "new-replace.md"
     file_key = "mount-0:/new-replace.md"
     store.init_file(file_key, str(file_path), "")
     calls = []
-    original_replace = os.replace
+    original_link = os.link
 
-    def observe_replace(src, dst):
+    def observe_link(src, dst):
         if os.path.abspath(dst) == os.path.abspath(file_path):
             calls.append((src, dst))
-        return original_replace(src, dst)
+        return original_link(src, dst)
 
+    monkeypatch.setattr(file_version_store_module.os, "link", observe_link, raising=False)
     monkeypatch.setattr(
-        file_version_store_module, "_replace_target", observe_replace, raising=False
+        file_version_store_module,
+        "_replace_target",
+        lambda _source, _target: pytest.fail("new files must use exclusive link publication"),
+        raising=False,
     )
     monkeypatch.setattr(
         file_version_store_module,
@@ -852,6 +1152,31 @@ def test_windows_new_file_still_uses_os_replace(store, tmp_path, monkeypatch):
 
     assert result["applied"] is True
     assert len(calls) == 1
+
+
+def test_exchange_target_atomically_preserves_displaced_file(tmp_path):
+    target = tmp_path / "exchange-target.md"
+    prepared = tmp_path / ".nasmd-recovery-prepared.tmp"
+    target.write_text("before", encoding="utf-8")
+    prepared.write_text("after", encoding="utf-8")
+
+    displaced = file_version_store_module._exchange_target(str(prepared), str(target))
+
+    assert target.read_text(encoding="utf-8") == "after"
+    assert Path(displaced).read_text(encoding="utf-8") == "before"
+    Path(displaced).unlink()
+
+
+def test_exchange_target_surfaces_missing_target_os_error(tmp_path):
+    target = tmp_path / "missing-target.md"
+    prepared = tmp_path / ".nasmd-recovery-prepared.tmp"
+    prepared.write_text("after", encoding="utf-8")
+
+    with pytest.raises(OSError) as error:
+        file_version_store_module._exchange_target(str(prepared), str(target))
+
+    assert getattr(error.value, "winerror", None) or error.value.errno
+    assert prepared.read_text(encoding="utf-8") == "after"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows directory collision semantics")
@@ -884,16 +1209,16 @@ def test_atomic_write_uses_fixed_short_temp_name(store, tmp_path, monkeypatch):
     file_path.write_text(original, encoding="utf-8")
     file_key = f"mount-0:/{name}"
     store.init_file(file_key, str(file_path), original)
-    original_replace = os.replace
+    original_exchange = file_version_store_module._exchange_target
     temp_names = []
 
-    def observe_replace(src, dst):
+    def observe_exchange(src, dst):
         if os.path.abspath(dst) == os.path.abspath(file_path):
             temp_names.append(os.path.basename(src))
-        return original_replace(src, dst)
+        return original_exchange(src, dst)
 
     monkeypatch.setattr(
-        file_version_store_module, "_replace_target", observe_replace, raising=False
+        file_version_store_module, "_exchange_target", observe_exchange, raising=False
     )
 
     result = store.apply_changes(
@@ -909,8 +1234,8 @@ def test_atomic_write_uses_fixed_short_temp_name(store, tmp_path, monkeypatch):
     assert result["applied"] is True
     assert file_path.read_text(encoding="utf-8") == "after"
     assert len(temp_names) == 1
-    assert temp_names[0].startswith(".nasmd-")
-    assert len(temp_names[0]) <= 32
+    assert temp_names[0].startswith(".nasmd-recovery-")
+    assert len(temp_names[0]) <= 40
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX NAME_MAX behavior")
@@ -1797,7 +2122,7 @@ def test_legacy_changes_canonicalize_from_declared_operations(
 
     assert result["applied"] is True
     assert result["content"] == reconstructed
-    assert version_history.get_version_content(key, 0) == reconstructed
+    assert version_history.get_version_content(key, 0, store._storage_dir) == reconstructed
     with open(test_file, "rb") as f:
         assert f.read() == reconstructed.replace("\n", os.linesep).encode("utf-8")
 
@@ -1852,7 +2177,7 @@ def test_legacy_stale_text_edit_preserves_remote_tab_delimiter(store, test_file)
             "fallbackDelimiter": "\n\n",
         }
     ]
-    assert version_history.get_version_content(key, 0) == expected
+    assert version_history.get_version_content(key, 0, store._storage_dir) == expected
     assert prepared_contents == [expected]
     with open(test_file, "rb") as f:
         assert f.read() == expected.replace("\n", os.linesep).encode("utf-8")
@@ -2463,6 +2788,45 @@ def test_version_history_lru_cache_eviction(tmp_path, monkeypatch):
     assert len(h1) == 1
     assert h1[0]["version"] == 1
     assert "mount-0:/doc_1.md" in version_history._histories
+
+
+def test_version_history_cache_isolated_by_storage_directory(tmp_path):
+    from nas_md.webserver import version_history
+
+    file_key = "mount-0:/same-key.md"
+    first_dir = str(tmp_path / "first")
+    second_dir = str(tmp_path / "second")
+
+    version_history.record_version(
+        file_key=file_key,
+        author_id="first",
+        author_name="First",
+        author_color="#111",
+        changes=[],
+        content_snapshot="first content",
+        version=7,
+        storage_dir=first_dir,
+    )
+
+    assert version_history.get_history(file_key, storage_dir=second_dir) == []
+
+    version_history.record_version(
+        file_key=file_key,
+        author_id="second",
+        author_name="Second",
+        author_color="#222",
+        changes=[],
+        content_snapshot="second content",
+        version=1,
+        storage_dir=second_dir,
+    )
+
+    assert [
+        entry["version"] for entry in version_history.get_history(file_key, storage_dir=first_dir)
+    ] == [7]
+    assert [
+        entry["version"] for entry in version_history.get_history(file_key, storage_dir=second_dir)
+    ] == [1]
 
 
 def test_safe_filename_hashing_and_compatibility(tmp_path):

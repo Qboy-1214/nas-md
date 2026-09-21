@@ -18,6 +18,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from http.cookies import SimpleCookie
 from io import BytesIO, TextIOWrapper
@@ -95,30 +96,53 @@ def _content_type(path: str) -> str:
     return ct
 
 
-def _broadcast_external_reload(
+def _make_sse_event_enqueuer(
     file_key: str,
     mount_id: str,
     rel_path: str,
-    transition: dict | None,
-) -> None:
-    if not transition or not transition.get("applied"):
-        return
-    try:
-        from nas_md.webserver.sse_handler import sse_broadcast
+    *,
+    session_id: str | None = None,
+    author_name: str = "Anonymous",
+    author_color: str = "#3498db",
+) -> Callable[[str, dict], None]:
+    def enqueue(event_type: str, result: dict) -> None:
+        from nas_md.webserver.sse_handler import queue_sse_event
 
-        sse_broadcast(
-            file_key,
-            exclude_id=None,
-            event={
+        if event_type == "external_reload":
+            exclude_id = None
+            event = {
                 "type": "external_reload",
                 "mountId": mount_id,
                 "path": rel_path,
-                "newVersion": transition["newVersion"],
-                "content": transition["content"],
-            },
-        )
+                "newVersion": result["newVersion"],
+                "content": result["content"],
+            }
+        elif event_type == "remote_edit":
+            exclude_id = session_id
+            event = {
+                "type": "remote_edit",
+                "authorId": session_id,
+                "authorName": author_name,
+                "authorColor": author_color,
+                "mountId": mount_id,
+                "path": rel_path,
+                "changes": result["appliedChanges"],
+                "newVersion": result["newVersion"],
+            }
+        else:
+            raise ValueError(f"Unsupported collaboration event: {event_type}")
+        queue_sse_event(file_key, exclude_id, event)
+
+    return enqueue
+
+
+def _flush_sse_events(file_key: str) -> None:
+    try:
+        from nas_md.webserver.sse_handler import flush_sse_events
+
+        flush_sse_events(file_key)
     except Exception as e:
-        logger.warning("External reload broadcast failed: %s", e)
+        logger.warning("SSE queue flush failed for %s: %s", file_key, e)
 
 
 # --- Mount Manager ---
@@ -1424,7 +1448,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     newline=None,
                 ).read()
                 store.init_file(file_key, abs_path, content)
-                disk_result = store.read_reconciled_disk(file_key, abs_path)
+                enqueue_event = _make_sse_event_enqueuer(file_key, mount_id, rel_path)
+                disk_result = store.read_reconciled_disk(
+                    file_key, abs_path, enqueue_event=enqueue_event
+                )
+                _flush_sse_events(file_key)
                 transition = disk_result["transition"]
                 if transition.get("errorCode"):
                     return self._send_error(transition["message"], 500)
@@ -1437,8 +1465,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 version = transition["newVersion"]
             except Exception:
                 version = 0
-            else:
-                _broadcast_external_reload(file_key, mount_id, rel_path, transition)
             # Tier 3: no-store + Gzip for text/markdown files > 512 bytes
             # 注意：X-File-Version 是服务端元数据，不受 Gzip 影响，前端轮询逻辑不变
             compressed, did_compress = _compress(data, ct, handler=self)
@@ -1542,10 +1568,22 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         store.init_file(file_key, abs_path, old_content, persisted=content_loaded)
 
+        author_name = self.headers.get("X-Client-Name", "Anonymous")
+        author_color = self.headers.get("X-Client-Color", "#3498db")
+        enqueue_event = _make_sse_event_enqueuer(
+            file_key,
+            mount_id,
+            rel_path,
+            session_id=session_id,
+            author_name=author_name,
+            author_color=author_color,
+        )
+
         try:
             changes = compute_diff(old_content, new_text) if old_content != new_text else []
         except DiffWorkLimitExceeded:
-            transition = store.reconcile_disk(file_key, abs_path)
+            transition = store.reconcile_disk(file_key, abs_path, enqueue_event=enqueue_event)
+            _flush_sse_events(file_key)
             if transition.get("errorCode"):
                 return self._send_json(
                     {
@@ -1558,7 +1596,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     },
                     500,
                 )
-            _broadcast_external_reload(file_key, mount_id, rel_path, transition)
             return self._send_json(
                 {
                     "applied": False,
@@ -1569,9 +1606,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 },
                 409,
             )
-
-        author_name = self.headers.get("X-Client-Name", "Anonymous")
-        author_color = self.headers.get("X-Client-Color", "#3498db")
 
         def mark_expected(prepared_path: str):
             try:
@@ -1597,6 +1631,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     author_id=session_id,
                     author_name=author_name,
                     author_color=author_color,
+                    enqueue_event=enqueue_event,
                 )
             except OSError:
                 logger.exception("Failed to write file %s", abs_path)
@@ -1620,10 +1655,11 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 author_color=author_color,
                 client_content=new_text,
                 before_write=mark_expected,
+                enqueue_event=enqueue_event,
             )
 
-        external_transition = result.pop("_externalTransition", None)
-        _broadcast_external_reload(file_key, mount_id, rel_path, external_transition)
+        _flush_sse_events(file_key)
+        result.pop("_externalTransition", None)
 
         if result.get("errorCode"):
             return self._send_json(result, 500)
@@ -1633,27 +1669,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         if changes and not result.get("applied"):
             return self._send_json(result, 409)
-
-        if changes and result.get("applied"):
-            try:
-                from nas_md.webserver.sse_handler import sse_broadcast
-
-                sse_broadcast(
-                    file_key,
-                    exclude_id=session_id,
-                    event={
-                        "type": "remote_edit",
-                        "authorId": session_id,
-                        "authorName": author_name,
-                        "authorColor": author_color,
-                        "mountId": mount_id,
-                        "path": rel_path,
-                        "changes": result.get("appliedChanges", changes),
-                        "newVersion": result["newVersion"],
-                    },
-                )
-            except Exception as e:
-                logger.warning("SSE broadcast failed: %s", e)
 
         st = os.stat(abs_path)
         self._send_json(
@@ -1824,6 +1839,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
 
         store = get_store()
         file_key = f"{mount_id}:{rel_path}"
+        enqueue_event = _make_sse_event_enqueuer(
+            file_key,
+            mount_id,
+            rel_path,
+            session_id=session_id,
+            author_name=author_name,
+            author_color=author_color,
+        )
 
         # Lazy-init store with current disk content
         try:
@@ -1866,40 +1889,14 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 client_content=client_content,
                 base_content=base_content,
                 before_write=mark_expected,
+                enqueue_event=enqueue_event,
             )
         except (TypeError, ValueError) as e:
-            _broadcast_external_reload(
-                file_key,
-                mount_id,
-                rel_path,
-                getattr(e, "_external_transition", None),
-            )
             return self._send_error(f"Invalid changes: {e}", 400)
+        finally:
+            _flush_sse_events(file_key)
 
-        external_transition = result.pop("_externalTransition", None)
-        _broadcast_external_reload(file_key, mount_id, rel_path, external_transition)
-
-        # Broadcast to other clients via SSE
-        if result.get("applied"):
-            try:
-                from nas_md.webserver.sse_handler import sse_broadcast
-
-                sse_broadcast(
-                    file_key,
-                    exclude_id=session_id,
-                    event={
-                        "type": "remote_edit",
-                        "authorId": session_id,
-                        "authorName": author_name,
-                        "authorColor": author_color,
-                        "mountId": mount_id,
-                        "path": rel_path,
-                        "changes": result.get("appliedChanges", changes),
-                        "newVersion": result["newVersion"],
-                    },
-                )
-            except Exception as e:
-                logger.warning("SSE broadcast failed: %s", e)
+        result.pop("_externalTransition", None)
 
         self._send_json(result, 500 if result.get("errorCode") else 200)
 
@@ -2014,6 +2011,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             get_history,
             get_version_with_previous,
         )
+        from nas_md.webserver.file_version_store import get_store
+
+        history_storage_dir = get_store()._storage_dir
 
         file_key = qs.get("file", [None])[0]
         if not file_key:
@@ -2034,7 +2034,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         version_idx = qs.get("version", [None])[0]
         if version_idx is not None:
             # Get version content + previous version content for diff
-            result = get_version_with_previous(file_key, int(version_idx))
+            result = get_version_with_previous(
+                file_key, int(version_idx), storage_dir=history_storage_dir
+            )
             if result is None:
                 self._send_json({"error": "version not found"})
             else:
@@ -2042,7 +2044,7 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             return
 
         limit = int(qs.get("limit", ["20"])[0])
-        history = get_history(file_key, limit)
+        history = get_history(file_key, limit, storage_dir=history_storage_dir)
         self._send_json({"versions": history})
 
     def _handle_sse(self, qs: dict):
@@ -2871,6 +2873,10 @@ def serve(
     """Start the HTTP server with mount points and optional static file serving."""
     global _MOUNTS_FILE
     _MOUNTS_FILE = os.path.join(storage_dir, "mounts.json") if storage_dir else ""
+    if storage_dir:
+        from nas_md.webserver.file_version_store import _initialize_store
+
+        _initialize_store(os.path.join(os.path.abspath(storage_dir), ".version_history"))
 
     # In Docker mode, seed storage dir with default files if empty
     if _docker_mode and storage_dir:
@@ -2931,9 +2937,10 @@ def serve(
                     return
                 store = get_store()
                 store.init_file(file_key, abs_path, "", persisted=False)
-                result = store.reconcile_disk(file_key, abs_path)
+                enqueue_event = _make_sse_event_enqueuer(file_key, mount_id, rel_path)
+                result = store.reconcile_disk(file_key, abs_path, enqueue_event=enqueue_event)
+                _flush_sse_events(file_key)
                 if result.get("applied"):
-                    _broadcast_external_reload(file_key, mount_id, rel_path, result)
                     logger.info(
                         "External change broadcast: %s:%s v%d",
                         mount_id,
@@ -3011,6 +3018,10 @@ def serve(
             time.sleep(0.5)
     except KeyboardInterrupt:
         logger.info("Servers stopping...")
+        for s in servers:
+            s.shutdown()
+        for t in threads:
+            t.join()
         for s in servers:
             s.server_close()
         logger.info("Servers stopped.")

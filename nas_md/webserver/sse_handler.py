@@ -3,7 +3,7 @@
 import json
 import logging
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 
 logger = logging.getLogger("webserver.sse")
 
@@ -12,6 +12,12 @@ _lock = threading.Lock()
 # "mountId:path" -> list of SSEConnectionHandler instances
 _sse_clients: dict[str, list] = defaultdict(list)
 _client_counter = 0
+
+# Per-file publication state. Producers enqueue while holding the matching
+# FileVersion lock; a single lock-free broadcaster then drains each file FIFO.
+_publication_lock = threading.Lock()
+_event_queues: dict[str, deque[tuple[str | None, dict]]] = defaultdict(deque)
+_flushing_files: dict[str, object] = {}
 
 
 class SSEConnectionHandler:
@@ -83,7 +89,7 @@ def register_sse_client(
     return conn
 
 
-def sse_broadcast(file_key: str, exclude_id: str, event: dict):
+def sse_broadcast(file_key: str, exclude_id: str | None, event: dict):
     """Broadcast an event to all clients watching a file, except the sender.
 
     file_key: "mountId:path"
@@ -101,10 +107,58 @@ def sse_broadcast(file_key: str, exclude_id: str, event: dict):
             dead.append(client)
 
     # Clean up dead connections
-    if dead:
-        with _lock:
-            for client in dead:
-                client.detach()
+    for client in dead:
+        client.detach()
+
+
+def queue_sse_event(file_key: str, exclude_id: str | None, event: dict) -> None:
+    """Append an event to a file's ordered publication queue."""
+    with _publication_lock:
+        _event_queues[file_key].append((exclude_id, event))
+
+
+def _claim_flusher(file_key: str) -> object | None:
+    with _publication_lock:
+        if file_key in _flushing_files:
+            return None
+        owner = object()
+        _flushing_files[file_key] = owner
+        return owner
+
+
+def _release_flusher(file_key: str, owner: object) -> None:
+    with _publication_lock:
+        if _flushing_files.get(file_key) is owner:
+            _flushing_files.pop(file_key, None)
+
+
+def flush_sse_events(file_key: str) -> None:
+    """Drain one file's queued events in insertion order."""
+    with _publication_lock:
+        if not _event_queues.get(file_key):
+            return
+    owner = _claim_flusher(file_key)
+    if owner is None:
+        return
+
+    try:
+        while True:
+            with _publication_lock:
+                queue = _event_queues.get(file_key)
+                if not queue:
+                    _event_queues.pop(file_key, None)
+                    if _flushing_files.get(file_key) is owner:
+                        _flushing_files.pop(file_key, None)
+                        owner = None
+                    return
+                exclude_id, event = queue.popleft()
+            try:
+                sse_broadcast(file_key, exclude_id=exclude_id, event=event)
+            except Exception:
+                logger.warning("SSE queued broadcast failed for %s", file_key, exc_info=True)
+    finally:
+        if owner is not None:
+            _release_flusher(file_key, owner)
 
 
 def get_sse_client_count(file_key: str | None = None) -> int:

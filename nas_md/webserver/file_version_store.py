@@ -21,11 +21,13 @@ Conflict resolution (base_version mismatch):
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import logging
 import os
 import secrets
 import stat
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -118,13 +120,15 @@ def _copy_file_windows(source_path: str, destination_path: str) -> None:
         raise OSError(error_code, ctypes.FormatError(error_code), destination_path)
 
 
-def _copy_atomic_temp_windows(source_path: str, directory: str) -> tuple[int, str]:
+def _copy_atomic_temp_windows(
+    source_path: str, directory: str, *, prefix: str = ".nasmd-"
+) -> tuple[int, str]:
     """Copy an existing Windows file to a short temp, then open its default stream."""
     flags = os.O_WRONLY | os.O_TRUNC
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
     for _ in range(_ATOMIC_TEMP_ATTEMPTS):
-        temp_path = os.path.join(directory, f".nasmd-{secrets.token_hex(8)}.tmp")
+        temp_path = os.path.join(directory, f"{prefix}{secrets.token_hex(8)}.tmp")
         try:
             _copy_file_windows(source_path, temp_path)
         except FileExistsError:
@@ -151,6 +155,102 @@ def _replace_target(temp_path: str, target_path: str) -> None:
     os.replace(temp_path, target_path)
 
 
+def _link_target(temp_path: str, target_path: str) -> None:
+    """Publish a prepared missing target without replacing an existing path."""
+    os.link(temp_path, target_path)
+
+
+def _unused_recovery_path(directory: str) -> str:
+    for _ in range(_ATOMIC_TEMP_ATTEMPTS):
+        path = os.path.join(directory, f".nasmd-recovery-{secrets.token_hex(8)}.tmp")
+        if not os.path.lexists(path):
+            return path
+    raise FileExistsError("unable to allocate recovery path")
+
+
+def _exchange_target_windows(prepared_path: str, target_path: str) -> str:
+    """Replace a Windows target while atomically retaining its old file."""
+    import ctypes
+    from ctypes import wintypes
+
+    replace_file = ctypes.WinDLL("kernel32", use_last_error=True).ReplaceFileW
+    replace_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    )
+    replace_file.restype = wintypes.BOOL
+    directory = os.path.dirname(os.path.abspath(target_path)) or "."
+    backup_path = _unused_recovery_path(directory)
+    if replace_file(target_path, prepared_path, backup_path, 0, None, None):
+        return backup_path
+    error_code = ctypes.get_last_error()
+    raise ctypes.WinError(error_code)
+
+
+def _exchange_target_linux(prepared_path: str, target_path: str) -> str:
+    """Atomically exchange two Linux paths with renameat2."""
+    import ctypes
+    import errno
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOTSUP, "renameat2(RENAME_EXCHANGE) is unavailable")
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    if (
+        renameat2(
+            -100,
+            os.fsencode(prepared_path),
+            -100,
+            os.fsencode(target_path),
+            2,
+        )
+        != 0
+    ):
+        error_code = ctypes.get_errno()
+        raise OSError(error_code, os.strerror(error_code), target_path)
+    return prepared_path
+
+
+def _exchange_target_macos(prepared_path: str, target_path: str) -> str:
+    """Atomically exchange two macOS paths with renamex_np."""
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renamex_np = libc.renamex_np
+    renamex_np.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+    renamex_np.restype = ctypes.c_int
+    if renamex_np(os.fsencode(prepared_path), os.fsencode(target_path), 0x00000002) != 0:
+        error_code = ctypes.get_errno()
+        raise OSError(error_code, os.strerror(error_code), target_path)
+    return prepared_path
+
+
+def _exchange_target(prepared_path: str, target_path: str) -> str:
+    """Atomically publish prepared_path and return the displaced target path."""
+    if os.name == "nt":
+        return _exchange_target_windows(prepared_path, target_path)
+    if sys.platform.startswith("linux"):
+        return _exchange_target_linux(prepared_path, target_path)
+    if sys.platform == "darwin":
+        return _exchange_target_macos(prepared_path, target_path)
+
+    import errno
+
+    raise OSError(errno.ENOTSUP, "atomic target exchange is unavailable on this platform")
+
+
 def _fsync_directory(directory: str) -> None:
     """Best-effort directory sync after a completed atomic replacement."""
     try:
@@ -170,8 +270,9 @@ def _write_text_atomically(
     file_path: str,
     content: str,
     before_replace: Callable[[str], Callable[[], None] | None] | None,
+    expected_snapshot: _DiskSnapshot | None,
 ) -> None:
-    """Write complete text beside the target, then atomically replace it."""
+    """Write complete text and publish only if the reconciled target is unchanged."""
     target_path = os.path.abspath(file_path)
     directory = os.path.dirname(target_path) or "."
     os.makedirs(directory, exist_ok=True)
@@ -189,12 +290,14 @@ def _write_text_atomically(
         xattrs = _snapshot_xattrs(target_path)
 
     if existing_stat is not None and os.name == "nt":
-        fd, temp_path = _copy_atomic_temp_windows(target_path, directory)
+        fd, temp_path = _copy_atomic_temp_windows(target_path, directory, prefix=".nasmd-recovery-")
     else:
-        fd, temp_path = _create_atomic_temp(directory, mode=0o600)
+        prefix = ".nasmd-recovery-" if expected_snapshot is not None else ".nasmd-"
+        fd, temp_path = _create_atomic_temp(directory, mode=0o600, prefix=prefix)
 
     rollback_expected = None
-    replaced = False
+    published = False
+    preserved_paths: set[str] = set()
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             fd = -1
@@ -214,20 +317,36 @@ def _write_text_atomically(
         if before_replace is not None:
             rollback_expected = before_replace(temp_path)
         try:
-            _replace_target(temp_path, target_path)
-        except BaseException:
+            if expected_snapshot is None:
+                try:
+                    _link_target(temp_path, target_path)
+                except FileExistsError as e:
+                    raise _ConditionalWriteConflict from e
+                published = True
+                with contextlib.suppress(OSError):
+                    os.remove(temp_path)
+            else:
+                prepared_snapshot = _read_disk_snapshot(temp_path)
+                _publish_existing_target(
+                    temp_path,
+                    target_path,
+                    expected_snapshot,
+                    prepared_snapshot,
+                )
+                published = True
+        except BaseException as error:
+            preserved_paths.update(getattr(error, "preserve_paths", ()))
             if rollback_expected is not None:
                 try:
                     rollback_expected()
                 except Exception:
                     logger.warning("Failed to roll back expected file watcher mark", exc_info=True)
             raise
-        replaced = True
     finally:
         if fd >= 0:
             with contextlib.suppress(OSError):
                 os.close(fd)
-        if not replaced:
+        if not published and temp_path not in preserved_paths:
             try:
                 os.remove(temp_path)
             except FileNotFoundError:
@@ -261,6 +380,144 @@ class _DiskSnapshot:
     data: bytes
     content: str
     mod_time: int
+    identity: tuple[int, int, int, int, int]
+    digest: bytes
+    metadata: tuple[int, int, int, int, tuple[tuple[str | bytes, bytes], ...]]
+
+
+class _ConditionalWriteConflict(Exception):
+    """The target changed after reconciliation but before publication."""
+
+    def __init__(self, preserve_paths: tuple[str, ...] = ()):
+        super().__init__("target changed during conditional publication")
+        self.preserve_paths = preserve_paths
+
+
+class _ConditionalRollbackError(OSError):
+    """A publish conflict could not be fully restored without retaining data."""
+
+    def __init__(self, preserve_paths: tuple[str, ...]):
+        super().__init__("conditional publication rollback failed")
+        self.preserve_paths = preserve_paths
+
+
+def _read_disk_snapshot(file_path: str) -> _DiskSnapshot:
+    with open(file_path, "rb") as f:
+        data = f.read()
+        file_stat = os.fstat(f.fileno())
+        listxattr = getattr(os, "listxattr", None)
+        getxattr = getattr(os, "getxattr", None)
+        if listxattr is None or getxattr is None:
+            xattrs = ()
+        else:
+            names = listxattr(f.fileno())
+            xattrs = tuple(
+                sorted(
+                    ((name, getxattr(f.fileno(), name)) for name in names),
+                    key=lambda item: os.fsencode(item[0]),
+                )
+            )
+    return _DiskSnapshot(
+        data=data,
+        content=io.TextIOWrapper(
+            io.BytesIO(data),
+            encoding="utf-8",
+            errors="replace",
+            newline=None,
+        ).read(),
+        mod_time=int(file_stat.st_mtime * 1000),
+        identity=(
+            file_stat.st_dev,
+            file_stat.st_ino,
+            file_stat.st_size,
+            file_stat.st_mtime_ns,
+            file_stat.st_ctime_ns,
+        ),
+        digest=hashlib.sha256(data).digest(),
+        metadata=(
+            stat.S_IMODE(file_stat.st_mode),
+            getattr(file_stat, "st_uid", 0),
+            getattr(file_stat, "st_gid", 0),
+            getattr(file_stat, "st_flags", 0),
+            xattrs,
+        ),
+    )
+
+
+def _matches_reconciled_snapshot(actual: _DiskSnapshot, expected: _DiskSnapshot) -> bool:
+    # Atomic rename/exchange may alter ctime, so compare stable inode identity,
+    # mtime, size, and bytes. In-place writes are still caught by the digest.
+    return (
+        actual.identity[:4] == expected.identity[:4]
+        and actual.digest == expected.digest
+        and actual.metadata == expected.metadata
+    )
+
+
+def _remove_transaction_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Failed to clean conditional-write transaction file", exc_info=True)
+
+
+def _rollback_conflicting_publish(
+    displaced_path: str,
+    target_path: str,
+    prepared_snapshot: _DiskSnapshot,
+) -> None:
+    try:
+        preserved_current_path = _exchange_target(displaced_path, target_path)
+    except OSError as error:
+        raise _ConditionalRollbackError((displaced_path,)) from error
+
+    try:
+        preserved_current = _read_disk_snapshot(preserved_current_path)
+    except OSError as error:
+        raise _ConditionalRollbackError((preserved_current_path,)) from error
+
+    if (
+        preserved_current.digest == prepared_snapshot.digest
+        and preserved_current.metadata == prepared_snapshot.metadata
+    ):
+        _remove_transaction_file(preserved_current_path)
+        raise _ConditionalWriteConflict
+
+    # A third-party write reached the target during rollback. Put that newest
+    # content back and retain the older displaced external version for recovery.
+    try:
+        recovery_path = _exchange_target(preserved_current_path, target_path)
+    except OSError as error:
+        raise _ConditionalRollbackError((preserved_current_path,)) from error
+    logger.error(
+        "Concurrent writes prevented complete transaction cleanup; "
+        "an external version was retained in a .nasmd-recovery file"
+    )
+    raise _ConditionalWriteConflict((recovery_path,))
+
+
+def _publish_existing_target(
+    prepared_path: str,
+    target_path: str,
+    expected_snapshot: _DiskSnapshot,
+    prepared_snapshot: _DiskSnapshot,
+) -> None:
+    try:
+        displaced_path = _exchange_target(prepared_path, target_path)
+    except FileNotFoundError as error:
+        raise _ConditionalWriteConflict from error
+    try:
+        displaced_snapshot = _read_disk_snapshot(displaced_path)
+    except OSError:
+        _rollback_conflicting_publish(displaced_path, target_path, prepared_snapshot)
+
+    if _matches_reconciled_snapshot(displaced_snapshot, expected_snapshot):
+        _remove_transaction_file(displaced_path)
+        return
+
+    _rollback_conflicting_publish(displaced_path, target_path, prepared_snapshot)
 
 
 class FileVersionStore:
@@ -356,12 +613,11 @@ class FileVersionStore:
         fv: _FileVersion,
         file_key: str,
         file_path: str,
+        enqueue_event: Callable[[str, dict], None] | None = None,
     ) -> tuple[dict, _DiskSnapshot | None]:
         """Reconcile one file from its current disk state while ``fv.lock`` is held."""
         try:
-            with open(file_path, "rb") as f:
-                data = f.read()
-                mod_time = int(os.fstat(f.fileno()).st_mtime * 1000)
+            snapshot = _read_disk_snapshot(file_path)
         except FileNotFoundError:
             fv.persisted = False
             return (
@@ -385,25 +641,28 @@ class FileVersionStore:
                 None,
             )
 
-        snapshot = _DiskSnapshot(
-            data=data,
-            content=io.TextIOWrapper(
-                io.BytesIO(data),
-                encoding="utf-8",
-                errors="replace",
-                newline=None,
-            ).read(),
-            mod_time=mod_time,
-        )
         applied = self._apply_external_content(fv, file_key, file_path, snapshot.content)
-        return (
-            {
-                "applied": applied,
-                "newVersion": fv.version,
-                "content": fv.content,
-            },
-            snapshot,
-        )
+        transition = {
+            "applied": applied,
+            "newVersion": fv.version,
+            "content": fv.content,
+        }
+        if applied:
+            self._enqueue_event(enqueue_event, "external_reload", transition)
+        return transition, snapshot
+
+    @staticmethod
+    def _enqueue_event(
+        enqueue_event: Callable[[str, dict], None] | None,
+        event_type: str,
+        result: dict,
+    ) -> None:
+        if enqueue_event is None:
+            return
+        try:
+            enqueue_event(event_type, result)
+        except Exception:
+            logger.warning("Failed to enqueue %s event", event_type, exc_info=True)
 
     @staticmethod
     def _with_external_transition(result: dict, transition: dict) -> dict:
@@ -453,17 +712,31 @@ class FileVersionStore:
         author_id: str = "system",
         author_name: str = "File recreation",
         author_color: str = "#95a5a6",
+        enqueue_event: Callable[[str, dict], None] | None = None,
     ) -> dict:
         """Persist an empty file only if it is still missing."""
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            transition, _snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            transition, snapshot = self._reconcile_disk_locked(
+                fv, file_key, file_path, enqueue_event
+            )
             if transition.get("errorCode"):
                 return self._reconciliation_error_result(fv, transition)
             if fv.persisted:
                 return self._with_external_transition(self._resync_result(fv), transition)
 
-            _write_text_atomically(file_path, "", before_write)
+            try:
+                _write_text_atomically(file_path, "", before_write, snapshot)
+            except _ConditionalWriteConflict:
+                conflict_transition, _snapshot = self._reconcile_disk_locked(
+                    fv, file_key, file_path, enqueue_event
+                )
+                if conflict_transition.get("errorCode"):
+                    return self._reconciliation_error_result(fv, conflict_transition)
+                effective_transition = (
+                    conflict_transition if conflict_transition["applied"] else transition
+                )
+                return self._with_external_transition(self._resync_result(fv), effective_transition)
             previous_content = fv.content
             fv.content = ""
             fv.persisted = True
@@ -507,6 +780,7 @@ class FileVersionStore:
         client_content: str | None = None,
         base_content: str | None = None,
         before_write: Callable[[str], Callable[[], None] | None] | None = None,
+        enqueue_event: Callable[[str, dict], None] | None = None,
     ) -> dict:
         """Apply changes with version-based optimistic locking.
 
@@ -518,7 +792,9 @@ class FileVersionStore:
         """
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            transition, _snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            transition, snapshot = self._reconcile_disk_locked(
+                fv, file_key, file_path, enqueue_event
+            )
             if transition.get("errorCode"):
                 return self._reconciliation_error_result(fv, transition)
 
@@ -622,7 +898,27 @@ class FileVersionStore:
 
             # Write to disk
             try:
-                _write_text_atomically(file_path, new_content, before_write)
+                _write_text_atomically(file_path, new_content, before_write, snapshot)
+            except _ConditionalWriteConflict:
+                conflict_transition, _snapshot = self._reconcile_disk_locked(
+                    fv, file_key, file_path, enqueue_event
+                )
+                if conflict_transition.get("errorCode"):
+                    return self._reconciliation_error_result(fv, conflict_transition)
+                effective_transition = (
+                    conflict_transition if conflict_transition["applied"] else transition
+                )
+                return self._with_external_transition(self._resync_result(fv), effective_transition)
+            except _ConditionalRollbackError:
+                conflict_transition, _snapshot = self._reconcile_disk_locked(
+                    fv, file_key, file_path, enqueue_event
+                )
+                if conflict_transition.get("errorCode"):
+                    return self._reconciliation_error_result(fv, conflict_transition)
+                effective_transition = (
+                    conflict_transition if conflict_transition["applied"] else transition
+                )
+                return self._with_external_transition(self._resync_result(fv), effective_transition)
             except OSError:
                 logger.exception("Failed to write file %s", file_path)
                 return finish(
@@ -661,15 +957,15 @@ class FileVersionStore:
                 user_agent=user_agent,
             )
 
-            return finish(
-                {
-                    "applied": True,
-                    "merged": merged,
-                    "newVersion": fv.version,
-                    "content": new_content,
-                    "appliedChanges": changes_to_apply,
-                }
-            )
+            result = {
+                "applied": True,
+                "merged": merged,
+                "newVersion": fv.version,
+                "content": new_content,
+                "appliedChanges": changes_to_apply,
+            }
+            self._enqueue_event(enqueue_event, "remote_edit", result)
+            return finish(result)
 
     @staticmethod
     def _resync_result(fv: _FileVersion) -> dict:
@@ -681,25 +977,47 @@ class FileVersionStore:
             "content": fv.content,
         }
 
-    def reconcile_disk(self, file_key: str, file_path: str) -> dict:
+    def reconcile_disk(
+        self,
+        file_key: str,
+        file_path: str,
+        *,
+        enqueue_event: Callable[[str, dict], None] | None = None,
+    ) -> dict:
         """Apply the current disk state once and return its version transition."""
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            transition, _snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            transition, _snapshot = self._reconcile_disk_locked(
+                fv, file_key, file_path, enqueue_event
+            )
             return transition
 
-    def read_reconciled_disk(self, file_key: str, file_path: str) -> dict:
+    def read_reconciled_disk(
+        self,
+        file_key: str,
+        file_path: str,
+        *,
+        enqueue_event: Callable[[str, dict], None] | None = None,
+    ) -> dict:
         """Return bytes and metadata from the same locked read used for reconciliation."""
         fv = self._get_or_load_file(file_key, file_path)
         with fv.lock:
-            transition, snapshot = self._reconcile_disk_locked(fv, file_key, file_path)
+            transition, snapshot = self._reconcile_disk_locked(
+                fv, file_key, file_path, enqueue_event
+            )
             return {
                 "transition": transition,
                 "data": snapshot.data if snapshot is not None else None,
                 "modTime": snapshot.mod_time if snapshot is not None else None,
             }
 
-    def apply_external_change(self, file_key: str, file_path: str) -> dict:
+    def apply_external_change(
+        self,
+        file_key: str,
+        file_path: str,
+        *,
+        enqueue_event: Callable[[str, dict], None] | None = None,
+    ) -> dict:
         """Apply an external file modification (e.g., from watchdog).
 
         Reads the current disk content and bumps the version number,
@@ -707,7 +1025,7 @@ class FileVersionStore:
 
         Returns dict with applied/newVersion/content.
         """
-        return self.reconcile_disk(file_key, file_path)
+        return self.reconcile_disk(file_key, file_path, enqueue_event=enqueue_event)
 
     def get_current_version(self, file_key: str) -> int:
         with self._lock:
@@ -793,3 +1111,11 @@ def get_store() -> FileVersionStore:
             if _store is None:
                 _store = FileVersionStore()
     return _store
+
+
+def _initialize_store(storage_dir: str) -> FileVersionStore:
+    """Bind a fresh process-global store to one server lifecycle."""
+    global _store
+    with _store_lock:
+        _store = FileVersionStore(storage_dir=storage_dir)
+        return _store
