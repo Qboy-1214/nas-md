@@ -930,6 +930,9 @@ test('Fullscreen removes a legacy inline Mermaid toolbar', async ({ page }) => {
 test('Fullscreen hides other Mermaid toolbars in the same document', async ({ page }) => {
   await prepareEditor(page);
   await page.evaluate((value) => window._vditor.setValue(value), twoMermaidMarkdown);
+  await expect
+    .poll(async () => await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, '')))
+    .toBe(twoMermaidMarkdown);
   await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(2);
   await expect.poll(async () => page.locator('.mme-overlay-item').count()).toBe(2);
   await rejectNativeFullscreen(page);
