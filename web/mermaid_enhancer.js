@@ -11,6 +11,7 @@
   var _blocks = {};
   var _overlayLayer = null;
   var _fullscreenState = null;
+  var _fullscreenGeneration = 0;
   var _fullscreenListenersInstalled = false;
   var _trackingTimer = null;
 
@@ -163,9 +164,24 @@
       var blockId = ui.getAttribute('data-mme-id');
       var state = _blocks[blockId];
       if (!state || !state.targetEl || !document.contains(state.targetEl)) {
-        if (state && state.fullscreenMode) clearFullscreenState(state);
-        ui.remove();
-        delete _blocks[blockId];
+        if (state && state.fullscreenRemovalPending) return;
+        if (
+          state &&
+          _fullscreenState &&
+          _fullscreenState.state === state &&
+          _fullscreenState.sessionId === state.fullscreenSessionId
+        ) {
+          state.fullscreenRemovalPending = true;
+          exitFullscreen(blockId).finally(function () {
+            if (_blocks[blockId] !== state) return;
+            removeTrackedBlock(blockId, state, ui);
+          });
+          return;
+        }
+        if (state && state.fullscreenMode) {
+          clearFullscreenState(state, state.fullscreenSessionId);
+        }
+        removeTrackedBlock(blockId, state, ui);
         return;
       }
 
@@ -184,6 +200,15 @@
       ui.style.left = targetRect.left - layerRect.left + 'px';
       ui.style.width = targetRect.width + 'px';
     });
+  }
+
+  function removeTrackedBlock(blockId, state, ui) {
+    if (state && state.fullscreenEntry) state.fullscreenEntry.cancelled = true;
+    if (state && state.targetEl && state.targetEl._mmeDragPanCleanup) {
+      state.targetEl._mmeDragPanCleanup();
+    }
+    ui.remove();
+    if (_blocks[blockId] === state || !state) delete _blocks[blockId];
   }
 
   function installFullscreenListeners() {
@@ -222,9 +247,11 @@
       panX: state.panX || 0,
       panY: state.panY || 0,
       theme: state.theme,
+      mode: state.mode,
       transform: svg ? svg.style.transform : '',
       transformOrigin: svg ? svg.style.transformOrigin : '',
       filter: svg ? svg.style.filter : '',
+      opacity: svg ? svg.style.opacity : '',
     };
   }
 
@@ -235,6 +262,7 @@
     state.panX = view.panX;
     state.panY = view.panY;
     state.theme = view.theme;
+    state.mode = view.mode;
     var svg = state.targetEl && state.targetEl.querySelector('svg');
     if (svg) {
       svg.style.transform = view.transform;
@@ -242,16 +270,49 @@
       svg.style.filter = view.filter;
     }
     if (state.uiContainer) {
+      var toolbar = state.uiContainer.querySelector('.mme-toolbar');
+      var codeArea = state.uiContainer.querySelector('.mme-code-area');
+      if (toolbar && codeArea && state.targetEl) {
+        setMode(state.blockId, state.mode, toolbar, state.targetEl, codeArea);
+      }
       var sunIcon = state.uiContainer.querySelector('.mme-icon-sun');
       var moonIcon = state.uiContainer.querySelector('.mme-icon-moon');
       if (sunIcon) sunIcon.style.display = state.theme === 'dark' ? 'none' : '';
       if (moonIcon) moonIcon.style.display = state.theme === 'dark' ? '' : 'none';
     }
+    if (svg) svg.style.opacity = view.opacity;
     state.preFullscreenView = null;
   }
 
+  function createNativeFullscreenChart(state) {
+    var sourceSvg = state.targetEl && state.targetEl.querySelector('svg');
+    if (!sourceSvg || !state.uiContainer) return null;
+    var chart = document.createElement('div');
+    chart.className = 'mme-fullscreen-chart';
+    if (state.mode === 'code') chart.style.display = 'none';
+    chart.appendChild(sourceSvg.cloneNode(true));
+    chart._mmeSvg = chart.querySelector('svg');
+    state.uiContainer.appendChild(chart);
+    state.fullscreenChartEl = chart;
+    return chart;
+  }
+
+  function activeChartElement(state) {
+    return state.fullscreenChartEl || state.targetEl;
+  }
+
+  function removeNativeFullscreenChart(state, chart) {
+    var chartToRemove = chart || state.fullscreenChartEl;
+    if (!chartToRemove) return;
+    if (chartToRemove._mmeDragPanCleanup) chartToRemove._mmeDragPanCleanup();
+    var svg = chartToRemove.querySelector('svg');
+    if (svg) clearTimeout(svg._mmeAnimTimer);
+    chartToRemove.remove();
+    if (state.fullscreenChartEl === chartToRemove) state.fullscreenChartEl = null;
+  }
+
   function resetFullscreenView(id, state) {
-    var target = state.targetEl;
+    var target = activeChartElement(state);
     var svg = target && target.querySelector('svg');
     if (!target || !svg) return;
 
@@ -262,24 +323,38 @@
     state.panY = 0;
     applyTransform(id, target);
 
+    if (target.clientWidth <= 0 || target.clientHeight <= 0) {
+      state.fullscreenNeedsFit = true;
+      return;
+    }
+
     var targetStyle = getComputedStyle(target);
     var paddingX = parseFloat(targetStyle.paddingLeft) + parseFloat(targetStyle.paddingRight);
     var paddingY = parseFloat(targetStyle.paddingTop) + parseFloat(targetStyle.paddingBottom);
     var availableWidth = Math.max(1, target.clientWidth - paddingX);
     var availableHeight = Math.max(1, target.clientHeight - paddingY);
     var baseRect = svg.getBoundingClientRect();
+    if (baseRect.width <= 0 || baseRect.height <= 0) {
+      state.fullscreenNeedsFit = true;
+      return;
+    }
     var fitScale = Math.min(1, availableWidth / baseRect.width, availableHeight / baseRect.height);
 
     state.zoom = Math.max(0.1, fitScale);
     state.panX = Math.max(0, (availableWidth - baseRect.width * state.zoom) / 2);
     state.panY = 0;
     applyTransform(id, target);
+    state.fullscreenNeedsFit = false;
   }
   function markFullscreenElements(state, active) {
     var target = state.targetEl;
     var container = state.uiContainer;
     if (active) {
-      if (target) target.setAttribute('data-mme-fullscreen', 'true');
+      if (target && state.fullscreenMode === 'app') {
+        target.setAttribute('data-mme-fullscreen', 'true');
+      } else if (target) {
+        target.removeAttribute('data-mme-fullscreen');
+      }
       if (container) container.setAttribute('data-mme-fullscreen', 'true');
       document.documentElement.classList.add('mme-fullscreen-active');
       document.body.classList.toggle('mme-app-fullscreen', state.fullscreenMode === 'app');
@@ -289,11 +364,18 @@
     }
   }
 
-  function clearFullscreenState(state) {
+  function clearFullscreenState(state, sessionId) {
     if (!state) return;
-    var isCurrent = _fullscreenState && _fullscreenState.state === state;
+    var isCurrent =
+      _fullscreenState &&
+      _fullscreenState.state === state &&
+      (sessionId === undefined || _fullscreenState.sessionId === sessionId);
+    if (sessionId !== undefined && !isCurrent) return;
     restoreFullscreenView(state);
+    removeNativeFullscreenChart(state);
     state.fullscreenMode = null;
+    state.fullscreenSessionId = null;
+    state.fullscreenNeedsFit = false;
     markFullscreenElements(state, false);
     updateFullscreenButton(state);
     if (state.uiContainer) {
@@ -311,52 +393,101 @@
   async function enterFullscreen(id) {
     var state = _blocks[id];
     if (!state || !state.targetEl || !state.uiContainer) return;
-    if (_fullscreenState && _fullscreenState.state !== state) {
-      await exitFullscreen(_fullscreenState.blockId);
-    }
+    if (state.fullscreenEntry || state.fullscreenSessionId !== null) return;
 
-    _fullscreenState = { blockId: id, mode: null, state: state };
-    captureFullscreenView(state);
-    var root = document.documentElement;
-    if (root && typeof root.requestFullscreen === 'function') {
-      try {
-        await root.requestFullscreen();
-        if (!_fullscreenState || _fullscreenState.state !== state) return;
-        _fullscreenState.mode = 'native';
-        state.fullscreenMode = 'native';
-        markFullscreenElements(state, true);
-        resetFullscreenView(id, state);
-        updateFullscreenButton(state);
-        return;
-      } catch (_error) {
-        // Fall back to an application-level fullscreen view.
+    var entry = { sessionId: ++_fullscreenGeneration, cancelled: false };
+    state.fullscreenEntry = entry;
+    try {
+      if (_fullscreenState && _fullscreenState.state !== state) {
+        await exitFullscreen(_fullscreenState.blockId);
       }
-    }
+      if (
+        entry.cancelled ||
+        state.fullscreenEntry !== entry ||
+        _blocks[id] !== state ||
+        !state.targetEl ||
+        !document.contains(state.targetEl) ||
+        !state.uiContainer ||
+        !document.contains(state.uiContainer) ||
+        _fullscreenState
+      ) {
+        return;
+      }
 
-    if (!_fullscreenState || _fullscreenState.state !== state) return;
-    _fullscreenState.mode = 'app';
-    state.fullscreenMode = 'app';
-    markFullscreenElements(state, true);
-    resetFullscreenView(id, state);
-    updateFullscreenButton(state);
+      var sessionId = entry.sessionId;
+      var fullscreenState = {
+        blockId: id,
+        mode: null,
+        state: state,
+        sessionId: sessionId,
+        chartEl: null,
+        requestPromise: null,
+        exitPromise: null,
+        cancelled: false,
+      };
+      _fullscreenState = fullscreenState;
+      state.fullscreenSessionId = sessionId;
+      state.fullscreenEntry = null;
+      captureFullscreenView(state);
+      var root = state.uiContainer;
+      if (typeof root.requestFullscreen === 'function') {
+        fullscreenState.chartEl = createNativeFullscreenChart(state);
+      }
+      if (fullscreenState.chartEl) {
+        bindDragPan(id, fullscreenState.chartEl);
+        try {
+          fullscreenState.requestPromise = Promise.resolve(root.requestFullscreen());
+          await fullscreenState.requestPromise;
+          if (fullscreenState.cancelled) return;
+          if (!_fullscreenState || _fullscreenState.sessionId !== sessionId) return;
+          fullscreenState.mode = 'native';
+          state.fullscreenMode = 'native';
+          markFullscreenElements(state, true);
+          resetFullscreenView(id, state);
+          updateFullscreenButton(state);
+          return;
+        } catch (_error) {
+          removeNativeFullscreenChart(state, fullscreenState.chartEl);
+          if (fullscreenState.cancelled) return;
+          // Fall back to an application-level fullscreen view.
+        }
+      }
+
+      if (!_fullscreenState || _fullscreenState.sessionId !== sessionId) return;
+      fullscreenState.mode = 'app';
+      state.fullscreenMode = 'app';
+      markFullscreenElements(state, true);
+      resetFullscreenView(id, state);
+      updateFullscreenButton(state);
+    } finally {
+      if (state.fullscreenEntry === entry) state.fullscreenEntry = null;
+    }
   }
 
   async function exitFullscreen(id) {
     if (!_fullscreenState || _fullscreenState.blockId !== id) return;
     var fullscreenState = _fullscreenState;
-    try {
-      if (
-        fullscreenState.mode === 'native' &&
-        document.fullscreenElement &&
-        typeof document.exitFullscreen === 'function'
-      ) {
-        await document.exitFullscreen();
+    if (fullscreenState.exitPromise) return fullscreenState.exitPromise;
+    fullscreenState.cancelled = true;
+    fullscreenState.exitPromise = (async function () {
+      try {
+        if (fullscreenState.requestPromise) {
+          await fullscreenState.requestPromise;
+        }
+        if (
+          (fullscreenState.mode === 'native' || fullscreenState.requestPromise) &&
+          document.fullscreenElement &&
+          typeof document.exitFullscreen === 'function'
+        ) {
+          await document.exitFullscreen();
+        }
+      } catch (_error) {
+        // Always clear the application state even if the browser API rejects.
+      } finally {
+        clearFullscreenState(fullscreenState.state, fullscreenState.sessionId);
       }
-    } catch (_error) {
-      // Always clear the application state even if the browser API rejects.
-    } finally {
-      clearFullscreenState(fullscreenState.state);
-    }
+    })();
+    return fullscreenState.exitPromise;
   }
 
   function handleNativeFullscreenChange() {
@@ -365,7 +496,8 @@
       _fullscreenState.mode === 'native' &&
       !document.fullscreenElement
     ) {
-      clearFullscreenState(_fullscreenState.state);
+      var fullscreenState = _fullscreenState;
+      clearFullscreenState(fullscreenState.state, fullscreenState.sessionId);
     }
   }
 
@@ -436,6 +568,7 @@
 
     var blockId = 'mme_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
     _blocks[blockId] = {
+      blockId: blockId,
       zoom: 1,
       theme: 'light',
       mode: 'chart',
@@ -443,6 +576,11 @@
       targetEl: el,
       uiContainer: null,
       fullscreenMode: null,
+      fullscreenChartEl: null,
+      fullscreenSessionId: null,
+      fullscreenEntry: null,
+      fullscreenRemovalPending: false,
+      fullscreenNeedsFit: false,
       preFullscreenView: null,
     };
 
@@ -543,35 +681,39 @@
 
   function handleAction(id, action, toolbar, chartEl, codeEl, btn) {
     var state = _blocks[id];
+    if (!state) return;
+    var activeChart = activeChartElement(state) || chartEl;
     switch (action) {
       case 'showCode':
-        setMode(id, 'code', toolbar, chartEl, codeEl);
+        setMode(id, 'code', toolbar, activeChart, codeEl);
         break;
       case 'showChart':
-        setMode(id, 'chart', toolbar, chartEl, codeEl);
+        setMode(id, 'chart', toolbar, activeChart, codeEl);
         break;
       case 'toggleTheme':
-        toggleTheme(id, toolbar, chartEl);
+        toggleTheme(id, toolbar, activeChart);
         break;
       case 'zoomIn':
-        setZoom(id, Math.min(state.zoom + 0.25, 3), chartEl, true);
+        setZoom(id, Math.min(state.zoom + 0.25, 3), activeChart, true);
         break;
       case 'zoomOut':
         var minZoom = state.fullscreenMode ? 0.1 : 0.25;
-        setZoom(id, Math.max(state.zoom - 0.25, minZoom), chartEl, true);
+        setZoom(id, Math.max(state.zoom - 0.25, minZoom), activeChart, true);
         break;
       case 'toggleFullscreen':
-        if (state.fullscreenMode) {
+        if (state.fullscreenEntry) {
+          state.fullscreenEntry.cancelled = true;
+        } else if (state.fullscreenSessionId !== null) {
           exitFullscreen(id);
         } else {
           enterFullscreen(id);
         }
         break;
       case 'downloadSVG':
-        downloadSVG(chartEl);
+        downloadSVG(activeChart);
         break;
       case 'downloadPNG':
-        downloadPNG(chartEl);
+        downloadPNG(activeChart);
         break;
       case 'copyCode':
         copyCode(id, btn);
@@ -583,8 +725,7 @@
     var state = _blocks[id];
     var dragging = false, startX = 0, startY = 0, panX = 0, panY = 0;
 
-    // We bind drag to the chartEl, which is still in the main DOM
-    chartEl.addEventListener('mousedown', function (e) {
+    function handleMouseDown(e) {
       if (e.button !== 0) return;
       if (state.mode === 'code') return;
       var svg = chartEl.querySelector('svg');
@@ -603,23 +744,23 @@
       chartEl.style.userSelect = 'none';
       e.preventDefault();
       e.stopPropagation(); // Prevent Vditor from intercepting
-    });
+    }
 
-    document.addEventListener('mousemove', function (e) {
+    function handleMouseMove(e) {
       if (!dragging) return;
       state.panX = panX + (e.clientX - startX);
       state.panY = panY + (e.clientY - startY);
       applyTransform(id, chartEl);
-    });
+    }
 
-    document.addEventListener('mouseup', function () {
+    function handleMouseUp() {
       if (!dragging) return;
       dragging = false;
       chartEl.style.cursor = 'grab';
       chartEl.style.userSelect = '';
-    });
+    }
 
-    chartEl.addEventListener('wheel', function (e) {
+    function handleWheel(e) {
       if (state.mode === 'code') return;
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
@@ -627,13 +768,27 @@
       var delta = e.deltaY < 0 ? 0.1 : -0.1;
       var minZoom = state.fullscreenMode ? 0.1 : 0.25;
       setZoom(id, Math.max(minZoom, Math.min(3, state.zoom + delta)), chartEl, false);
-    });
+    }
+
+    chartEl.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    chartEl.addEventListener('wheel', handleWheel);
 
     chartEl.style.cursor = 'grab';
+    chartEl._mmeDragPanCleanup = function () {
+      dragging = false;
+      chartEl.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      chartEl.removeEventListener('wheel', handleWheel);
+      delete chartEl._mmeDragPanCleanup;
+    };
   }
 
   function applyTransform(id, chartEl) {
     var state = _blocks[id];
+    if (!state) return;
     var svg = chartEl.querySelector('svg');
     if (!svg) return;
     svg.style.transform = 'translate3d(' + (state.panX || 0) + 'px, ' + (state.panY || 0) + 'px, 0px) scale(' + state.zoom + ')';
@@ -652,14 +807,19 @@
 
     if (mode === 'code') {
       if (chartEl._mmeSvg) chartEl._mmeSvg.style.opacity = '0'; // Hide chart
+      if (chartEl.classList.contains('mme-fullscreen-chart')) chartEl.style.display = 'none';
       codeEl.style.display = '';
       chartCtrls.style.display = 'none';
       codeCtrls.style.display = '';
     } else {
       if (chartEl._mmeSvg) chartEl._mmeSvg.style.opacity = '1';
+      if (chartEl.classList.contains('mme-fullscreen-chart')) chartEl.style.display = '';
       codeEl.style.display = 'none';
       chartCtrls.style.display = '';
       codeCtrls.style.display = 'none';
+      if (state.fullscreenNeedsFit && chartEl.classList.contains('mme-fullscreen-chart')) {
+        resetFullscreenView(id, state);
+      }
     }
   }
 

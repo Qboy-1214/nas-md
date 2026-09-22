@@ -2647,6 +2647,27 @@ html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] {
   pointer-events: none !important;
 }
 
+.mme-overlay-item:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: var(--c-canvas, #ffffff);
+}
+
+.mme-fullscreen-chart {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.mme-fullscreen-chart svg {
+  flex: 0 0 auto;
+  max-width: none;
+}
+
 html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-toolbar {
   flex: 0 0 auto;
   padding: 8px 16px !important;
