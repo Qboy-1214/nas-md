@@ -31,12 +31,13 @@ async function scrollToBottom(page) {
     const vd = window._vditor;
     if (!vd) return;
     const mode = vd.getCurrentMode();
-    const el =
+    const base =
       mode === 'sv'
         ? vd.vditor.sv.element
         : mode === 'wysiwyg'
           ? vd.vditor.wysiwyg.element
           : vd.vditor.ir.element;
+    const el = mode === 'sv' ? base : base?.querySelector('.vditor-reset') || base;
     if (!el) return;
     // Try direct scrollTop first
     const maxScroll = el.scrollHeight - el.clientHeight;
@@ -56,12 +57,13 @@ async function getScrollTop(page) {
     const vd = window._vditor;
     if (!vd) return 0;
     const mode = vd.getCurrentMode();
-    const el =
+    const base =
       mode === 'sv'
         ? vd.vditor.sv.element
         : mode === 'wysiwyg'
           ? vd.vditor.wysiwyg.element
           : vd.vditor.ir.element;
+    const el = mode === 'sv' ? base : base?.querySelector('.vditor-reset') || base;
     return el ? el.scrollTop : 0;
   });
 }
@@ -70,38 +72,43 @@ test.describe('光标和滚动位置恢复', () => {
   test('刷新页面后恢复滚动位置', async ({ page }) => {
     const { mountInfo, testFileName } = await ensureTestFile(page);
 
-    const fileEl = page.locator('.tree-item', { hasText: testFileName });
-    await expect(fileEl, 'test file visible in tree').toHaveCount(1);
-    await fileEl.click();
-    await page.waitForFunction(
-      () => {
-        const vd = window._vditor;
-        return vd && vd.getValue().length > 100;
-      },
-      { timeout: 10000 },
-    );
+    try {
+      const fileEl = page.locator('.tree-item', { hasText: testFileName });
+      await expect(fileEl, 'test file visible in tree').toHaveCount(1);
+      await fileEl.click();
+      await page.waitForFunction(
+        () => {
+          const vd = window._vditor;
+          return vd && vd.getValue().length > 100;
+        },
+        { timeout: 10000 },
+      );
 
-    // Scroll to bottom
-    await scrollToBottom(page);
-    const scrollBefore = await getScrollTop(page);
+      // Scroll to bottom
+      await scrollToBottom(page);
+      const scrollBefore = await getScrollTop(page);
 
-    // Reload page
-    await page.reload();
-    await page.waitForSelector('.mount-name', { timeout: 10000 });
-    await page.waitForTimeout(3000);
+      // Reload page
+      await page.reload();
+      await page.waitForSelector('.mount-name', { timeout: 10000 });
 
-    // Verify same file is opened (breadcrumb or editor content)
-    const breadcrumb = page.locator('#breadcrumb');
-    const breadcrumbText = await breadcrumb.textContent();
-    expect(breadcrumbText, 'file auto-restored after reload').toContain(testFileName);
+      // Wait for the saved file to be restored, including under a loaded full-suite server.
+      await expect(page.locator('#breadcrumb'), 'file auto-restored after reload').toContainText(
+        testFileName,
+        { timeout: 15000 },
+      );
 
-    // Check scroll position restored (if scrollable)
-    const scrollAfter = await getScrollTop(page);
-    if (scrollBefore > 0) {
-      expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThan(200);
+      // Check scroll position restored (if scrollable)
+      if (scrollBefore > 0) {
+        await expect
+          .poll(async () => Math.abs((await getScrollTop(page)) - scrollBefore), {
+            timeout: 5000,
+          })
+          .toBeLessThan(200);
+      }
+    } finally {
+      await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
     }
-
-    await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
 
   test('刷新页面后恢复标题位置', async ({ page }) => {

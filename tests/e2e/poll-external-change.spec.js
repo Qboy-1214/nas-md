@@ -1,3 +1,5 @@
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
 import { deleteAdminFile, getWritableAdminMount, putAdminFile } from './helpers/admin.js';
 
@@ -68,7 +70,7 @@ test.describe('文件版本号驱动协同编辑', () => {
     await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
 
-  test('轮询跳过有未保存修改的编辑器', async ({ page }) => {
+  test('dirty 编辑器延后外部更新并在保存时合并', async ({ page }) => {
     const mountInfo = await getWritableAdminMount(page);
 
     // Create a fresh test file
@@ -76,41 +78,94 @@ test.describe('文件版本号驱动协同编辑', () => {
     const content = '# Dirty Test\n\nContent before external change.';
     await putAdminFile(page, mountInfo.id, `/${testFileName}`, content);
 
-    // Reload and open via sidebar
-    await page.reload();
-    await page.waitForSelector('.mount-name', { timeout: 10000 });
-    await page.waitForTimeout(1500);
-    const mountEl = page.locator('.mount-name', { hasText: mountInfo.name });
-    await mountEl.click();
-    await page.waitForTimeout(2000);
+    let previousAutoSave;
+    try {
+      // Reload and open via sidebar
+      await page.reload();
+      await page.waitForSelector('.mount-name', { timeout: 10000 });
+      await page.waitForTimeout(1500);
+      const mountEl = page.locator('.mount-name', { hasText: mountInfo.name });
+      await mountEl.click();
+      await page.waitForTimeout(2000);
 
-    const fileEl = page.locator('.tree-item', { hasText: testFileName });
-    await expect(fileEl, 'test file visible in tree').toHaveCount(1);
-    await fileEl.click();
-    await page.waitForTimeout(2000);
+      const fileEl = page.locator('.tree-item', { hasText: testFileName });
+      await expect(fileEl, 'test file visible in tree').toHaveCount(1);
+      await fileEl.click();
+      await page.waitForFunction(() => window._vditor?.getValue().includes('Dirty Test'));
+      const mountPath = await page.evaluate(
+        (mountId) => window.state.mounts.find((mount) => mount.id === mountId)?.path,
+        mountInfo.id,
+      );
+      expect(mountPath, 'writable admin mount exposes its test path').toBeTruthy();
 
-    // Type to create unsaved changes
-    const vditorInput = page.locator('.vditor-ir');
-    await vditorInput.click();
-    await page.keyboard.type('UNSAVED ');
-    await page.waitForTimeout(500);
+      previousAutoSave = await page.evaluate(() => {
+        const wasEnabled = window.state.autoSave;
+        window.toggleAutoSave(false);
+        window._vditor.setValue(`${window._vditor.getValue()}\n\nUNSAVED LOCAL`);
+        window.onEditorInput();
+        return wasEnabled;
+      });
+      await expect.poll(() => page.evaluate(() => window.state.dirty)).toBe(true);
 
-    const hasChanges = await page.evaluate(() => {
-      return window._vditor.getValue() !== window._originalContent;
-    });
-    expect(hasChanges).toBe(true);
+      const before = await page.evaluate(() => {
+        const fileKey = `${window.state.currentMountId}:${window.state.currentPath}`;
+        return {
+          editor: window._vditor.getValue(),
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+          originalContent: window._originalContent,
+          lastSavedContent: window._lastSavedContent,
+          fileVersion: window.state.fileVersions[fileKey],
+          dirty: window.state.dirty,
+        };
+      });
 
-    // Modify file externally
-    const externalContent = '## External while dirty\n\nShould not auto-update';
-    await putAdminFile(page, mountInfo.id, `/${testFileName}`, externalContent);
+      // Modify the file externally while the editor has a protected local draft.
+      const externalContent = '## External while dirty\n\nShould merge after save';
+      await writeFile(join(mountPath, testFileName), externalContent, 'utf8');
 
-    // Wait for poll — editor should NOT auto-update
-    await page.waitForTimeout(7000);
-    const contentResult = await page.evaluate(() => window._vditor.getValue());
-    expect(contentResult).toContain('UNSAVED');
-    expect(contentResult).not.toContain('External while dirty');
+      await expect
+        .poll(() => page.evaluate(() => window.state.pendingRemoteVersion), { timeout: 10000 })
+        .toBeGreaterThan(before.baseVersion);
+      await expect(page.locator('#toast')).toContainText('检测到远端更新，将在保存时自动合并');
 
-    // Cleanup
-    await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
+      const deferred = await page.evaluate(() => {
+        const fileKey = `${window.state.currentMountId}:${window.state.currentPath}`;
+        return {
+          editor: window._vditor.getValue(),
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+          originalContent: window._originalContent,
+          lastSavedContent: window._lastSavedContent,
+          fileVersion: window.state.fileVersions[fileKey],
+          dirty: window.state.dirty,
+          pendingRemoteVersion: window.state.pendingRemoteVersion,
+        };
+      });
+      const { pendingRemoteVersion, ...deferredSnapshot } = deferred;
+      expect(deferredSnapshot).toEqual(before);
+      expect(pendingRemoteVersion).toBeGreaterThan(before.baseVersion);
+
+      await page.evaluate(() => window.saveFile({ silent: true }));
+      const saved = await page.evaluate(() => ({
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+        dirty: window.state.dirty,
+        pendingRemoteVersion: window.state.pendingRemoteVersion,
+      }));
+      expect(saved.editor).toContain('External while dirty');
+      expect(saved.editor).toContain('UNSAVED LOCAL');
+      expect(saved.baseContent).toBe(saved.editor);
+      expect(saved.originalContent).toBe(saved.editor);
+      expect(saved.dirty).toBe(false);
+      expect(saved.pendingRemoteVersion).toBeNull();
+    } finally {
+      if (previousAutoSave !== undefined) {
+        await page.evaluate((enabled) => window.toggleAutoSave(enabled), previousAutoSave);
+      }
+      await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
+    }
   });
 });
