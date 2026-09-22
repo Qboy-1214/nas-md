@@ -3488,7 +3488,7 @@ async function saveFile(options = {}) {
     const fileKey = saveContext.mountId + ':' + saveContext.path;
     const previous = _locallyAcknowledgedSaves.get(fileKey);
     if (previous && saveToken <= previous.saveToken) return previous;
-    const acknowledgement = { saveToken, content: _normContent(acknowledgedContent) };
+    const acknowledgement = { saveToken, content: acknowledgedContent };
     _locallyAcknowledgedSaves.delete(fileKey);
     _locallyAcknowledgedSaves.set(fileKey, acknowledgement);
     while (_locallyAcknowledgedSaves.size > MAX_LOCAL_SAVE_ACKNOWLEDGEMENTS) {
@@ -3512,10 +3512,14 @@ async function saveFile(options = {}) {
       }
     }
     const newerAcknowledgement = coveringAcknowledgement || getNewerLocalAcknowledgement();
-    const matchesSubmittedContent = _normContent(draftContent) === _normContent(fallbackContent);
+    const matchesSubmittedContent = draftContent === fallbackContent;
     const matchesAcknowledgedContent =
-      newerAcknowledgement &&
-      _normContent(draftContent) === _normContent(newerAcknowledgement.content);
+      newerAcknowledgement && draftContent === newerAcknowledgement.content;
+    const matchesCurrentConfirmedSnapshot =
+      currentFileMatches &&
+      Number(state.baseVersion) > Number(saveContext.baseVersion) &&
+      draftContent === state.baseContent;
+    if (matchesCurrentConfirmedSnapshot) return false;
     if (newerAcknowledgement && (matchesSubmittedContent || matchesAcknowledgedContent)) {
       return false;
     }
@@ -3531,12 +3535,15 @@ async function saveFile(options = {}) {
     if (
       draft &&
       typeof draft.content === 'string' &&
-      (_normContent(draft.content) === _normContent(fallbackContent) ||
-        _normContent(draft.content) === _normContent(acknowledgedContent))
+      (draft.content === fallbackContent || draft.content === acknowledgedContent)
     ) {
       clearLocalStorage(saveContext.path, saveContext.mountId);
     }
   };
+  const hasValidSaveSnapshot = (resp) =>
+    Number.isSafeInteger(resp.newVersion) &&
+    resp.newVersion >= 0 &&
+    typeof resp.content === 'string';
   const validateSaveResponse = (resp) => {
     if (!resp || typeof resp !== 'object') throw new Error('Invalid response from server');
     if (resp.errorCode) throw new Error(resp.message || 'Unable to save file');
@@ -3545,10 +3552,7 @@ async function saveFile(options = {}) {
       typeof resp.applied === 'boolean' &&
       (resp.resyncRequired === undefined || typeof resp.resyncRequired === 'boolean') &&
       !(resp.applied && resp.resyncRequired);
-    const hasValidSnapshot =
-      Number.isSafeInteger(resp.newVersion) &&
-      resp.newVersion >= 0 &&
-      typeof resp.content === 'string';
+    const hasValidSnapshot = hasValidSaveSnapshot(resp);
     if (!hasValidOutcome || ((resp.applied || resp.resyncRequired) && !hasValidSnapshot)) {
       throw new Error('Invalid response from server');
     }
@@ -3556,9 +3560,7 @@ async function saveFile(options = {}) {
 
   const watchdogTimer = setTimeout(() => {
     if (_activeSaveToken === saveToken) {
-      console.error('[saveFile] timeout detected, resetting _saveInProgress');
-      _activeSaveToken = null;
-      _saveInProgress = false;
+      console.error('[saveFile] request is still pending after 15 seconds');
     }
   }, 15000);
 
@@ -3687,8 +3689,8 @@ async function saveFile(options = {}) {
           const confirmsCurrentEditor =
             isCurrentSaveContext() &&
             state.baseVersion === submittedBaseVersion &&
-            _normContent(currentContent) === _normContent(submittedContent) &&
-            _normContent(submittedContent) === _normContent(submittedBaseContent) &&
+            currentContent === submittedContent &&
+            submittedContent === submittedBaseContent &&
             !hasHigherPendingVersion;
           if (confirmsCurrentEditor) {
             recordLocalAcknowledgement(submittedContent);
@@ -3721,12 +3723,14 @@ async function saveFile(options = {}) {
         );
 
         validateSaveResponse(resp);
+        const acknowledgesCanonicalSnapshot =
+          resp.applied || (!resp.resyncRequired && hasValidSaveSnapshot(resp));
 
         if (!isCurrentSaveContext()) {
           const observedVersion = getSaveContextObservedVersion();
           const hasStaleSnapshot =
-            (resp.applied || resp.resyncRequired) && resp.newVersion < observedVersion;
-          if (resp.applied && !hasStaleSnapshot) {
+            acknowledgesCanonicalSnapshot && resp.newVersion < observedVersion;
+          if (acknowledgesCanonicalSnapshot && !hasStaleSnapshot) {
             const acknowledgement = recordLocalAcknowledgement(resp.content);
             const persisted = persistSaveContextDraft(submittedContent, acknowledgement);
             if (!persisted) clearCoveredSaveContextDraft(submittedContent, resp.content);
@@ -3736,25 +3740,8 @@ async function saveFile(options = {}) {
           console.log('[saveFile] ignored response: active file changed');
           return;
         }
-        if (!ownsCurrentSaveOutcome()) {
+        if (!resp.resyncRequired && !ownsCurrentSaveOutcome()) {
           console.log('[saveFile] ignored response: save transaction was superseded');
-          return;
-        }
-
-        const acknowledgedVersion = Math.max(
-          Number(state.baseVersion) || 0,
-          Number(state.fileVersions[fileKey]) || 0,
-        );
-        if ((resp.applied || resp.resyncRequired) && resp.newVersion < acknowledgedVersion) {
-          console.warn('[saveFile] ignored stale response version', {
-            responseVersion: resp.newVersion,
-            acknowledgedVersion,
-          });
-          const liveContent = window._vditor.getValue();
-          if (_normContent(liveContent) !== _normContent(state.baseContent)) {
-            markDirty();
-            saveToLocalStorage(state.currentPath, liveContent);
-          }
           return;
         }
 
@@ -3790,7 +3777,24 @@ async function saveFile(options = {}) {
           return;
         }
 
-        if (!resp.applied) {
+        const acknowledgedVersion = Math.max(
+          Number(state.baseVersion) || 0,
+          Number(state.fileVersions[fileKey]) || 0,
+        );
+        if (acknowledgesCanonicalSnapshot && resp.newVersion < acknowledgedVersion) {
+          console.warn('[saveFile] ignored stale response version', {
+            responseVersion: resp.newVersion,
+            acknowledgedVersion,
+          });
+          const liveContent = window._vditor.getValue();
+          if (liveContent !== state.baseContent) {
+            markDirty();
+            saveToLocalStorage(state.currentPath, liveContent);
+          }
+          return;
+        }
+
+        if (!acknowledgesCanonicalSnapshot) {
           console.log('[saveFile] changes not applied', resp);
           markDirty();
           saveToLocalStorage(state.currentPath, window._vditor.getValue());
@@ -3813,9 +3817,9 @@ async function saveFile(options = {}) {
 
         // Reconcile edits made while this request was in flight with the canonical response.
         const currentContentNow = window._vditor.getValue();
-        if (_normContent(currentContentNow) === _normContent(submittedContent)) {
+        if (currentContentNow === submittedContent) {
           window._vditor.setValue(resp.content);
-          clearLocalStorage(state.currentPath);
+          clearCoveredSaveContextDraft(submittedContent, resp.content);
           markClean();
         } else {
           const rebasedContent = window.nasmdDiff.rebaseContent(
@@ -3867,8 +3871,6 @@ async function saveFile(options = {}) {
     const ownsSaveLock = _activeSaveToken === saveToken;
     if (ownsSaveLock) {
       _activeSaveToken = null;
-      _saveInProgress = false;
-    } else if (_activeSaveToken === null) {
       _saveInProgress = false;
     }
     if (!silent && btn && _activeSaveToken === null) {

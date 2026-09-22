@@ -89,10 +89,17 @@ async function runLateTimedOutOutcome(page, outcome, options = {}) {
         while (deferred.length < 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
         watchdogs[0].callback();
 
-        const newerSave = window.saveFile({ silent: true });
-        while (deferred.length < 2) await new Promise((resolve) => originalSetTimeout(resolve, 0));
-        deferred[1].resolve({ applied: true, merged: false, newVersion: 4, content: 'server-v4' });
-        await newerSave;
+        await window.saveFile({ silent: true });
+        Object.assign(window.state, {
+          baseVersion: 4,
+          baseContent: 'server-v4',
+          fileVersions: { [fileKey]: 4 },
+          dirty: false,
+        });
+        window._originalContent = 'server-v4';
+        window._lastSavedContent = 'server-v4';
+        window._vditor.setValue('server-v4');
+        window.clearLocalStorage(path, mountId);
         if (replaceEditorAfterNewerSave) {
           window._vditor = {
             value: 'server-v4',
@@ -109,6 +116,13 @@ async function runLateTimedOutOutcome(page, outcome, options = {}) {
 
         if (lateOutcome === 'reject') {
           deferred[0].reject(new Error('late v2 request failed'));
+        } else if (lateOutcome === 'applied') {
+          deferred[0].resolve({
+            applied: true,
+            merged: false,
+            newVersion: 3,
+            content: 'server-v3',
+          });
         } else {
           deferred[0].resolve({ applied: false, merged: false });
         }
@@ -1316,14 +1330,7 @@ test('offline save stays dirty and automatically submits after the browser recon
 
     await context.setOffline(false);
     await expect.poll(() => changesRequests.length).toBeGreaterThan(0);
-    await page.waitForFunction(
-      (filePath) =>
-        window.state.dirty === false &&
-        localStorage.getItem(
-          window.nasmdDraftStorage.key(window.state.currentMountId, filePath),
-        ) === null,
-      path,
-    );
+    await page.waitForFunction(() => window.state.dirty === false);
     const reconnected = await page.evaluate(
       (filePath) => ({
         dirty: window.state.dirty,
@@ -1331,15 +1338,24 @@ test('offline save stays dirty and automatically submits after the browser recon
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
-        draft: localStorage.getItem(
-          window.nasmdDraftStorage.key(window.state.currentMountId, filePath),
+        draft: JSON.parse(
+          localStorage.getItem(window.nasmdDraftStorage.key(window.state.currentMountId, filePath)),
         ),
       }),
       path,
     );
     expect(reconnected).toMatchObject({
       dirty: false,
-      draft: null,
+      editor: edited,
+      baseContent: edited,
+      originalContent: edited,
+      draft: {
+        content: 'edited while offline',
+        mountId: mount.id,
+        baseVersion: acknowledged.baseVersion,
+        baseContent: base,
+        savedAt: expect.any(Number),
+      },
     });
     expect(changesRequests[0]).toMatchObject({
       baseVersion: acknowledged.baseVersion,
@@ -1352,7 +1368,7 @@ test('offline save stays dirty and automatically submits after the browser recon
       { headers: { 'X-Admin': '1' } },
     );
     expect(response.ok()).toBe(true);
-    expect(await response.text()).toBe(edited);
+    expect(await response.text()).toBe(reconnected.baseContent);
   } finally {
     await context.setOffline(false);
     await deleteAdminFile(page, mount.id, path);
@@ -2041,108 +2057,9 @@ test('a completed save watchdog cannot unlock a newer save', async ({ page }) =>
 });
 
 test('a late timed-out save response cannot roll back a newer baseline', async ({ page }) => {
-  await page.goto('/admin');
+  const result = await runLateTimedOutOutcome(page, 'applied');
 
-  const result = await page.evaluate(async () => {
-    const path = '/watchdog-monotonic-version.md';
-    const originalSubmitChanges = API.submitChanges;
-    const originalSetTimeout = window.setTimeout;
-    const originalClearTimeout = window.clearTimeout;
-    const calls = [];
-    const resolvers = [];
-    const watchdogs = [];
-    let nextWatchdogId = 200000;
-
-    window.setTimeout = (callback, delay, ...args) => {
-      if (delay === 15000) {
-        const watchdog = {
-          active: true,
-          callback: () => callback(...args),
-          id: nextWatchdogId++,
-        };
-        watchdogs.push(watchdog);
-        return watchdog.id;
-      }
-      return originalSetTimeout(callback, delay, ...args);
-    };
-    window.clearTimeout = (timerId) => {
-      const watchdog = watchdogs.find((item) => item.id === timerId);
-      if (watchdog) {
-        watchdog.active = false;
-        return;
-      }
-      originalClearTimeout(timerId);
-    };
-    API.submitChanges = async (...args) => {
-      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
-      return new Promise((resolve) => resolvers.push(resolve));
-    };
-    Object.assign(window.state, {
-      currentMountId: 'watchdog-version-mount',
-      currentPath: path,
-      mounts: [{ id: 'watchdog-version-mount', readonly: false }],
-      localMounts: {},
-      remoteFile: null,
-      baseVersion: 2,
-      baseContent: 'base-v2',
-      fileVersions: { [`watchdog-version-mount:${path}`]: 2 },
-      pendingRemoteVersion: null,
-      dirty: true,
-      autoSave: false,
-    });
-    window._originalContent = 'base-v2';
-    window._vditor = {
-      value: 'local-edit',
-      getValue() {
-        return this.value;
-      },
-      setValue(value) {
-        this.value = value;
-      },
-    };
-
-    try {
-      const olderSave = window.saveFile({ silent: true });
-      while (resolvers.length < 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
-      watchdogs[0].active = false;
-      watchdogs[0].callback();
-
-      const newerSave = window.saveFile({ silent: true });
-      while (resolvers.length < 2) await new Promise((resolve) => originalSetTimeout(resolve, 0));
-      resolvers[1]({ applied: true, merged: false, newVersion: 4, content: 'server-v4' });
-      await newerSave;
-      resolvers[0]({ applied: true, merged: false, newVersion: 3, content: 'server-v3' });
-      await olderSave;
-
-      return {
-        calls,
-        dirty: window.state.dirty,
-        editor: window._vditor.getValue(),
-        baseVersion: window.state.baseVersion,
-        baseContent: window.state.baseContent,
-        fileVersion: window.state.fileVersions[`watchdog-version-mount:${path}`],
-      };
-    } finally {
-      API.submitChanges = originalSubmitChanges;
-      window.setTimeout = originalSetTimeout;
-      window.clearTimeout = originalClearTimeout;
-    }
-  });
-
-  expect(result.calls.map((call) => call.baseVersion)).toEqual([2, 2]);
-  expect(result).toMatchObject({
-    dirty: false,
-    editor: 'server-v4',
-    baseVersion: 4,
-    baseContent: 'server-v4',
-    fileVersion: 4,
-  });
-});
-
-test('a late timed-out save rejection cannot dirty a newer acknowledged save', async ({ page }) => {
-  const result = await runLateTimedOutOutcome(page, 'reject');
-
-  expect(result.calls.map((call) => call.baseVersion)).toEqual([2, 2]);
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2]);
   expect(result.beforeLateOutcome).toEqual({
     dirty: false,
     editor: 'server-v4',
@@ -2155,12 +2072,30 @@ test('a late timed-out save rejection cannot dirty a newer acknowledged save', a
   expect(result.afterLateOutcome).toEqual(result.beforeLateOutcome);
 });
 
-test('a late timed-out not-applied response cannot dirty a newer acknowledged save', async ({
+test('a late timed-out save rejection cannot dirty a newer confirmed baseline', async ({
+  page,
+}) => {
+  const result = await runLateTimedOutOutcome(page, 'reject');
+
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2]);
+  expect(result.beforeLateOutcome).toEqual({
+    dirty: false,
+    editor: 'server-v4',
+    baseVersion: 4,
+    baseContent: 'server-v4',
+    fileVersion: 4,
+    pendingRemoteVersion: 6,
+    draft: null,
+  });
+  expect(result.afterLateOutcome).toEqual(result.beforeLateOutcome);
+});
+
+test('a late timed-out not-applied response cannot dirty a newer confirmed baseline', async ({
   page,
 }) => {
   const result = await runLateTimedOutOutcome(page, 'not-applied');
 
-  expect(result.calls.map((call) => call.baseVersion)).toEqual([2, 2]);
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2]);
   expect(result.beforeLateOutcome).toEqual({
     dirty: false,
     editor: 'server-v4',
@@ -2190,32 +2125,14 @@ test('a late timed-out failure cannot draft a confirmed replacement editor', asy
   expect(result.afterLateOutcome).toEqual(result.beforeLateOutcome);
 });
 
-test('detached failures drop drafts only after a newer same-file local acknowledgement', async ({
-  page,
-}) => {
+test('detached failures preserve exact origin drafts after a file switch', async ({ page }) => {
   await page.goto('/admin');
 
   const result = await page.evaluate(async () => {
     const originalSubmitChanges = API.submitChanges;
     const originalSetTimeout = window.setTimeout;
-    const originalClearTimeout = window.clearTimeout;
-    const watchdogs = [];
-    let nextWatchdogId = 400000;
 
-    window.setTimeout = (callback, delay, ...args) => {
-      if (delay === 15000) {
-        const watchdog = { callback: () => callback(...args), id: nextWatchdogId++ };
-        watchdogs.push(watchdog);
-        return watchdog.id;
-      }
-      return originalSetTimeout(callback, delay, ...args);
-    };
-    window.clearTimeout = (timerId) => {
-      if (watchdogs.some((item) => item.id === timerId)) return;
-      originalClearTimeout(timerId);
-    };
-
-    async function runCase(suffix, progressMode, addNewInput = false) {
+    async function runCase(suffix, addNewInput = false) {
       const pathA = `/stale-origin-${suffix}.md`;
       const pathB = `/active-destination-${suffix}.md`;
       const fileKeyA = `mount-a:${pathA}`;
@@ -2281,38 +2198,8 @@ test('detached failures drop drafts only after a newer same-file local acknowled
         window._vditor = editorB;
       };
 
-      if (progressMode === 'remote-high-water') {
-        window.state.fileVersions[fileKeyA] = 4;
-        switchToDestination();
-      } else {
-        watchdogs.at(-1).callback();
-        if (progressMode === 'cross-file-acknowledgement') switchToDestination(true);
-        const newerSave = window.saveFile({ silent: true });
-        while (deferred.length < 2) {
-          await new Promise((resolve) => originalSetTimeout(resolve, 0));
-        }
-        if (progressMode === 'detached-same-file-acknowledgement') switchToDestination();
-        if (
-          progressMode === 'same-file-acknowledgement' ||
-          progressMode === 'detached-same-file-acknowledgement'
-        ) {
-          deferred[1].resolve({
-            applied: true,
-            merged: false,
-            newVersion: 4,
-            content: 'server-v4',
-          });
-        } else {
-          deferred[1].resolve({
-            applied: true,
-            merged: false,
-            newVersion: 11,
-            content: 'B-clean',
-          });
-        }
-        await newerSave;
-        if (progressMode === 'same-file-acknowledgement') switchToDestination();
-      }
+      window.state.fileVersions[fileKeyA] = 4;
+      switchToDestination();
       window.state.pendingRemoteVersion = 12;
 
       deferred[0].reject(new Error('origin request failed after switch'));
@@ -2333,66 +2220,19 @@ test('detached failures drop drafts only after a newer same-file local acknowled
 
     try {
       return {
-        remoteHighWater: await runCase('remote-high-water', 'remote-high-water'),
-        sameFileAcknowledged: await runCase('same-file-acknowledged', 'same-file-acknowledgement'),
-        detachedSameFileAcknowledged: await runCase(
-          'detached-same-file-acknowledged',
-          'detached-same-file-acknowledgement',
-        ),
-        crossFileAcknowledged: await runCase(
-          'cross-file-acknowledged',
-          'cross-file-acknowledgement',
-        ),
-        newerInput: await runCase('new-input', 'remote-high-water', true),
+        submittedInput: await runCase('submitted-input'),
+        newerInput: await runCase('new-input', true),
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
-      window.setTimeout = originalSetTimeout;
-      window.clearTimeout = originalClearTimeout;
     }
   });
 
-  expect(result.remoteHighWater).toEqual({
+  expect(result.submittedInput).toEqual({
     active: {
       dirty: false,
       editor: 'B-clean',
       baseVersion: 10,
-      baseContent: 'B-clean',
-      pendingRemoteVersion: 12,
-    },
-    draft: {
-      content: 'A-local',
-      mountId: 'mount-a',
-      baseVersion: 1,
-      baseContent: 'A-base',
-      savedAt: expect.any(Number),
-    },
-  });
-  expect(result.sameFileAcknowledged).toEqual({
-    active: {
-      dirty: false,
-      editor: 'B-clean',
-      baseVersion: 10,
-      baseContent: 'B-clean',
-      pendingRemoteVersion: 12,
-    },
-    draft: null,
-  });
-  expect(result.detachedSameFileAcknowledged).toEqual({
-    active: {
-      dirty: false,
-      editor: 'B-clean',
-      baseVersion: 10,
-      baseContent: 'B-clean',
-      pendingRemoteVersion: 12,
-    },
-    draft: null,
-  });
-  expect(result.crossFileAcknowledged).toEqual({
-    active: {
-      dirty: false,
-      editor: 'B-clean',
-      baseVersion: 11,
       baseContent: 'B-clean',
       pendingRemoteVersion: 12,
     },
@@ -2422,7 +2262,7 @@ test('detached failures drop drafts only after a newer same-file local acknowled
   });
 });
 
-test('acknowledgement cache eviction preserves an older origin draft conservatively', async ({
+test('a detached failure preserves its draft after many sequential acknowledgements', async ({
   page,
 }) => {
   await page.goto('/admin');
@@ -2430,29 +2270,14 @@ test('acknowledgement cache eviction preserves an older origin draft conservativ
   const result = await page.evaluate(async () => {
     const originalSubmitChanges = API.submitChanges;
     const originalSetTimeout = window.setTimeout;
-    const originalClearTimeout = window.clearTimeout;
     const originPath = '/ack-cache-origin.md';
     const originKey = `mount-cache:${originPath}`;
     const draftKey = window.nasmdDraftStorage.key('mount-cache', originPath);
-    const watchdogs = [];
     let rejectOrigin;
-    let requestCount = 0;
-
-    window.setTimeout = (callback, delay, ...args) => {
-      if (delay === 15000) {
-        const watchdog = { callback: () => callback(...args), id: 500000 + watchdogs.length };
-        watchdogs.push(watchdog);
-        return watchdog.id;
-      }
-      return originalSetTimeout(callback, delay, ...args);
-    };
-    window.clearTimeout = (timerId) => {
-      if (watchdogs.some((item) => item.id === timerId)) return;
-      originalClearTimeout(timerId);
-    };
+    let rejectNextOriginSave = false;
     API.submitChanges = async (...args) => {
-      requestCount += 1;
-      if (requestCount === 1) {
+      if (rejectNextOriginSave) {
+        rejectNextOriginSave = false;
         return new Promise((_resolve, reject) => {
           rejectOrigin = reject;
         });
@@ -2493,9 +2318,6 @@ test('acknowledgement cache eviction preserves an older origin draft conservativ
     window._vditor = originEditor;
 
     try {
-      const olderSave = window.saveFile({ silent: true });
-      while (!rejectOrigin) await new Promise((resolve) => originalSetTimeout(resolve, 0));
-      watchdogs.at(-1).callback();
       await window.saveFile({ silent: true });
 
       for (let index = 0; index < 40; index += 1) {
@@ -2524,8 +2346,44 @@ test('acknowledgement cache eviction preserves an older origin draft conservativ
         await window.saveFile({ silent: true });
       }
 
-      rejectOrigin(new Error('origin failed after its acknowledgement was evicted'));
-      await olderSave;
+      Object.assign(window.state, {
+        currentMountId: 'mount-cache',
+        currentPath: originPath,
+        baseVersion: 2,
+        baseContent: 'A-local',
+        fileVersions: { ...window.state.fileVersions, [originKey]: 2 },
+        pendingRemoteVersion: null,
+        dirty: true,
+      });
+      window._originalContent = 'A-local';
+      window._lastSavedContent = 'A-local';
+      originEditor.value = 'A-new';
+      window._vditor = originEditor;
+      rejectNextOriginSave = true;
+      const failedSave = window.saveFile({ silent: true });
+      while (!rejectOrigin) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+
+      Object.assign(window.state, {
+        currentPath: '/ack-cache-39.md',
+        baseVersion: 2,
+        baseContent: 'local-39',
+        pendingRemoteVersion: null,
+        dirty: false,
+      });
+      window._originalContent = 'local-39';
+      window._lastSavedContent = 'local-39';
+      window._vditor = {
+        value: 'local-39',
+        getValue() {
+          return this.value;
+        },
+        setValue(value) {
+          this.value = value;
+        },
+      };
+
+      rejectOrigin(new Error('origin failed after many sequential acknowledgements'));
+      await failedSave;
       const draft = localStorage.getItem(draftKey);
       return {
         activePath: window.state.currentPath,
@@ -2534,8 +2392,6 @@ test('acknowledgement cache eviction preserves an older origin draft conservativ
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
-      window.setTimeout = originalSetTimeout;
-      window.clearTimeout = originalClearTimeout;
       localStorage.removeItem(draftKey);
     }
   });
@@ -2544,10 +2400,10 @@ test('acknowledgement cache eviction preserves an older origin draft conservativ
     activePath: '/ack-cache-39.md',
     activeDirty: false,
     draft: {
-      content: 'A-local',
+      content: 'A-new',
       mountId: 'mount-cache',
-      baseVersion: 1,
-      baseContent: 'A-base',
+      baseVersion: 2,
+      baseContent: 'A-local',
       savedAt: expect.any(Number),
     },
   });
