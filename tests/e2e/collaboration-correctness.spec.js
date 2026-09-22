@@ -10,6 +10,10 @@ function uniqueTestPath(stem) {
   return `/${stem}-${Date.now()}-${Math.random().toString(16).slice(2)}.md`;
 }
 
+function scopedDraftKey(mountId, path) {
+  return `nasmd_draft_v2_${encodeURIComponent(mountId)}:${encodeURIComponent(path)}`;
+}
+
 test('paragraph contract matches the backend', async ({ page }) => {
   await page.goto('/admin');
 
@@ -628,7 +632,10 @@ test('offline save scopes its draft to the current mount for collaboration gatin
       },
     };
     const onlineDescriptor = Object.getOwnPropertyDescriptor(navigator, 'onLine');
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKeyA = window.nasmdDraftStorage.key('mount-a', path);
+    const draftKeyB = window.nasmdDraftStorage.key('mount-b', path);
+    localStorage.removeItem(draftKeyA);
+    localStorage.removeItem(draftKeyB);
     Object.assign(window.state, {
       currentMountId: 'mount-a',
       currentPath: path,
@@ -655,7 +662,7 @@ test('offline save scopes its draft to the current mount for collaboration gatin
     try {
       Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
       await window.saveFile();
-      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${path}`));
+      const draft = JSON.parse(localStorage.getItem(draftKeyA));
 
       window.nasmdSync.handleRemoteEdit({
         type: 'remote_edit',
@@ -701,7 +708,8 @@ test('offline save scopes its draft to the current mount for collaboration gatin
         },
       };
     } finally {
-      localStorage.removeItem(`nasmd_draft_${path}`);
+      localStorage.removeItem(draftKeyA);
+      localStorage.removeItem(draftKeyB);
       if (onlineDescriptor) {
         Object.defineProperty(navigator, 'onLine', onlineDescriptor);
       } else {
@@ -768,7 +776,8 @@ test('offline save stays dirty and automatically submits after the browser recon
     await page.evaluate(() => window.saveFile({ silent: true }));
 
     const offline = await page.evaluate((filePath) => {
-      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`));
+      const key = window.nasmdDraftStorage.key(window.state.currentMountId, filePath);
+      const draft = JSON.parse(localStorage.getItem(key));
       return {
         dirty: window.state.dirty,
         draft,
@@ -789,7 +798,10 @@ test('offline save stays dirty and automatically submits after the browser recon
     await expect.poll(() => changesRequests.length).toBeGreaterThan(0);
     await page.waitForFunction(
       (filePath) =>
-        window.state.dirty === false && localStorage.getItem(`nasmd_draft_${filePath}`) === null,
+        window.state.dirty === false &&
+        localStorage.getItem(
+          window.nasmdDraftStorage.key(window.state.currentMountId, filePath),
+        ) === null,
       path,
     );
     const reconnected = await page.evaluate(
@@ -799,7 +811,9 @@ test('offline save stays dirty and automatically submits after the browser recon
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
-        draft: localStorage.getItem(`nasmd_draft_${filePath}`),
+        draft: localStorage.getItem(
+          window.nasmdDraftStorage.key(window.state.currentMountId, filePath),
+        ),
       }),
       path,
     );
@@ -865,7 +879,9 @@ test('a persisted offline draft reloads with its acknowledged baseline and submi
     await context.setOffline(true);
     await page.evaluate(() => window.saveFile({ silent: true }));
     const persistedDraft = await page.evaluate((filePath) => {
-      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`));
+      const draft = JSON.parse(
+        localStorage.getItem(window.nasmdDraftStorage.key(window.state.currentMountId, filePath)),
+      );
       window.state.currentPath = null;
       return draft;
     }, path);
@@ -892,7 +908,9 @@ test('a persisted offline draft reloads with its acknowledged baseline and submi
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
-        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`)),
+        draft: JSON.parse(
+          localStorage.getItem(window.nasmdDraftStorage.key(window.state.currentMountId, filePath)),
+        ),
       }),
       path,
     );
@@ -940,7 +958,10 @@ test('a persisted offline draft reloads with its acknowledged baseline and submi
     await expect.poll(() => changesRequests.length).toBeGreaterThan(0);
     await page.waitForFunction(
       (filePath) =>
-        window.state.dirty === false && localStorage.getItem(`nasmd_draft_${filePath}`) === null,
+        window.state.dirty === false &&
+        localStorage.getItem(
+          window.nasmdDraftStorage.key(window.state.currentMountId, filePath),
+        ) === null,
       path,
     );
     expect(changesRequests[0]).toMatchObject({
@@ -1003,17 +1024,18 @@ test('a legacy draft reloads with the fetched server baseline', async ({ page })
         window._vditor,
       { mountId: mount.id, filePath: path },
     );
-    const restored = await page.evaluate(
-      (filePath) => ({
+    const restored = await page.evaluate((filePath) => {
+      const modernKey = window.nasmdDraftStorage.key(window.state.currentMountId, filePath);
+      return {
         dirty: window.state.dirty,
         editor: window._vditor.getValue(),
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
-        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`)),
-      }),
-      path,
-    );
+        draft: JSON.parse(localStorage.getItem(modernKey)),
+        legacyDraft: localStorage.getItem(window.nasmdDraftStorage.legacyKey(filePath)),
+      };
+    }, path);
 
     expect(restored).toMatchObject({
       dirty: true,
@@ -1024,6 +1046,7 @@ test('a legacy draft reloads with the fetched server baseline', async ({ page })
         content: draftContent,
         mountId: mount.id,
       },
+      legacyDraft: null,
     });
     expect(restored.editor.replace(/\r\n/g, '\n').replace(/\n+$/, '')).toBe(draftContent);
     expect(restored.draft).not.toHaveProperty('baseVersion');
@@ -1071,7 +1094,9 @@ test('stale save sends its base content and preserves disjoint remote and local 
         editor: window._vditor.getValue(),
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
-        draft: localStorage.getItem(`nasmd_draft_${filePath}`),
+        draft: localStorage.getItem(
+          window.nasmdDraftStorage.key(window.state.currentMountId, filePath),
+        ),
       }),
       path,
     );
@@ -1135,7 +1160,8 @@ test('resync rebuilds the baseline, retains the rebased draft, and retries with 
       }
       return retryResponse;
     };
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKey = window.nasmdDraftStorage.key('resync-mount', path);
+    localStorage.removeItem(draftKey);
     Object.assign(window.state, {
       currentMountId: 'resync-mount',
       currentPath: path,
@@ -1163,7 +1189,7 @@ test('resync rebuilds the baseline, retains the rebased draft, and retries with 
 
     try {
       await window.saveFile({ silent: true });
-      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${path}`));
+      const draft = JSON.parse(localStorage.getItem(draftKey));
       const afterResync = {
         dirty: window.state.dirty,
         editor: window._vditor.getValue(),
@@ -1193,13 +1219,13 @@ test('resync rebuilds the baseline, retains the rebased draft, and retries with 
           editor: window._vditor.getValue(),
           baseVersion: window.state.baseVersion,
           baseContent: window.state.baseContent,
-          draft: localStorage.getItem(`nasmd_draft_${path}`),
+          draft: localStorage.getItem(draftKey),
         },
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
       window.toggleAutoSave(false);
-      localStorage.removeItem(`nasmd_draft_${path}`);
+      localStorage.removeItem(draftKey);
     }
   });
 
@@ -1250,7 +1276,8 @@ test('an unchanged resync snapshot stops automatic retries', async ({ page }) =>
         content: remote,
       };
     };
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKey = window.nasmdDraftStorage.key('unchanged-resync-mount', path);
+    localStorage.removeItem(draftKey);
     Object.assign(window.state, {
       currentMountId: 'unchanged-resync-mount',
       currentPath: path,
@@ -1288,12 +1315,12 @@ test('an unchanged resync snapshot stops automatic retries', async ({ page }) =>
         editor: window._vditor.getValue(),
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
-        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${path}`)),
+        draft: JSON.parse(localStorage.getItem(draftKey)),
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
       window.toggleAutoSave(false);
-      localStorage.removeItem(`nasmd_draft_${path}`);
+      localStorage.removeItem(draftKey);
     }
   });
 
@@ -1335,7 +1362,8 @@ test('a save transaction retries at most once across changing resync snapshots',
         content: `A-remote-${calls.length}\n\nB`,
       };
     };
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKey = window.nasmdDraftStorage.key('bounded-resync-mount', path);
+    localStorage.removeItem(draftKey);
     Object.assign(window.state, {
       currentMountId: 'bounded-resync-mount',
       currentPath: path,
@@ -1369,12 +1397,12 @@ test('a save transaction retries at most once across changing resync snapshots',
         editor: window._vditor.getValue(),
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
-        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${path}`)),
+        draft: JSON.parse(localStorage.getItem(draftKey)),
       };
     } finally {
       window.state.currentPath = null;
       API.submitChanges = originalSubmitChanges;
-      localStorage.removeItem(`nasmd_draft_${path}`);
+      localStorage.removeItem(draftKey);
     }
   });
 
@@ -1396,6 +1424,444 @@ test('a save transaction retries at most once across changing resync snapshots',
   });
 });
 
+test('a completed save watchdog cannot unlock a newer save', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/watchdog-owner.md';
+    const originalSubmitChanges = API.submitChanges;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const calls = [];
+    const resolvers = [];
+    const watchdogs = [];
+    let nextWatchdogId = 100000;
+
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 15000) {
+        const watchdog = {
+          active: true,
+          callback: () => callback(...args),
+          id: nextWatchdogId++,
+        };
+        watchdogs.push(watchdog);
+        return watchdog.id;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    window.clearTimeout = (timerId) => {
+      const watchdog = watchdogs.find((item) => item.id === timerId);
+      if (watchdog) {
+        watchdog.active = false;
+        return;
+      }
+      originalClearTimeout(timerId);
+    };
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      return new Promise((resolve) => resolvers.push(resolve));
+    };
+    Object.assign(window.state, {
+      currentMountId: 'watchdog-mount',
+      currentPath: path,
+      mounts: [{ id: 'watchdog-mount', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 2,
+      baseContent: 'base-v2',
+      fileVersions: { [`watchdog-mount:${path}`]: 2 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'base-v2';
+    window._vditor = {
+      value: 'local-v3',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+
+    try {
+      const firstSave = window.saveFile({ silent: true });
+      while (resolvers.length < 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      const firstWatchdog = watchdogs[0];
+      resolvers[0]({ applied: true, merged: false, newVersion: 3, content: 'local-v3' });
+      await firstSave;
+
+      window._vditor.value = 'local-v4';
+      window.onEditorInput();
+      const secondSave = window.saveFile({ silent: true });
+      while (resolvers.length < 2) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+
+      firstWatchdog.active = false;
+      firstWatchdog.callback();
+      const thirdSave = window.saveFile({ silent: true });
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      const callCountAfterStaleWatchdog = calls.length;
+
+      resolvers[1]({ applied: true, merged: false, newVersion: 4, content: 'local-v4' });
+      if (resolvers[2]) {
+        resolvers[2]({ applied: true, merged: false, newVersion: 5, content: 'local-v4' });
+      }
+      await Promise.all([secondSave, thirdSave]);
+      return { calls, callCountAfterStaleWatchdog };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  expect(result.callCountAfterStaleWatchdog).toBe(2);
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2, 3]);
+});
+
+test('a late timed-out save response cannot roll back a newer baseline', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/watchdog-monotonic-version.md';
+    const originalSubmitChanges = API.submitChanges;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const calls = [];
+    const resolvers = [];
+    const watchdogs = [];
+    let nextWatchdogId = 200000;
+
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 15000) {
+        const watchdog = {
+          active: true,
+          callback: () => callback(...args),
+          id: nextWatchdogId++,
+        };
+        watchdogs.push(watchdog);
+        return watchdog.id;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    window.clearTimeout = (timerId) => {
+      const watchdog = watchdogs.find((item) => item.id === timerId);
+      if (watchdog) {
+        watchdog.active = false;
+        return;
+      }
+      originalClearTimeout(timerId);
+    };
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      return new Promise((resolve) => resolvers.push(resolve));
+    };
+    Object.assign(window.state, {
+      currentMountId: 'watchdog-version-mount',
+      currentPath: path,
+      mounts: [{ id: 'watchdog-version-mount', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 2,
+      baseContent: 'base-v2',
+      fileVersions: { [`watchdog-version-mount:${path}`]: 2 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'base-v2';
+    window._vditor = {
+      value: 'local-edit',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+
+    try {
+      const olderSave = window.saveFile({ silent: true });
+      while (resolvers.length < 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      watchdogs[0].active = false;
+      watchdogs[0].callback();
+
+      const newerSave = window.saveFile({ silent: true });
+      while (resolvers.length < 2) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      resolvers[1]({ applied: true, merged: false, newVersion: 4, content: 'server-v4' });
+      await newerSave;
+      resolvers[0]({ applied: true, merged: false, newVersion: 3, content: 'server-v3' });
+      await olderSave;
+
+      return {
+        calls,
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        fileVersion: window.state.fileVersions[`watchdog-version-mount:${path}`],
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2, 2]);
+  expect(result).toMatchObject({
+    dirty: false,
+    editor: 'server-v4',
+    baseVersion: 4,
+    baseContent: 'server-v4',
+    fileVersion: 4,
+  });
+});
+
+test('a zero-diff retry confirms and removes the draft before reload', async ({ page }) => {
+  const mount = await getWritableAdminMount(page);
+  const path = uniqueTestPath('collaboration-zero-diff-confirmation');
+  const serverBase = 'server-base';
+  const localContent = 'local-content-confirmed-by-resync';
+  await putAdminFile(page, mount.id, path, serverBase);
+
+  try {
+    await page.evaluate(async ({ mountId, filePath }) => window.openFile(filePath, mountId), {
+      mountId: mount.id,
+      filePath: path,
+    });
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+
+    const beforeReload = await page.evaluate(
+      async ({ mountId, filePath, content }) => {
+        const originalSubmitChanges = API.submitChanges;
+        let calls = 0;
+        window.toggleAutoSave(false);
+        window._vditor.setValue(content);
+        window.onEditorInput();
+        const normalizedContent = window._vditor.getValue();
+        const acknowledgedVersion = window.state.baseVersion;
+        API.submitChanges = async () => {
+          calls += 1;
+          return {
+            applied: false,
+            merged: false,
+            resyncRequired: true,
+            newVersion: acknowledgedVersion + 1,
+            content: normalizedContent,
+          };
+        };
+        window.saveToLocalStorage(filePath, normalizedContent);
+
+        try {
+          await window.saveFile({ silent: true });
+          const deadline = Date.now() + 3000;
+          while (window.state.dirty && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          const modernKey = `nasmd_draft_v2_${encodeURIComponent(mountId)}:${encodeURIComponent(filePath)}`;
+          return {
+            calls,
+            dirty: window.state.dirty,
+            modernDraft: localStorage.getItem(modernKey),
+            legacyDraft: localStorage.getItem(`nasmd_draft_${filePath}`),
+          };
+        } finally {
+          API.submitChanges = originalSubmitChanges;
+        }
+      },
+      { mountId: mount.id, filePath: path, content: localContent },
+    );
+
+    expect(beforeReload).toEqual({
+      calls: 1,
+      dirty: false,
+      modernDraft: null,
+      legacyDraft: null,
+    });
+
+    await page.reload();
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+    const restored = await page.evaluate(() => ({
+      dirty: window.state.dirty,
+      editor: window._vditor.getValue(),
+    }));
+    expect(restored.dirty).toBe(false);
+    expect(restored.editor.replace(/\r\n/g, '\n').replace(/\n+$/, '')).toBe(serverBase);
+  } finally {
+    await deleteAdminFile(page, mount.id, path);
+  }
+});
+
+test('draft storage loads and deletes modern mount-scoped keys and migrates matching legacy data', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(() => {
+    const path = '/shared-modern-draft.md';
+    const mismatchPath = '/legacy-other-mount.md';
+    const key = (mountId, filePath) =>
+      `nasmd_draft_v2_${encodeURIComponent(mountId)}:${encodeURIComponent(filePath)}`;
+    const legacyKey = (filePath) => `nasmd_draft_${filePath}`;
+    const keys = [
+      key('mount-a', path),
+      key('mount-b', path),
+      legacyKey(path),
+      key('mount-a', mismatchPath),
+      legacyKey(mismatchPath),
+    ];
+    keys.forEach((storageKey) => localStorage.removeItem(storageKey));
+
+    try {
+      Object.assign(window.state, {
+        currentMountId: 'mount-a',
+        currentPath: path,
+        baseVersion: 1,
+        baseContent: 'A-base',
+      });
+      window.saveToLocalStorage(path, 'A-draft');
+      Object.assign(window.state, {
+        currentMountId: 'mount-b',
+        baseVersion: 10,
+        baseContent: 'B-base',
+      });
+      window.saveToLocalStorage(path, 'B-draft');
+
+      const stored = {
+        a: JSON.parse(localStorage.getItem(key('mount-a', path))),
+        b: JSON.parse(localStorage.getItem(key('mount-b', path))),
+        helperKey: window.nasmdDraftStorage?.key('mount-a', path),
+      };
+      const loadedA = window.loadFromLocalStorage(path, 'mount-a');
+      const loadedB = window.loadFromLocalStorage(path, 'mount-b');
+      window.clearLocalStorage(path, 'mount-a');
+      const afterClear = {
+        a: localStorage.getItem(key('mount-a', path)),
+        b: JSON.parse(localStorage.getItem(key('mount-b', path))),
+      };
+
+      localStorage.setItem(
+        legacyKey(path),
+        JSON.stringify({
+          content: 'legacy-a',
+          mountId: 'mount-a',
+          baseVersion: 3,
+          baseContent: 'legacy-a-base',
+          savedAt: Date.now(),
+        }),
+      );
+      const migrated = window.loadFromLocalStorage(path, 'mount-a');
+      const migration = {
+        modern: JSON.parse(localStorage.getItem(key('mount-a', path))),
+        legacy: localStorage.getItem(legacyKey(path)),
+      };
+
+      localStorage.setItem(
+        legacyKey(mismatchPath),
+        JSON.stringify({ content: 'legacy-b', mountId: 'mount-b', savedAt: Date.now() }),
+      );
+      const mismatched = window.loadFromLocalStorage(mismatchPath, 'mount-a');
+      const mismatchedLegacy = JSON.parse(localStorage.getItem(legacyKey(mismatchPath)));
+
+      return {
+        stored,
+        loadedA,
+        loadedB,
+        afterClear,
+        migrated,
+        migration,
+        mismatched,
+        mismatchedLegacy,
+      };
+    } finally {
+      keys.forEach((storageKey) => localStorage.removeItem(storageKey));
+    }
+  });
+
+  expect(result.stored).toMatchObject({
+    a: { content: 'A-draft', mountId: 'mount-a', baseVersion: 1, baseContent: 'A-base' },
+    b: { content: 'B-draft', mountId: 'mount-b', baseVersion: 10, baseContent: 'B-base' },
+    helperKey: scopedDraftKey('mount-a', '/shared-modern-draft.md'),
+  });
+  expect(result.loadedA).toMatchObject({ content: 'A-draft', mountId: 'mount-a' });
+  expect(result.loadedB).toMatchObject({ content: 'B-draft', mountId: 'mount-b' });
+  expect(result.afterClear).toMatchObject({
+    a: null,
+    b: { content: 'B-draft', mountId: 'mount-b' },
+  });
+  expect(result.migrated).toMatchObject({ content: 'legacy-a', mountId: 'mount-a' });
+  expect(result.migration).toMatchObject({
+    modern: { content: 'legacy-a', mountId: 'mount-a' },
+    legacy: null,
+  });
+  expect(result.mismatched).toBeNull();
+  expect(result.mismatchedLegacy).toMatchObject({ content: 'legacy-b', mountId: 'mount-b' });
+});
+
+test('reconnect preserves anonymous legacy drafts unless their exact file is open', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(() => {
+    const openPath = '/legacy-open.md';
+    const otherPath = '/legacy-unknown-mount.md';
+    const openLegacyKey = window.nasmdDraftStorage.legacyKey(openPath);
+    const otherLegacyKey = window.nasmdDraftStorage.legacyKey(otherPath);
+    const openModernKey = window.nasmdDraftStorage.key('mount-a', openPath);
+    const otherModernKey = window.nasmdDraftStorage.key('mount-a', otherPath);
+    const keys = [openLegacyKey, otherLegacyKey, openModernKey, otherModernKey];
+    keys.forEach((storageKey) => localStorage.removeItem(storageKey));
+
+    localStorage.setItem(
+      openLegacyKey,
+      JSON.stringify({ content: 'open legacy draft', savedAt: Date.now() }),
+    );
+    localStorage.setItem(
+      otherLegacyKey,
+      JSON.stringify({ content: 'unknown mount draft', savedAt: Date.now() }),
+    );
+    Object.assign(window.state, {
+      currentMountId: 'mount-a',
+      currentPath: openPath,
+      dirty: false,
+    });
+
+    try {
+      window.syncOfflineDrafts();
+      return {
+        openLegacy: localStorage.getItem(openLegacyKey),
+        openModern: JSON.parse(localStorage.getItem(openModernKey)),
+        otherLegacy: JSON.parse(localStorage.getItem(otherLegacyKey)),
+        otherModern: localStorage.getItem(otherModernKey),
+      };
+    } finally {
+      keys.forEach((storageKey) => localStorage.removeItem(storageKey));
+    }
+  });
+
+  expect(result).toMatchObject({
+    openLegacy: null,
+    openModern: { content: 'open legacy draft', mountId: 'mount-a' },
+    otherLegacy: { content: 'unknown mount draft' },
+    otherModern: null,
+  });
+});
+
 test('applied save writes canonical server content back into a clean editor', async ({ page }) => {
   await page.goto('/admin');
 
@@ -1411,8 +1877,9 @@ test('applied save writes canonical server content back into a clean editor', as
       newVersion: 3,
       content: canonical,
     });
+    const draftKey = window.nasmdDraftStorage.key('canonical-mount', path);
     localStorage.setItem(
-      `nasmd_draft_${path}`,
+      draftKey,
       JSON.stringify({ content: submitted, mountId: 'canonical-mount', savedAt: Date.now() }),
     );
     Object.assign(window.state, {
@@ -1449,7 +1916,7 @@ test('applied save writes canonical server content back into a clean editor', as
         originalContent: window._originalContent,
         fileVersion: window.state.fileVersions[`canonical-mount:${path}`],
         pendingRemoteVersion: window.state.pendingRemoteVersion,
-        draft: localStorage.getItem(`nasmd_draft_${path}`),
+        draft: localStorage.getItem(draftKey),
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
@@ -1491,8 +1958,9 @@ test('an applied response preserves a newer in-flight pending version and starts
       getFileCalls.push(args);
       return catchUpResponse;
     };
+    const draftKey = window.nasmdDraftStorage.key('pending-save-mount', path);
     localStorage.setItem(
-      `nasmd_draft_${path}`,
+      draftKey,
       JSON.stringify({ content: 'local-v5', mountId: 'pending-save-mount', savedAt: Date.now() }),
     );
     Object.assign(window.state, {
@@ -1535,7 +2003,7 @@ test('an applied response preserves a newer in-flight pending version and starts
         dirty: window.state.dirty,
         baseVersion: window.state.baseVersion,
         pendingRemoteVersion: window.state.pendingRemoteVersion,
-        draft: localStorage.getItem(`nasmd_draft_${path}`),
+        draft: localStorage.getItem(draftKey),
         getFileCalls: getFileCalls.map(([mountId, filePath]) => [mountId, filePath]),
       };
 
@@ -1552,13 +2020,13 @@ test('an applied response preserves a newer in-flight pending version and starts
           baseVersion: window.state.baseVersion,
           baseContent: window.state.baseContent,
           pendingRemoteVersion: window.state.pendingRemoteVersion,
-          draft: localStorage.getItem(`nasmd_draft_${path}`),
+          draft: localStorage.getItem(draftKey),
         },
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
       API.getFile = originalGetFile;
-      localStorage.removeItem(`nasmd_draft_${path}`);
+      localStorage.removeItem(draftKey);
     }
   });
 
@@ -1601,7 +2069,8 @@ test('manual save continues once for input typed in flight and clears the confir
       if (calls.length === 1) return response;
       return { applied: true, merged: false, newVersion: 6, content: args[7] };
     };
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKey = window.nasmdDraftStorage.key('in-flight-mount', path);
+    localStorage.removeItem(draftKey);
     Object.assign(window.state, {
       currentMountId: 'in-flight-mount',
       currentPath: path,
@@ -1645,11 +2114,11 @@ test('manual save continues once for input typed in flight and clears the confir
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
         pendingRemoteVersion: window.state.pendingRemoteVersion,
-        draft: localStorage.getItem(`nasmd_draft_${path}`),
+        draft: localStorage.getItem(draftKey),
       };
     } finally {
       API.submitChanges = originalSubmitChanges;
-      localStorage.removeItem(`nasmd_draft_${path}`);
+      localStorage.removeItem(draftKey);
     }
   });
 
@@ -1686,7 +2155,8 @@ test('manual save continuation is bounded when input also arrives during the con
       calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
       return new Promise((resolve) => resolvers.push(resolve));
     };
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKey = window.nasmdDraftStorage.key('bounded-in-flight-mount', path);
+    localStorage.removeItem(draftKey);
     Object.assign(window.state, {
       currentMountId: 'bounded-in-flight-mount',
       currentPath: path,
@@ -1742,12 +2212,12 @@ test('manual save continuation is bounded when input also arrives during the con
         editor: window._vditor.getValue(),
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
-        draft: JSON.parse(localStorage.getItem(`nasmd_draft_${path}`)),
+        draft: JSON.parse(localStorage.getItem(draftKey)),
       };
     } finally {
       window.state.currentPath = null;
       API.submitChanges = originalSubmitChanges;
-      localStorage.removeItem(`nasmd_draft_${path}`);
+      localStorage.removeItem(draftKey);
     }
   });
 
@@ -1849,6 +2319,8 @@ test('an in-flight save response and continuation stay bound to their originatin
       resolveSubmit({ applied: true, merged: false, newVersion: 2, content: 'A-local' });
       await saving;
       await new Promise((resolve) => setTimeout(resolve, 200));
+      const draftKeyA = window.nasmdDraftStorage.key('mount-a', pathA);
+      const draftKeyB = window.nasmdDraftStorage.key('mount-b', pathB);
       return {
         calls,
         currentMountId: window.state.currentMountId,
@@ -1858,14 +2330,14 @@ test('an in-flight save response and continuation stay bound to their originatin
         baseVersion: window.state.baseVersion,
         baseContent: window.state.baseContent,
         originalContent: window._originalContent,
-        draftA: JSON.parse(localStorage.getItem(`nasmd_draft_${pathA}`)),
-        draftB: localStorage.getItem(`nasmd_draft_${pathB}`),
+        draftA: JSON.parse(localStorage.getItem(draftKeyA)),
+        draftB: localStorage.getItem(draftKeyB),
       };
     } finally {
       window.state.currentPath = null;
       API.submitChanges = originalSubmitChanges;
-      localStorage.removeItem(`nasmd_draft_${pathA}`);
-      localStorage.removeItem(`nasmd_draft_${pathB}`);
+      localStorage.removeItem(window.nasmdDraftStorage.key('mount-a', pathA));
+      localStorage.removeItem(window.nasmdDraftStorage.key('mount-b', pathB));
     }
   });
 
@@ -1894,6 +2366,123 @@ test('an in-flight save response and continuation stay bound to their originatin
       savedAt: expect.any(Number),
     },
     draftB: null,
+  });
+});
+
+test('a late save response preserves independent drafts for the same path on two mounts', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const path = '/same-path.md';
+    const key = (mountId) =>
+      `nasmd_draft_v2_${encodeURIComponent(mountId)}:${encodeURIComponent(path)}`;
+    let resolveSubmit;
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async () =>
+      new Promise((resolve) => {
+        resolveSubmit = resolve;
+      });
+    const editorA = {
+      value: 'A-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    const editorB = {
+      value: 'B-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    const cleanupKeys = [key('mount-a'), key('mount-b'), `nasmd_draft_${path}`];
+    cleanupKeys.forEach((storageKey) => localStorage.removeItem(storageKey));
+    Object.assign(window.state, {
+      currentMountId: 'mount-a',
+      currentPath: path,
+      mounts: [
+        { id: 'mount-a', readonly: false },
+        { id: 'mount-b', readonly: false },
+      ],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'A-base',
+      fileVersions: { [`mount-a:${path}`]: 1, [`mount-b:${path}`]: 10 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A-base';
+    window._vditor = editorA;
+
+    try {
+      const saving = window.saveFile({ silent: true });
+      while (!resolveSubmit) await new Promise((resolve) => setTimeout(resolve, 0));
+      editorA.value = 'A-local-new';
+      window.onEditorInput();
+
+      Object.assign(window.state, {
+        currentMountId: 'mount-b',
+        currentPath: path,
+        baseVersion: 10,
+        baseContent: 'B-base',
+        pendingRemoteVersion: null,
+        dirty: true,
+      });
+      window._originalContent = 'B-base';
+      window._lastSavedContent = 'B-base';
+      window._vditor = editorB;
+      window.onEditorInput();
+
+      resolveSubmit({ applied: true, merged: false, newVersion: 2, content: 'A-local' });
+      await saving;
+      return {
+        draftA: JSON.parse(localStorage.getItem(key('mount-a'))),
+        draftB: JSON.parse(localStorage.getItem(key('mount-b'))),
+        legacyDraft: localStorage.getItem(`nasmd_draft_${path}`),
+        active: {
+          mountId: window.state.currentMountId,
+          path: window.state.currentPath,
+          editor: window._vditor.getValue(),
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+        },
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      cleanupKeys.forEach((storageKey) => localStorage.removeItem(storageKey));
+    }
+  });
+
+  expect(result).toMatchObject({
+    draftA: {
+      content: 'A-local-new',
+      mountId: 'mount-a',
+      baseVersion: 1,
+      baseContent: 'A-base',
+    },
+    draftB: {
+      content: 'B-local',
+      mountId: 'mount-b',
+      baseVersion: 10,
+      baseContent: 'B-base',
+    },
+    legacyDraft: null,
+    active: {
+      mountId: 'mount-b',
+      path: '/same-path.md',
+      editor: 'B-local',
+      baseVersion: 10,
+      baseContent: 'B-base',
+    },
   });
 });
 
@@ -1927,7 +2516,8 @@ test('a failed save spanning editor reinitialization retains its draft and basel
           rejectSubmit = reject;
         });
       };
-      localStorage.removeItem(`nasmd_draft_${filePath}`);
+      const draftKey = window.nasmdDraftStorage.key(window.state.currentMountId, filePath);
+      localStorage.removeItem(draftKey);
       window.toggleAutoSave(false);
       const acknowledged = {
         baseVersion: window.state.baseVersion,
@@ -1958,11 +2548,11 @@ test('a failed save spanning editor reinitialization retains its draft and basel
           baseVersion: window.state.baseVersion,
           baseContent: window.state.baseContent,
           originalContent: window._originalContent,
-          draft: JSON.parse(localStorage.getItem(`nasmd_draft_${filePath}`)),
+          draft: JSON.parse(localStorage.getItem(draftKey)),
         };
       } finally {
         API.submitChanges = originalSubmitChanges;
-        localStorage.removeItem(`nasmd_draft_${filePath}`);
+        localStorage.removeItem(draftKey);
       }
     }, path);
 
@@ -2010,8 +2600,9 @@ test('network and invalid save responses retain dirty content and its draft', as
         const path = `/${name}-save-response.md`;
         const base = `${name}-base`;
         const local = `${name}-local`;
+        const draftKey = window.nasmdDraftStorage.key(`${name}-mount`, path);
         API.submitChanges = responder;
-        localStorage.removeItem(`nasmd_draft_${path}`);
+        localStorage.removeItem(draftKey);
         Object.assign(window.state, {
           currentMountId: `${name}-mount`,
           currentPath: path,
@@ -2043,9 +2634,9 @@ test('network and invalid save responses retain dirty content and its draft', as
           editor: window._vditor.getValue(),
           baseVersion: window.state.baseVersion,
           baseContent: window.state.baseContent,
-          draft: JSON.parse(localStorage.getItem(`nasmd_draft_${path}`)),
+          draft: JSON.parse(localStorage.getItem(draftKey)),
         });
-        localStorage.removeItem(`nasmd_draft_${path}`);
+        localStorage.removeItem(draftKey);
       }
     } finally {
       API.submitChanges = originalSubmitChanges;
@@ -2117,7 +2708,8 @@ test('save keeps an over-budget document dirty without submitting changes', asyn
       submitCalls++;
       return { applied: true, newVersion: 8, content: local };
     };
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKey = window.nasmdDraftStorage.key('work-limit', path);
+    localStorage.removeItem(draftKey);
     Object.assign(window.state, {
       currentMountId: 'work-limit',
       currentPath: path,
@@ -2134,7 +2726,7 @@ test('save keeps an over-budget document dirty without submitting changes', asyn
 
     try {
       await window.saveFile();
-      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${path}`));
+      const draft = JSON.parse(localStorage.getItem(draftKey));
       return {
         submitCalls,
         dirty: window.state.dirty,
@@ -2177,7 +2769,8 @@ test('save keeps the local draft dirty when the server reports a write failure',
         }),
         { status: 500, headers: { 'Content-Type': 'application/json' } },
       );
-    localStorage.removeItem(`nasmd_draft_${path}`);
+    const draftKey = window.nasmdDraftStorage.key('write-failure', path);
+    localStorage.removeItem(draftKey);
     Object.assign(window.state, {
       currentMountId: 'write-failure',
       currentPath: path,
@@ -2194,7 +2787,7 @@ test('save keeps the local draft dirty when the server reports a write failure',
 
     try {
       await window.saveFile();
-      const draft = JSON.parse(localStorage.getItem(`nasmd_draft_${path}`));
+      const draft = JSON.parse(localStorage.getItem(draftKey));
       return {
         dirty: window.state.dirty,
         baseVersion: window.state.baseVersion,

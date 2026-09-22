@@ -125,6 +125,10 @@ function loadSyncLayer({
       state,
     },
   });
+  vm.runInContext(
+    readFileSync(new URL('../web/draft_storage.js', import.meta.url), 'utf8'),
+    context,
+  );
   vm.runInContext(readFileSync(new URL('../web/sync_layer.js', import.meta.url), 'utf8'), context);
   return {
     advanceTime(milliseconds) {
@@ -817,6 +821,107 @@ test('offline draft protection is scoped by an explicit mount id', async () => {
   deliverVersionTwo(legacy, 'mount-0');
   assert.equal(legacy.editor.value, 'legacy-draft');
   assert.equal(legacy.state.pendingRemoteVersion, 2);
+});
+
+test('a modern mount-scoped draft blocks only its own collaboration stream', async () => {
+  const path = '/doc.md';
+  const draftKey = (mountId) =>
+    `nasmd_draft_v2_${encodeURIComponent(mountId)}:${encodeURIComponent(path)}`;
+  const drafts = new Map([
+    [
+      draftKey('mount-a'),
+      JSON.stringify({ mountId: 'mount-a', content: 'draft-a', savedAt: Date.now() }),
+    ],
+  ]);
+
+  const sameMount = loadSyncLayer({ version: 1, content: 'draft-a', manualTimers: true });
+  sameMount.state.currentMountId = 'mount-a';
+  sameMount.state.fileVersions = { [`mount-a:${path}`]: 1 };
+  sameMount.context.window.localStorage = {
+    getItem(key) {
+      return drafts.get(key) ?? null;
+    },
+  };
+  sameMount.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-a',
+    path,
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'remote-a-v2' }],
+  });
+  sameMount.runTimers(300);
+
+  assert.equal(sameMount.editor.value, 'draft-a');
+  assert.equal(sameMount.state.pendingRemoteVersion, 2);
+
+  const otherMount = loadSyncLayer({ version: 1, content: 'confirmed-b', manualTimers: true });
+  otherMount.state.currentMountId = 'mount-b';
+  otherMount.state.fileVersions = { [`mount-b:${path}`]: 1 };
+  otherMount.context.window.localStorage = sameMount.context.window.localStorage;
+  otherMount.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-b',
+    path,
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'remote-b-v2' }],
+  });
+  otherMount.runTimers(300);
+
+  assert.equal(otherMount.editor.value, 'remote-b-v2');
+  assert.equal(otherMount.state.pendingRemoteVersion, null);
+});
+
+test('malformed, invalid, and expired drafts do not block collaboration updates', async () => {
+  const maxAge = 7 * 24 * 3600 * 1000;
+  const cases = [
+    { name: 'malformed legacy', key: 'nasmd_draft_/doc.md', value: '{' },
+    {
+      name: 'invalid legacy',
+      key: 'nasmd_draft_/doc.md',
+      value: JSON.stringify({ mountId: 'mount-0', savedAt: 10000 }),
+    },
+    {
+      name: 'expired legacy',
+      key: 'nasmd_draft_/doc.md',
+      value: JSON.stringify({
+        mountId: 'mount-0',
+        content: 'old draft',
+        savedAt: 10000 - maxAge - 1,
+      }),
+      removed: true,
+    },
+    {
+      name: 'malformed modern',
+      key: 'nasmd_draft_v2_mount-0:%2Fdoc.md',
+      value: '{',
+    },
+  ];
+
+  for (const draftCase of cases) {
+    const app = loadSyncLayer({ version: 1, content: 'confirmed-v1', manualTimers: true });
+    const drafts = new Map([[draftCase.key, draftCase.value]]);
+    app.context.window.localStorage = {
+      getItem(key) {
+        return drafts.get(key) ?? null;
+      },
+      removeItem(key) {
+        drafts.delete(key);
+      },
+    };
+
+    app.context.window.nasmdSync.handleRemoteEdit({
+      type: 'remote_edit',
+      mountId: 'mount-0',
+      path: '/doc.md',
+      newVersion: 2,
+      changes: [{ type: 'replace', paraIdx: 0, content: 'remote-v2' }],
+    });
+    app.runTimers(300);
+
+    assert.equal(app.editor.value, 'remote-v2', draftCase.name);
+    assert.equal(app.state.pendingRemoteVersion, null, draftCase.name);
+    assert.equal(drafts.has(draftCase.key), !draftCase.removed, draftCase.name);
+  }
 });
 
 test('a current offline draft blocks queued and in-flight remote application', async () => {

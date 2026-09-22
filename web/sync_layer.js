@@ -282,18 +282,40 @@
   function hasCurrentOfflineDraft() {
     if (!window.state || !state.currentPath || !window.localStorage) return false;
     try {
-      var storedDraft = window.localStorage.getItem('nasmd_draft_' + state.currentPath);
-      if (storedDraft === null) return false;
-      try {
-        var draft = JSON.parse(storedDraft);
-        if (draft && typeof draft.mountId === 'string' && draft.mountId.length > 0) {
+      var draftStorage = window.nasmdDraftStorage;
+      if (!draftStorage) return false;
+      var maxDraftAgeMs = 7 * 24 * 3600 * 1000;
+      var isLiveDraft = function (storageKey, allowAnonymousMount) {
+        var storedDraft = window.localStorage.getItem(storageKey);
+        if (storedDraft === null) return false;
+
+        var draft;
+        try {
+          draft = JSON.parse(storedDraft);
+        } catch (_parseError) {
+          return false;
+        }
+        if (!draft || typeof draft !== 'object' || typeof draft.content !== 'string') return false;
+        if (draft.savedAt !== undefined) {
+          if (typeof draft.savedAt !== 'number' || !isFinite(draft.savedAt)) return false;
+          if (Date.now() - draft.savedAt > maxDraftAgeMs) {
+            if (typeof window.localStorage.removeItem === 'function') {
+              window.localStorage.removeItem(storageKey);
+            }
+            return false;
+          }
+        }
+        if (typeof draft.mountId === 'string' && draft.mountId.length > 0) {
           return draft.mountId === state.currentMountId;
         }
-      } catch (_parseError) {
+        return allowAnonymousMount;
+      };
+
+      if (isLiveDraft(draftStorage.key(state.currentMountId, state.currentPath), false)) {
         return true;
       }
-      // Legacy drafts without mount identity remain protected until draft migration handles them.
-      return true;
+      // Anonymous legacy drafts remain protected only for the currently open path.
+      return isLiveDraft(draftStorage.legacyKey(state.currentPath), true);
     } catch (_e) {
       return false;
     }

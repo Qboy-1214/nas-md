@@ -3410,6 +3410,8 @@ function toggleBacklinks() {
 
 // === Save-in-progress flag to prevent pollCurrentFile race condition ===
 let _saveInProgress = false;
+let _activeSaveToken = null;
+let _nextSaveToken = 0;
 
 async function saveFile(options = {}) {
   const normalizedOptions =
@@ -3444,6 +3446,8 @@ async function saveFile(options = {}) {
     console.log('[saveFile] skipped: another save in progress');
     return;
   }
+  const saveToken = ++_nextSaveToken;
+  _activeSaveToken = saveToken;
   _saveInProgress = true;
   const btn = $('btn-save');
   let content;
@@ -3476,9 +3480,10 @@ async function saveFile(options = {}) {
     });
   };
 
-  setTimeout(() => {
-    if (_saveInProgress) {
+  const watchdogTimer = setTimeout(() => {
+    if (_activeSaveToken === saveToken) {
       console.error('[saveFile] timeout detected, resetting _saveInProgress');
+      _activeSaveToken = null;
       _saveInProgress = false;
     }
   }, 15000);
@@ -3601,7 +3606,23 @@ async function saveFile(options = {}) {
 
         if (changes.length === 0) {
           console.log('[saveFile] no changes to submit');
-          markClean();
+          const currentContent = window._vditor.getValue();
+          const hasHigherPendingVersion =
+            state.pendingRemoteVersion !== null &&
+            Number(state.pendingRemoteVersion) > submittedBaseVersion;
+          const confirmsCurrentEditor =
+            isCurrentSaveContext() &&
+            state.baseVersion === submittedBaseVersion &&
+            _normContent(currentContent) === _normContent(submittedContent) &&
+            _normContent(submittedContent) === _normContent(submittedBaseContent) &&
+            !hasHigherPendingVersion;
+          if (confirmsCurrentEditor) {
+            clearLocalStorage(saveContext.path, saveContext.mountId);
+            markClean();
+          } else {
+            markDirty();
+            saveToLocalStorage(saveContext.path, currentContent, saveContext);
+          }
           return;
         }
 
@@ -3650,6 +3671,23 @@ async function saveFile(options = {}) {
           typeof resp.content === 'string';
         if (!hasValidOutcome || ((resp.applied || resp.resyncRequired) && !hasValidSnapshot)) {
           throw new Error('Invalid response from server');
+        }
+
+        const acknowledgedVersion = Math.max(
+          Number(state.baseVersion) || 0,
+          Number(state.fileVersions[fileKey]) || 0,
+        );
+        if ((resp.applied || resp.resyncRequired) && resp.newVersion < acknowledgedVersion) {
+          console.warn('[saveFile] ignored stale response version', {
+            responseVersion: resp.newVersion,
+            acknowledgedVersion,
+          });
+          const liveContent = window._vditor.getValue();
+          if (_normContent(liveContent) !== _normContent(state.baseContent)) {
+            markDirty();
+            saveToLocalStorage(state.currentPath, liveContent);
+          }
+          return;
         }
 
         if (resp.resyncRequired) {
@@ -3752,8 +3790,15 @@ async function saveFile(options = {}) {
       console.error(e);
     }
   } finally {
-    _saveInProgress = false;
-    if (!silent && btn) {
+    clearTimeout(watchdogTimer);
+    const ownsSaveLock = _activeSaveToken === saveToken;
+    if (ownsSaveLock) {
+      _activeSaveToken = null;
+      _saveInProgress = false;
+    } else if (_activeSaveToken === null) {
+      _saveInProgress = false;
+    }
+    if (!silent && btn && _activeSaveToken === null) {
       btn.classList.remove('saving');
       btn.disabled = false;
     }
@@ -5126,7 +5171,7 @@ function cleanExpiredDrafts() {
     const drafts = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith('nasmd_draft_')) {
+      if (window.nasmdDraftStorage.isDraftKey(k)) {
         try {
           const val = JSON.parse(localStorage.getItem(k));
           if (val && val.savedAt && now - val.savedAt > DRAFT_MAX_AGE_MS) {
@@ -5146,10 +5191,12 @@ function cleanExpiredDrafts() {
 }
 
 function saveToLocalStorage(path, content, draftContext = null) {
-  const key = 'nasmd_draft_' + path;
+  const mountId = draftContext ? draftContext.mountId : state.currentMountId;
+  if (!mountId || !path) return;
+  const key = window.nasmdDraftStorage.key(mountId, path);
   const data = JSON.stringify({
     content,
-    mountId: draftContext ? draftContext.mountId : state.currentMountId,
+    mountId,
     baseVersion: draftContext ? draftContext.baseVersion : state.baseVersion,
     baseContent: draftContext ? draftContext.baseContent : state.baseContent,
     savedAt: Date.now(),
@@ -5171,17 +5218,49 @@ function saveToLocalStorage(path, content, draftContext = null) {
   }
 }
 
-function loadFromLocalStorage(path) {
+function _readDraftFromStorage(key) {
+  const data = localStorage.getItem(key);
+  if (!data) return null;
+  const parsed = JSON.parse(data);
+  if (parsed && parsed.savedAt && Date.now() - parsed.savedAt > DRAFT_MAX_AGE_MS) {
+    localStorage.removeItem(key);
+    return null;
+  }
+  return { data, parsed };
+}
+
+function loadFromLocalStorage(path, mountId = state.currentMountId) {
   try {
-    const key = 'nasmd_draft_' + path;
-    const data = localStorage.getItem(key);
-    if (!data) return null;
-    const parsed = JSON.parse(data);
-    if (parsed && parsed.savedAt && Date.now() - parsed.savedAt > DRAFT_MAX_AGE_MS) {
-      clearLocalStorage(path);
+    const modernKey = window.nasmdDraftStorage.key(mountId, path);
+    const modern = _readDraftFromStorage(modernKey);
+    if (modern) {
+      if (
+        modern.parsed &&
+        typeof modern.parsed.mountId === 'string' &&
+        modern.parsed.mountId.length > 0 &&
+        modern.parsed.mountId !== mountId
+      ) {
+        return null;
+      }
+      return modern.parsed;
+    }
+
+    const legacyKey = window.nasmdDraftStorage.legacyKey(path);
+    const legacy = _readDraftFromStorage(legacyKey);
+    if (!legacy) return null;
+    if (
+      legacy.parsed &&
+      typeof legacy.parsed.mountId === 'string' &&
+      legacy.parsed.mountId.length > 0 &&
+      legacy.parsed.mountId !== mountId
+    ) {
       return null;
     }
-    return parsed;
+
+    const migrated = { ...legacy.parsed, mountId };
+    localStorage.setItem(modernKey, JSON.stringify(migrated));
+    localStorage.removeItem(legacyKey);
+    return migrated;
   } catch (_e) {
     return null;
   }
@@ -5220,9 +5299,9 @@ function resolveDraftRestore(path, mountId, fallbackContent, fallbackVersion, fa
   };
 }
 
-function clearLocalStorage(path) {
+function clearLocalStorage(path, mountId = state.currentMountId) {
   try {
-    localStorage.removeItem('nasmd_draft_' + path);
+    localStorage.removeItem(window.nasmdDraftStorage.key(mountId, path));
   } catch (_e) {
     /* ignore */
   }
@@ -5235,18 +5314,44 @@ function syncOfflineDrafts() {
     const draftKeys = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith('nasmd_draft_')) {
+      if (window.nasmdDraftStorage.isDraftKey(k)) {
         draftKeys.push(k);
       }
     }
     if (draftKeys.length === 0) return;
 
     for (const key of draftKeys) {
-      const path = key.substring('nasmd_draft_'.length);
-      const draft = loadFromLocalStorage(path);
+      const modernIdentity = window.nasmdDraftStorage.parseKey(key);
+      const path = modernIdentity
+        ? modernIdentity.path
+        : window.nasmdDraftStorage.parseLegacyKey(key);
+      if (path === null) continue;
+      let mountId = modernIdentity ? modernIdentity.mountId : null;
+      if (!modernIdentity) {
+        let legacy;
+        try {
+          legacy = _readDraftFromStorage(key);
+        } catch (_e) {
+          continue;
+        }
+        if (!legacy || !legacy.parsed || typeof legacy.parsed.content !== 'string') continue;
+
+        const explicitMountId =
+          typeof legacy.parsed.mountId === 'string' && legacy.parsed.mountId.length > 0
+            ? legacy.parsed.mountId
+            : null;
+        if (explicitMountId) {
+          mountId = explicitMountId;
+        } else if (state.currentMountId && state.currentPath === path) {
+          mountId = state.currentMountId;
+        } else {
+          continue;
+        }
+      }
+      const draft = loadFromLocalStorage(path, mountId);
       if (!draft) continue;
 
-      if (state.currentPath === path) {
+      if (state.currentMountId === mountId && state.currentPath === path) {
         if (state.dirty) {
           saveFile(true);
         }
