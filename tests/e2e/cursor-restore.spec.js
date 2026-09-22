@@ -31,7 +31,12 @@ async function scrollToBottom(page) {
     const vd = window._vditor;
     if (!vd) return;
     const mode = vd.getCurrentMode();
-    const el = mode === 'sv' ? vd.vditor.sv.element : mode === 'wysiwyg' ? vd.vditor.wysiwyg.element : vd.vditor.ir.element;
+    const el =
+      mode === 'sv'
+        ? vd.vditor.sv.element
+        : mode === 'wysiwyg'
+          ? vd.vditor.wysiwyg.element
+          : vd.vditor.ir.element;
     if (!el) return;
     // Try direct scrollTop first
     const maxScroll = el.scrollHeight - el.clientHeight;
@@ -51,7 +56,12 @@ async function getScrollTop(page) {
     const vd = window._vditor;
     if (!vd) return 0;
     const mode = vd.getCurrentMode();
-    const el = mode === 'sv' ? vd.vditor.sv.element : mode === 'wysiwyg' ? vd.vditor.wysiwyg.element : vd.vditor.ir.element;
+    const el =
+      mode === 'sv'
+        ? vd.vditor.sv.element
+        : mode === 'wysiwyg'
+          ? vd.vditor.wysiwyg.element
+          : vd.vditor.ir.element;
     return el ? el.scrollTop : 0;
   });
 }
@@ -63,10 +73,13 @@ test.describe('光标和滚动位置恢复', () => {
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
     await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
-    await page.waitForFunction(() => {
-      const vd = window._vditor;
-      return vd && vd.getValue().length > 100;
-    }, { timeout: 10000 });
+    await page.waitForFunction(
+      () => {
+        const vd = window._vditor;
+        return vd && vd.getValue().length > 100;
+      },
+      { timeout: 10000 },
+    );
 
     // Scroll to bottom
     await scrollToBottom(page);
@@ -97,10 +110,13 @@ test.describe('光标和滚动位置恢复', () => {
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
     await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
-    await page.waitForFunction(() => {
-      const vd = window._vditor;
-      return vd && vd.getValue().length > 100;
-    }, { timeout: 10000 });
+    await page.waitForFunction(
+      () => {
+        const vd = window._vditor;
+        return vd && vd.getValue().length > 100;
+      },
+      { timeout: 10000 },
+    );
 
     // Scroll to middle
     await page.evaluate(() => {
@@ -134,10 +150,13 @@ test.describe('光标和滚动位置恢复', () => {
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
     await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
-    await page.waitForFunction(() => {
-      const vd = window._vditor;
-      return vd && vd.getValue().length > 100;
-    }, { timeout: 10000 });
+    await page.waitForFunction(
+      () => {
+        const vd = window._vditor;
+        return vd && vd.getValue().length > 100;
+      },
+      { timeout: 10000 },
+    );
 
     // Scroll to middle
     await page.evaluate(() => {
@@ -168,10 +187,13 @@ test.describe('光标和滚动位置恢复', () => {
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
     await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
-    await page.waitForFunction(() => {
-      const vd = window._vditor;
-      return vd && vd.getValue().length > 100;
-    }, { timeout: 10000 });
+    await page.waitForFunction(
+      () => {
+        const vd = window._vditor;
+        return vd && vd.getValue().length > 100;
+      },
+      { timeout: 10000 },
+    );
 
     // Scroll to bottom
     await scrollToBottom(page);

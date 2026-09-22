@@ -7,7 +7,7 @@
     "lint": "eslint web/",
     "lint:fix": "eslint web/ --fix",
     "format": "prettier --write 'web/**/*.{js,css,html}'",
-    "format:check": "prettier --check 'web/**/*.{js,css,html}'",
+    "format:check": "prettier --check \"web/**/*.{js,css,html}\" \"tests/e2e/**/*.js\" \"tests/*.mjs\"",
     "test:unit": "node --test tests/files_api.test.mjs tests/sync_layer.test.mjs",
     "test": "playwright test",
     "test:headed": "playwright test --headed"

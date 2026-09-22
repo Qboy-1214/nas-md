@@ -36,9 +36,9 @@ async function prepareEditor(page) {
   await page.waitForFunction(() => window.state?.currentPath === '/mermaid-fullscreen.md');
   await page.waitForSelector('.vditor-ir');
   await page.evaluate((value) => window._vditor.setValue(value), markdown);
-  await expect.poll(async () => (await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, '')))).toBe(
-    markdown,
-  );
+  await expect
+    .poll(async () => await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, '')))
+    .toBe(markdown);
   await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
   await expect.poll(async () => page.locator('.mme-overlay-item').count()).toBe(1);
 }
@@ -80,7 +80,9 @@ async function installNativeFullscreenStub(page) {
   });
 }
 
-test('Mermaid fallback fullscreen keeps the chart and existing controls usable', async ({ page }) => {
+test('Mermaid fallback fullscreen keeps the chart and existing controls usable', async ({
+  page,
+}) => {
   await prepareEditor(page);
   await rejectNativeFullscreen(page);
 
@@ -102,10 +104,14 @@ test('Mermaid fallback fullscreen keeps the chart and existing controls usable',
     return Number(svg.style.transform.match(/scale\(([^)]+)\)/)[1]);
   });
   await page.locator('[data-action="zoomIn"]').first().click();
-  await expect.poll(async () => page.evaluate(() => {
-    const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
-    return Number(svg.style.transform.match(/scale\(([^)]+)\)/)[1]);
-  })).toBeGreaterThan(fullscreenScaleBeforeZoom);
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
+        return Number(svg.style.transform.match(/scale\(([^)]+)\)/)[1]);
+      }),
+    )
+    .toBeGreaterThan(fullscreenScaleBeforeZoom);
   await page.locator('[data-action="toggleTheme"]').first().click();
   await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /invert/);
 
@@ -113,7 +119,9 @@ test('Mermaid fallback fullscreen keeps the chart and existing controls usable',
   await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
   await expect(page.locator('body')).not.toHaveClass(/mme-app-fullscreen/);
   await expect(page.locator('.language-mermaid[data-mme-fullscreen="true"]')).toHaveCount(0);
-  expect(await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, ''))).toBe(originalValue);
+  expect(await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, ''))).toBe(
+    originalValue,
+  );
 });
 
 test('Mermaid native fullscreen owns a cloned chart and the active controls', async ({ page }) => {
@@ -135,7 +143,9 @@ test('Mermaid native fullscreen owns a cloned chart and the active controls', as
         count: window.nativeFullscreenStub.requests.length,
         isOverlay: requestTarget?.matches('.mme-overlay-item') || false,
         ownsChart: !!requestTarget?.querySelector('.mme-fullscreen-chart svg'),
-        ownsControls: !!requestTarget?.querySelector('.mme-toolbar [data-action="toggleFullscreen"]'),
+        ownsControls: !!requestTarget?.querySelector(
+          '.mme-toolbar [data-action="toggleFullscreen"]',
+        ),
       };
     }),
   ).toEqual({ count: 1, isOverlay: true, ownsChart: true, ownsControls: true });
@@ -273,7 +283,9 @@ test('Mermaid native fullscreen preserves state after exit rejection and allows 
   await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(0);
 });
 
-test('Mermaid native fullscreen clears preserved state when browser Escape exits', async ({ page }) => {
+test('Mermaid native fullscreen clears preserved state when browser Escape exits', async ({
+  page,
+}) => {
   await prepareEditor(page);
   await page.evaluate(() => {
     let fakeFullscreenElement = null;
@@ -303,7 +315,9 @@ test('Mermaid native fullscreen clears preserved state when browser Escape exits
   await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(0);
 });
 
-test('Mermaid aborts a block switch when the old native fullscreen cannot exit', async ({ page }) => {
+test('Mermaid aborts a block switch when the old native fullscreen cannot exit', async ({
+  page,
+}) => {
   await prepareEditor(page);
   await page.evaluate((value) => window._vditor.setValue(value), twoMermaidMarkdown);
   await expect.poll(async () => page.locator('.mme-overlay-item').count()).toBe(2);
@@ -330,17 +344,18 @@ test('Mermaid aborts a block switch when the old native fullscreen cannot exit',
   });
 
   await fullscreenButton(page).first().click();
-  await expect.poll(async () => page.evaluate(() => window.rejectedSwitchEvents)).toEqual(['request-a']);
+  await expect
+    .poll(async () => page.evaluate(() => window.rejectedSwitchEvents))
+    .toEqual(['request-a']);
   await page.evaluate(() => {
     document
       .querySelectorAll('.mme-overlay-item .mme-toolbar [data-action="toggleFullscreen"]')[1]
       .click();
   });
 
-  await expect.poll(async () => page.evaluate(() => window.rejectedSwitchEvents)).toEqual([
-    'request-a',
-    'reject-exit-a',
-  ]);
+  await expect
+    .poll(async () => page.evaluate(() => window.rejectedSwitchEvents))
+    .toEqual(['request-a', 'reject-exit-a']);
   await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
   await expect(page.locator('.mme-overlay-item[data-mme-fullscreen="true"]')).toHaveAttribute(
     'data-mme-id',
@@ -350,7 +365,9 @@ test('Mermaid aborts a block switch when the old native fullscreen cannot exit',
   await expect(page.locator('body')).not.toHaveClass(/mme-app-fullscreen/);
 });
 
-test('Mermaid source removal exits native fullscreen before clearing overlay state', async ({ page }) => {
+test('Mermaid source removal exits native fullscreen before clearing overlay state', async ({
+  page,
+}) => {
   await prepareEditor(page);
   await page.evaluate(() => {
     let fakeFullscreenElement = null;
@@ -379,9 +396,13 @@ test('Mermaid source removal exits native fullscreen before clearing overlay sta
 
   await fullscreenButton(page).click();
   await expect(page.locator('.mme-fullscreen-chart svg')).toBeVisible();
-  await page.evaluate(() => document.querySelector('.language-mermaid[data-mme-enhanced]').remove());
+  await page.evaluate(() =>
+    document.querySelector('.language-mermaid[data-mme-enhanced]').remove(),
+  );
 
-  await expect.poll(async () => page.evaluate(() => window.nativeExitEvents)).toEqual(['request', 'exit']);
+  await expect
+    .poll(async () => page.evaluate(() => window.nativeExitEvents))
+    .toEqual(['request', 'exit']);
   await expect(page.locator('.mme-overlay-item[data-mme-fullscreen="true"]')).toHaveCount(1);
   await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
 
@@ -422,18 +443,20 @@ test('Mermaid source removal waits for a pending native fullscreen request befor
   });
 
   await fullscreenButton(page).click();
-  await expect.poll(async () => page.evaluate(() => window.pendingNativeEvents)).toEqual(['request']);
-  await page.evaluate(() => document.querySelector('.language-mermaid[data-mme-enhanced]').remove());
+  await expect
+    .poll(async () => page.evaluate(() => window.pendingNativeEvents))
+    .toEqual(['request']);
+  await page.evaluate(() =>
+    document.querySelector('.language-mermaid[data-mme-enhanced]').remove(),
+  );
   await page.waitForTimeout(50);
   await expect(page.locator('.mme-overlay-item')).toHaveCount(1);
   await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(1);
 
   await page.evaluate(() => window.finishPendingNativeRequest());
-  await expect.poll(async () => page.evaluate(() => window.pendingNativeEvents)).toEqual([
-    'request',
-    'resolved',
-    'exit',
-  ]);
+  await expect
+    .poll(async () => page.evaluate(() => window.pendingNativeEvents))
+    .toEqual(['request', 'resolved', 'exit']);
   await expect(page.locator('.mme-overlay-item')).toHaveCount(0);
   await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(0);
   await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
@@ -520,7 +543,9 @@ test('Mermaid cancels a target entry while the previous native fullscreen is exi
   });
 
   await fullscreenButton(page).first().click();
-  await expect.poll(async () => page.evaluate(() => window.switchNativeEvents)).toEqual(['request-a']);
+  await expect
+    .poll(async () => page.evaluate(() => window.switchNativeEvents))
+    .toEqual(['request-a']);
   await page.evaluate(() => {
     const button = document.querySelectorAll(
       '.mme-overlay-item .mme-toolbar [data-action="toggleFullscreen"]',
@@ -529,15 +554,15 @@ test('Mermaid cancels a target entry while the previous native fullscreen is exi
     button.click();
   });
 
-  await expect.poll(async () =>
-    page.evaluate(() => window.switchNativeEvents.filter((event) => event === 'exit-a').length),
-  ).toBe(1);
+  await expect
+    .poll(async () =>
+      page.evaluate(() => window.switchNativeEvents.filter((event) => event === 'exit-a').length),
+    )
+    .toBe(1);
   await page.evaluate(() => window.finishSwitchNativeExit());
-  await expect.poll(async () => page.evaluate(() => window.switchNativeEvents)).toEqual([
-    'request-a',
-    'exit-a',
-    'exit-resolved',
-  ]);
+  await expect
+    .poll(async () => page.evaluate(() => window.switchNativeEvents))
+    .toEqual(['request-a', 'exit-a', 'exit-resolved']);
   await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(0);
   await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
 });
@@ -577,30 +602,33 @@ test('Mermaid does not enter fullscreen after the waiting target is removed', as
   });
 
   await fullscreenButton(page).first().click();
-  await expect.poll(async () => page.evaluate(() => window.removedTargetEvents)).toEqual(['request-a']);
+  await expect
+    .poll(async () => page.evaluate(() => window.removedTargetEvents))
+    .toEqual(['request-a']);
   await page.evaluate(() => {
     document
       .querySelectorAll('.mme-overlay-item .mme-toolbar [data-action="toggleFullscreen"]')[1]
       .click();
   });
-  await expect.poll(async () => page.evaluate(() => window.removedTargetEvents)).toEqual([
-    'request-a',
-    'exit-a',
-  ]);
-  await page.evaluate(() => document.querySelectorAll('.language-mermaid[data-mme-enhanced]')[1].remove());
+  await expect
+    .poll(async () => page.evaluate(() => window.removedTargetEvents))
+    .toEqual(['request-a', 'exit-a']);
+  await page.evaluate(() =>
+    document.querySelectorAll('.language-mermaid[data-mme-enhanced]')[1].remove(),
+  );
   await expect(page.locator('.mme-overlay-item')).toHaveCount(1);
 
   await page.evaluate(() => window.finishRemovedTargetExit());
-  await expect.poll(async () => page.evaluate(() => window.removedTargetEvents)).toEqual([
-    'request-a',
-    'exit-a',
-    'exit-resolved',
-  ]);
+  await expect
+    .poll(async () => page.evaluate(() => window.removedTargetEvents))
+    .toEqual(['request-a', 'exit-a', 'exit-resolved']);
   await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(0);
   await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
 });
 
-test('Mermaid native fullscreen ignores stale cleanup after a newer session starts', async ({ page }) => {
+test('Mermaid native fullscreen ignores stale cleanup after a newer session starts', async ({
+  page,
+}) => {
   await prepareEditor(page);
   await page.evaluate(() => {
     let fakeFullscreenElement = null;
@@ -647,7 +675,9 @@ test('Mermaid native fullscreen ignores stale cleanup after a newer session star
   await expect(fullscreenButton(page)).toHaveAttribute('title', '退出全屏');
 });
 
-test('Mermaid native fullscreen controls use the clone and restore the prior view', async ({ page }) => {
+test('Mermaid native fullscreen controls use the clone and restore the prior view', async ({
+  page,
+}) => {
   await prepareEditor(page);
 
   await page.locator('[data-action="zoomIn"]').click();
@@ -656,7 +686,9 @@ test('Mermaid native fullscreen controls use the clone and restore the prior vie
     target.dispatchEvent(
       new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 20, clientY: 20 }),
     );
-    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 85, clientY: 60 }));
+    document.dispatchEvent(
+      new MouseEvent('mousemove', { bubbles: true, clientX: 85, clientY: 60 }),
+    );
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
   await page.locator('[data-action="toggleTheme"]').click();
@@ -701,7 +733,9 @@ test('Mermaid native fullscreen controls use the clone and restore the prior vie
     chart.dispatchEvent(
       new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 30, clientY: 30 }),
     );
-    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 110, clientY: 95 }));
+    document.dispatchEvent(
+      new MouseEvent('mousemove', { bubbles: true, clientX: 110, clientY: 95 }),
+    );
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
   await page.locator('[data-action="downloadSVG"]').click();
@@ -785,11 +819,13 @@ test('Mermaid source removal releases source drag listeners', async ({ page }) =
   });
   await expect(page.locator('.mme-overlay-item')).toHaveCount(0);
 
-  expect(
-    await page.evaluate(() => typeof window.removedMermaidSource._mmeDragPanCleanup),
-  ).toBe('undefined');
+  expect(await page.evaluate(() => typeof window.removedMermaidSource._mmeDragPanCleanup)).toBe(
+    'undefined',
+  );
   await page.evaluate(() => {
-    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 90, clientY: 70 }));
+    document.dispatchEvent(
+      new MouseEvent('mousemove', { bubbles: true, clientX: 90, clientY: 70 }),
+    );
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
   await page.waitForTimeout(0);
@@ -803,7 +839,9 @@ test('Mermaid fullscreen layout fits a mobile viewport', async ({ page }) => {
   await fullscreenButton(page).click();
   await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
   await expect.poll(async () => page.locator('.mme-toolbar').first().boundingBox()).not.toBeNull();
-  await expect.poll(async () => page.locator('.language-mermaid svg').last().boundingBox()).not.toBeNull();
+  await expect
+    .poll(async () => page.locator('.language-mermaid svg').last().boundingBox())
+    .not.toBeNull();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
 
@@ -811,13 +849,17 @@ test('Mermaid normal zoom keeps the chart center stable', async ({ page }) => {
   await prepareEditor(page);
 
   const centerBeforeZoom = await page.evaluate(() => {
-    const rect = document.querySelector('.language-mermaid[data-mme-enhanced] svg').getBoundingClientRect();
+    const rect = document
+      .querySelector('.language-mermaid[data-mme-enhanced] svg')
+      .getBoundingClientRect();
     return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
   });
   await page.locator('[data-action="zoomIn"]').first().click();
   await page.waitForTimeout(300);
   const centerAfterZoom = await page.evaluate(() => {
-    const rect = document.querySelector('.language-mermaid[data-mme-enhanced] svg').getBoundingClientRect();
+    const rect = document
+      .querySelector('.language-mermaid[data-mme-enhanced] svg')
+      .getBoundingClientRect();
     return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
   });
   expect(Math.abs(centerAfterZoom.x - centerBeforeZoom.x)).toBeLessThan(2);
@@ -829,10 +871,14 @@ test('Fullscreen does not pollute Mermaid Undo and Redo', async ({ page }) => {
   await rejectNativeFullscreen(page);
 
   const originalValue = await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, ''));
-  const baselineSnapshot = await page.evaluate(() => window._vditor.vditor.undo.addCaret(window._vditor.vditor));
+  const baselineSnapshot = await page.evaluate(() =>
+    window._vditor.vditor.undo.addCaret(window._vditor.vditor),
+  );
   const editedValue = `${originalValue}!`;
   await page.evaluate((value) => window._vditor.setValue(value), editedValue);
-  await expect.poll(async () => page.evaluate(() => window._vditor.getValue())).toContain('After the diagram!');
+  await expect
+    .poll(async () => page.evaluate(() => window._vditor.getValue()))
+    .toContain('After the diagram!');
   await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
   await fullscreenButton(page).click();
   await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
@@ -844,9 +890,9 @@ test('Fullscreen does not pollute Mermaid Undo and Redo', async ({ page }) => {
     vditor.undo.ir.lastText = current;
     vditor.undo.renderDiff(window.fullscreenUndoPatch, vditor, false);
   }, baselineSnapshot);
-  await expect.poll(async () => page.evaluate(() => window._vditor.getValue().replace(/\n+$/, ''))).toBe(
-    originalValue,
-  );
+  await expect
+    .poll(async () => page.evaluate(() => window._vditor.getValue().replace(/\n+$/, '')))
+    .toBe(originalValue);
   await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
   expect(await page.locator('.vditor-ir .vditor-wysiwyg__block').count()).toBe(0);
 
@@ -854,7 +900,9 @@ test('Fullscreen does not pollute Mermaid Undo and Redo', async ({ page }) => {
     const vditor = window._vditor.vditor;
     vditor.undo.renderDiff(window.fullscreenUndoPatch, vditor, true);
   });
-  await expect.poll(async () => page.evaluate(() => window._vditor.getValue())).toContain('After the diagram!');
+  await expect
+    .poll(async () => page.evaluate(() => window._vditor.getValue()))
+    .toContain('After the diagram!');
   await expect.poll(async () => page.locator('.vditor-ir__preview svg').count()).toBe(1);
   expect(await page.locator('.vditor-ir .vditor-wysiwyg__block').count()).toBe(0);
 });
@@ -915,7 +963,8 @@ test('Exiting fullscreen restores the chart transform from before fullscreen', a
   const chart = page.locator('.language-mermaid[data-mme-enhanced]').last();
   const box = await chart.boundingBox();
   const beforeDrag = await page.evaluate(() => {
-    const transform = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').style.transform;
+    const transform = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg')
+      .style.transform;
     const match = transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px/);
     return { x: Number(match[1]), y: Number(match[2]) };
   });
@@ -924,7 +973,8 @@ test('Exiting fullscreen restores the chart transform from before fullscreen', a
   await page.mouse.move(box.x + box.width / 2 + 450, box.y + box.height / 2 + 280, { steps: 5 });
   await page.mouse.up();
   const afterDrag = await page.evaluate(() => {
-    const transform = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').style.transform;
+    const transform = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg')
+      .style.transform;
     const match = transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px/);
     return { x: Number(match[1]), y: Number(match[2]) };
   });
@@ -964,42 +1014,67 @@ test('Entering fullscreen resets an existing normal chart transform', async ({ p
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 450, box.y + box.height / 2 + 280, { steps: 5 });
   await page.mouse.up();
-  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /scale\(1\.5\)/);
+  await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute(
+    'style',
+    /scale\(1\.5\)/,
+  );
 
   await fullscreenButton(page).click();
   await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
-  await expect.poll(async () => page.evaluate(() => {
-    const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
-    const match = svg?.style.transform.match(/scale\(([^)]+)\)/);
-    return match ? Number(match[1]) : NaN;
-  })).toBeLessThan(1);
-  await expect.poll(async () => page.evaluate(() => {
-    const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
-    const match = svg?.style.transform.match(/scale\(([^)]+)\)/);
-    return match ? Number(match[1]) : NaN;
-  })).toBeGreaterThan(0);
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
+        const match = svg?.style.transform.match(/scale\(([^)]+)\)/);
+        return match ? Number(match[1]) : NaN;
+      }),
+    )
+    .toBeLessThan(1);
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const svg = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg');
+        const match = svg?.style.transform.match(/scale\(([^)]+)\)/);
+        return match ? Number(match[1]) : NaN;
+      }),
+    )
+    .toBeGreaterThan(0);
 
   const initialFullscreenView = await page.evaluate(() => {
     const target = document.querySelector('.language-mermaid[data-mme-fullscreen="true"]');
     const svg = target.querySelector('svg');
-    return { target: target.getBoundingClientRect().toJSON(), svg: svg.getBoundingClientRect().toJSON() };
+    return {
+      target: target.getBoundingClientRect().toJSON(),
+      svg: svg.getBoundingClientRect().toJSON(),
+    };
   });
-  expect(initialFullscreenView.svg.left).toBeGreaterThanOrEqual(initialFullscreenView.target.left - 1);
-  expect(initialFullscreenView.svg.top).toBeGreaterThanOrEqual(initialFullscreenView.target.top - 1);
-  expect(initialFullscreenView.svg.right).toBeLessThanOrEqual(initialFullscreenView.target.right + 1);
-  expect(initialFullscreenView.svg.bottom).toBeLessThanOrEqual(initialFullscreenView.target.bottom + 1);
+  expect(initialFullscreenView.svg.left).toBeGreaterThanOrEqual(
+    initialFullscreenView.target.left - 1,
+  );
+  expect(initialFullscreenView.svg.top).toBeGreaterThanOrEqual(
+    initialFullscreenView.target.top - 1,
+  );
+  expect(initialFullscreenView.svg.right).toBeLessThanOrEqual(
+    initialFullscreenView.target.right + 1,
+  );
+  expect(initialFullscreenView.svg.bottom).toBeLessThanOrEqual(
+    initialFullscreenView.target.bottom + 1,
+  );
 
   const centerBeforeZoom = await page.evaluate(() => {
-    const rect = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').getBoundingClientRect();
+    const rect = document
+      .querySelector('.language-mermaid[data-mme-fullscreen="true"] svg')
+      .getBoundingClientRect();
     return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
   });
   await page.locator('[data-action="zoomIn"]').first().click();
   await page.waitForTimeout(300);
   const centerAfterZoom = await page.evaluate(() => {
-    const rect = document.querySelector('.language-mermaid[data-mme-fullscreen="true"] svg').getBoundingClientRect();
+    const rect = document
+      .querySelector('.language-mermaid[data-mme-fullscreen="true"] svg')
+      .getBoundingClientRect();
     return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
   });
   expect(Math.abs(centerAfterZoom.x - centerBeforeZoom.x)).toBeLessThan(2);
   expect(Math.abs(centerAfterZoom.y - centerBeforeZoom.y)).toBeLessThan(2);
-
 });

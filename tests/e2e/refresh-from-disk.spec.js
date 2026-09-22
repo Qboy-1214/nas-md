@@ -14,9 +14,12 @@ test.describe('文件从磁盘重新加载', () => {
     const { mountInfo, testFileName } = await ensureTestFile(page);
 
     // Open the file
-    await page.evaluate(({ mountId, path }) => {
-      openFile('/' + path, mountId);
-    }, { mountId: mountInfo.id, path: testFileName });
+    await page.evaluate(
+      ({ mountId, path }) => {
+        openFile('/' + path, mountId);
+      },
+      { mountId: mountInfo.id, path: testFileName },
+    );
     await page.waitForTimeout(2000);
 
     // Verify refresh button is visible
@@ -47,13 +50,19 @@ test.describe('文件从磁盘重新加载', () => {
     const { mountInfo, testFileName } = await ensureTestFile(page);
 
     // Open the file
-    await page.evaluate(({ mountId, path }) => {
-      openFile('/' + path, mountId);
-    }, { mountId: mountInfo.id, path: testFileName });
-    await page.waitForFunction(() => {
-      const vd = window._vditor;
-      return vd && vd.getValue().length > 0;
-    }, { timeout: 10000 });
+    await page.evaluate(
+      ({ mountId, path }) => {
+        openFile('/' + path, mountId);
+      },
+      { mountId: mountInfo.id, path: testFileName },
+    );
+    await page.waitForFunction(
+      () => {
+        const vd = window._vditor;
+        return vd && vd.getValue().length > 0;
+      },
+      { timeout: 10000 },
+    );
 
     // Delete the file externally
     await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
