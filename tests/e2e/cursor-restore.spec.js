@@ -26,10 +26,35 @@ async function ensureTestFile(page) {
   return { mountInfo, testFileName };
 }
 
+async function waitForTestDocumentReady(page) {
+  await expect(
+    page.locator('.vditor-ir .vditor-reset p', { hasText: 'Paragraph 80.8:' }),
+    'complete test document rendered in editor',
+  ).toHaveCount(1, { timeout: 10000 });
+}
+
 async function scrollToBottom(page) {
+  await getScrollTop(page);
+  await page.waitForFunction(
+    () => {
+      const vd = window._vditor;
+      if (!vd) return false;
+      const mode = vd.getCurrentMode();
+      const base =
+        mode === 'sv'
+          ? vd.vditor.sv.element
+          : mode === 'wysiwyg'
+            ? vd.vditor.wysiwyg.element
+            : vd.vditor.ir.element;
+      const el = mode === 'sv' ? base : base?.querySelector('.vditor-reset') || base;
+      return Boolean(el && el.scrollHeight > el.clientHeight);
+    },
+    undefined,
+    { timeout: 10000 },
+  );
   await page.evaluate(() => {
     const vd = window._vditor;
-    if (!vd) return;
+    if (!vd) throw new Error('Vditor editor is unavailable');
     const mode = vd.getCurrentMode();
     const base =
       mode === 'sv'
@@ -38,24 +63,54 @@ async function scrollToBottom(page) {
           ? vd.vditor.wysiwyg.element
           : vd.vditor.ir.element;
     const el = mode === 'sv' ? base : base?.querySelector('.vditor-reset') || base;
-    if (!el) return;
-    // Try direct scrollTop first
-    const maxScroll = el.scrollHeight - el.clientHeight;
-    if (maxScroll > 0) {
-      el.scrollTop = maxScroll;
-    } else {
-      // Fallback: scroll last child into view
-      const lastChild = el.querySelector('.vditor-reset') || el;
-      if (lastChild) lastChild.scrollIntoView({ block: 'end' });
-    }
+    if (!el) throw new Error(`Vditor ${mode} scroll container is unavailable`);
+    el.scrollTop = el.scrollHeight - el.clientHeight;
   });
-  await page.waitForTimeout(500);
+}
+
+async function placeCursorAtHeading(page, headingText) {
+  await getScrollTop(page);
+  await page.evaluate((expectedHeading) => {
+    const vd = window._vditor;
+    if (!vd) throw new Error('Vditor editor is unavailable');
+    const mode = vd.getCurrentMode();
+    const base =
+      mode === 'sv'
+        ? vd.vditor.sv.element
+        : mode === 'wysiwyg'
+          ? vd.vditor.wysiwyg.element
+          : vd.vditor.ir.element;
+    const el = mode === 'sv' ? base : base?.querySelector('.vditor-reset') || base;
+    if (!el) throw new Error(`Vditor ${mode} scroll container is unavailable`);
+    const heading = Array.from(el.querySelectorAll('h1, h2, h3, h4, h5, h6')).find((node) =>
+      (node.innerText || node.textContent).includes(expectedHeading),
+    );
+    if (!heading) throw new Error(`Heading is unavailable: ${expectedHeading}`);
+    const walker = document.createTreeWalker(heading, NodeFilter.SHOW_TEXT);
+    let headingTextNode = walker.nextNode();
+    while (headingTextNode && !headingTextNode.nodeValue.includes(expectedHeading)) {
+      headingTextNode = walker.nextNode();
+    }
+    if (!headingTextNode) throw new Error(`Heading text is unavailable: ${expectedHeading}`);
+
+    el.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(headingTextNode, Math.min(1, headingTextNode.nodeValue.length));
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const headingOffset = heading.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    el.scrollTop += headingOffset - el.clientHeight / 3;
+  }, headingText);
+  await expect.poll(() => getScrollTop(page), { timeout: 5000 }).toBeGreaterThan(0);
 }
 
 async function getScrollTop(page) {
   return page.evaluate(() => {
     const vd = window._vditor;
-    if (!vd) return 0;
+    if (!vd) throw new Error('Vditor editor is unavailable');
     const mode = vd.getCurrentMode();
     const base =
       mode === 'sv'
@@ -64,11 +119,21 @@ async function getScrollTop(page) {
           ? vd.vditor.wysiwyg.element
           : vd.vditor.ir.element;
     const el = mode === 'sv' ? base : base?.querySelector('.vditor-reset') || base;
-    return el ? el.scrollTop : 0;
+    if (!el) throw new Error(`Vditor ${mode} scroll container is unavailable`);
+    return el.scrollTop;
   });
 }
 
 test.describe('光标和滚动位置恢复', () => {
+  test('滚动辅助函数在编辑器缺失时直接失败', async ({ page }) => {
+    const results = await Promise.allSettled([scrollToBottom(page), getScrollTop(page)]);
+
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+    for (const result of results) {
+      expect(result.reason.message).toContain('Vditor editor is unavailable');
+    }
+  });
+
   test('刷新页面后恢复滚动位置', async ({ page }) => {
     const { mountInfo, testFileName } = await ensureTestFile(page);
 
@@ -76,17 +141,12 @@ test.describe('光标和滚动位置恢复', () => {
       const fileEl = page.locator('.tree-item', { hasText: testFileName });
       await expect(fileEl, 'test file visible in tree').toHaveCount(1);
       await fileEl.click();
-      await page.waitForFunction(
-        () => {
-          const vd = window._vditor;
-          return vd && vd.getValue().length > 100;
-        },
-        { timeout: 10000 },
-      );
+      await waitForTestDocumentReady(page);
 
       // Scroll to bottom
       await scrollToBottom(page);
       const scrollBefore = await getScrollTop(page);
+      expect(scrollBefore, 'test document must be scrollable').toBeGreaterThan(0);
 
       // Reload page
       await page.reload();
@@ -98,14 +158,12 @@ test.describe('光标和滚动位置恢复', () => {
         { timeout: 15000 },
       );
 
-      // Check scroll position restored (if scrollable)
-      if (scrollBefore > 0) {
-        await expect
-          .poll(async () => Math.abs((await getScrollTop(page)) - scrollBefore), {
-            timeout: 5000,
-          })
-          .toBeLessThan(200);
-      }
+      // Check scroll position restored
+      await expect
+        .poll(async () => Math.abs((await getScrollTop(page)) - scrollBefore), {
+          timeout: 5000,
+        })
+        .toBeLessThan(200);
     } finally {
       await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
     }
@@ -117,36 +175,33 @@ test.describe('光标和滚动位置恢复', () => {
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
     await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
-    await page.waitForFunction(
-      () => {
-        const vd = window._vditor;
-        return vd && vd.getValue().length > 100;
-      },
-      { timeout: 10000 },
-    );
+    await waitForTestDocumentReady(page);
 
-    // Scroll to middle
-    await page.evaluate(() => {
-      const vd = window._vditor;
-      if (!vd) return;
-      const el = vd.vditor.ir.element;
-      el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
-    });
-    await page.waitForTimeout(500);
+    // Put the cursor at a middle heading and persist the exact restore anchor.
+    await placeCursorAtHeading(page, 'Section 40');
     const scrollBefore = await getScrollTop(page);
+    expect(scrollBefore, 'test document must be scrollable').toBeGreaterThan(0);
+    const savedPosition = await page.evaluate(() => {
+      saveCursorScrollToStorage();
+      return JSON.parse(localStorage.getItem('nasmd_cursor_pos'));
+    });
+    expect(savedPosition.headingText).toContain('Section 40');
 
     // Reload
     await page.reload();
     await page.waitForSelector('.mount-name', { timeout: 10000 });
-    await page.waitForTimeout(3000);
 
-    const breadcrumbText = await page.locator('#breadcrumb').textContent();
-    expect(breadcrumbText, 'file auto-restored after reload').toContain(testFileName);
+    await expect(page.locator('#breadcrumb'), 'file auto-restored after reload').toContainText(
+      testFileName,
+      { timeout: 15000 },
+    );
+    await waitForTestDocumentReady(page);
 
-    const scrollAfter = await getScrollTop(page);
-    if (scrollBefore > 0) {
-      expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThan(200);
-    }
+    await expect
+      .poll(async () => Math.abs((await getScrollTop(page)) - scrollBefore), {
+        timeout: 5000,
+      })
+      .toBeLessThan(200);
 
     await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
@@ -157,33 +212,26 @@ test.describe('光标和滚动位置恢复', () => {
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
     await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
-    await page.waitForFunction(
-      () => {
-        const vd = window._vditor;
-        return vd && vd.getValue().length > 100;
-      },
-      { timeout: 10000 },
+    await waitForTestDocumentReady(page);
+
+    // Place the cursor on a real heading so the persisted state has a meaningful anchor.
+    await placeCursorAtHeading(page, 'Section 40');
+    expect(await getScrollTop(page), 'test document must be scrollable').toBeGreaterThan(0);
+
+    // Switch to another real file through the same UI path as a user.
+    const otherFile = page.locator('.tree-item', { hasText: 'test-scroll.md' });
+    await expect(otherFile, 'switch target visible in tree').toHaveCount(1);
+    await otherFile.click();
+    await expect(page.locator('#breadcrumb'), 'switch target opened').toContainText(
+      'test-scroll.md',
     );
-
-    // Scroll to middle
-    await page.evaluate(() => {
-      const vd = window._vditor;
-      if (!vd) return;
-      const el = vd.vditor.ir.element;
-      el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
-    });
-    await page.waitForTimeout(500);
-
-    // Switch to another file
-    await page.evaluate(() => openFile('/欢迎.md', 'builtin-storage'));
-    await page.waitForTimeout(1500);
 
     // Check localStorage has cursor position
     const savedPos = await page.evaluate(() => localStorage.getItem('nasmd_cursor_pos'));
     expect(savedPos).not.toBeNull();
     const pos = JSON.parse(savedPos);
     expect(pos).toHaveProperty('scrollPercent');
-    expect(pos).toHaveProperty('headingText');
+    expect(pos.headingText).toContain('Section 40');
 
     await deleteAdminFile(page, mountInfo.id, `/${testFileName}`);
   });
@@ -194,20 +242,18 @@ test.describe('光标和滚动位置恢复', () => {
     const fileEl = page.locator('.tree-item', { hasText: testFileName });
     await expect(fileEl, 'test file visible in tree').toHaveCount(1);
     await fileEl.click();
-    await page.waitForFunction(
-      () => {
-        const vd = window._vditor;
-        return vd && vd.getValue().length > 100;
-      },
-      { timeout: 10000 },
-    );
+    await waitForTestDocumentReady(page);
 
     // Scroll to bottom
     await scrollToBottom(page);
 
-    // Switch to a different file
-    await page.evaluate(() => openFile('/欢迎.md', 'builtin-storage'));
-    await page.waitForTimeout(1500);
+    // Switch to a different real file.
+    const otherFile = page.locator('.tree-item', { hasText: 'test-scroll.md' });
+    await expect(otherFile, 'switch target visible in tree').toHaveCount(1);
+    await otherFile.click();
+    await expect(page.locator('#breadcrumb'), 'switch target opened').toContainText(
+      'test-scroll.md',
+    );
 
     // New file should start at top
     const scrollTop = await getScrollTop(page);
@@ -223,13 +269,7 @@ test.describe('光标和滚动位置恢复', () => {
       const fileEl = page.locator('.tree-item', { hasText: testFileName });
       await expect(fileEl, 'test file visible in tree').toHaveCount(1);
       await fileEl.click();
-      await page.waitForFunction(
-        () => {
-          const vd = window._vditor;
-          return vd && vd.getValue().length > 100;
-        },
-        { timeout: 10000 },
-      );
+      await waitForTestDocumentReady(page);
 
       const pageErrors = [];
       page.on('pageerror', (error) => pageErrors.push(error.message));
