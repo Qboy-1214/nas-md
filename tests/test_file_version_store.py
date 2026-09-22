@@ -2379,30 +2379,27 @@ def test_current_version_save_writes_exact_target_content(store, test_file):
 
 
 @pytest.mark.parametrize(
-    ("base", "changes", "submitted", "reconstructed"),
+    ("base", "changes", "submitted"),
     [
         (
             "A\n\nB\n\nC",
             [{"type": "delete", "paraIdx": 2}],
             "A\n\nB",
-            "A\n\nB\n\n",
         ),
         (
             "A\n\nB",
             [{"type": "replace", "paraIdx": 1, "content": "B2"}],
             "A\n\nB2\n",
-            "A\n\nB2",
         ),
     ],
     ids=["legacy-final-delete", "legacy-trailing-newline"],
 )
-def test_legacy_changes_canonicalize_from_declared_operations(
-    store, test_file, base, changes, submitted, reconstructed
-):
+def test_inconsistent_declared_changes_require_resync(store, test_file, base, changes, submitted):
     key = "mount-0:/test.md"
     with open(test_file, "w", encoding="utf-8") as f:
         f.write(base)
     store.init_file(key, test_file, base)
+    history_before = _history_count(store, key)
 
     result = store.apply_changes(
         key,
@@ -2416,11 +2413,18 @@ def test_legacy_changes_canonicalize_from_declared_operations(
         base_content=base,
     )
 
-    assert result["applied"] is True
-    assert result["content"] == reconstructed
-    assert version_history.get_version_content(key, 0, store._storage_dir) == reconstructed
+    assert result == {
+        "applied": False,
+        "merged": False,
+        "resyncRequired": True,
+        "newVersion": 0,
+        "content": base,
+    }
+    assert store.get_current_version(key) == 0
+    assert store.get_current_content(key) == base
+    assert _history_count(store, key) == history_before
     with open(test_file, "rb") as f:
-        assert f.read() == reconstructed.replace("\n", os.linesep).encode("utf-8")
+        assert f.read() == base.replace("\n", os.linesep).encode("utf-8")
 
 
 def test_legacy_stale_text_edit_preserves_remote_tab_delimiter(store, test_file):
