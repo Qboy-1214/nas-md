@@ -138,6 +138,414 @@ test('paragraph contract matches the backend', async ({ page }) => {
   }
 });
 
+test('a timed-out save stays serialized until its request settles', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const mountId = 'serialized-watchdog-mount';
+    const path = '/serialized-watchdog.md';
+    const fileKey = `${mountId}:${path}`;
+    const originalSubmitChanges = API.submitChanges;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const calls = [];
+    const deferred = [];
+    const watchdogs = [];
+    let pendingRequests = 0;
+    let maxConcurrentRequests = 0;
+    let nextWatchdogId = 900000;
+
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 15000) {
+        const watchdog = { callback: () => callback(...args), id: nextWatchdogId++ };
+        watchdogs.push(watchdog);
+        return watchdog.id;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    window.clearTimeout = (timerId) => {
+      if (watchdogs.some((item) => item.id === timerId)) return;
+      originalClearTimeout(timerId);
+    };
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      pendingRequests += 1;
+      maxConcurrentRequests = Math.max(maxConcurrentRequests, pendingRequests);
+      return new Promise((resolve) => {
+        deferred.push((response) => {
+          pendingRequests -= 1;
+          resolve(response);
+        });
+      });
+    };
+    Object.assign(window.state, {
+      currentMountId: mountId,
+      currentPath: path,
+      mounts: [{ id: mountId, readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'A',
+      fileVersions: { [fileKey]: 1 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A';
+    window._vditor = {
+      value: 'A-one',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+
+    try {
+      const firstSave = window.saveFile({ silent: true });
+      while (deferred.length < 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      watchdogs[0].callback();
+
+      window._vditor.value = 'A-two';
+      window.onEditorInput();
+      const retryDuringTimeout = window.saveFile({ silent: true });
+      await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      const callsBeforeFirstSettlement = calls.length;
+      const concurrencyBeforeFirstSettlement = maxConcurrentRequests;
+
+      deferred[0]({ applied: true, merged: false, newVersion: 2, content: 'A-one' });
+      await firstSave;
+      const continuationDeadline = Date.now() + 1000;
+      while (deferred.length < 2 && Date.now() < continuationDeadline) {
+        await new Promise((resolve) => originalSetTimeout(resolve, 10));
+      }
+      if (deferred[1]) {
+        deferred[1]({ applied: true, merged: false, newVersion: 3, content: 'A-two' });
+      }
+      await retryDuringTimeout;
+      const cleanDeadline = Date.now() + 1000;
+      while (window.state.dirty && Date.now() < cleanDeadline) {
+        await new Promise((resolve) => originalSetTimeout(resolve, 10));
+      }
+
+      return {
+        calls,
+        callsBeforeFirstSettlement,
+        concurrencyBeforeFirstSettlement,
+        maxConcurrentRequests,
+        dirty: window.state.dirty,
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  expect(result).toEqual({
+    calls: [
+      { baseVersion: 1, content: 'A-one', baseContent: 'A' },
+      { baseVersion: 2, content: 'A-two', baseContent: 'A-one' },
+    ],
+    callsBeforeFirstSettlement: 1,
+    concurrencyBeforeFirstSettlement: 1,
+    maxConcurrentRequests: 1,
+    dirty: false,
+    baseVersion: 3,
+    baseContent: 'A-two',
+  });
+});
+
+test('trailing blank lines typed in flight are preserved by the continuation save', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const mountId = 'trailing-input-mount';
+    const path = '/trailing-input.md';
+    const draftKey = window.nasmdDraftStorage.key(mountId, path);
+    const calls = [];
+    let resolveFirst;
+    const firstResponse = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      if (calls.length === 1) return firstResponse;
+      return { applied: true, merged: false, newVersion: 3, content: args[7] };
+    };
+    Object.assign(window.state, {
+      currentMountId: mountId,
+      currentPath: path,
+      mounts: [{ id: mountId, readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'A',
+      fileVersions: { [`${mountId}:${path}`]: 1 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A';
+    window._vditor = {
+      value: 'A-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    localStorage.removeItem(draftKey);
+
+    try {
+      const saving = window.saveFile({ silent: true });
+      while (!resolveFirst) await new Promise((resolve) => setTimeout(resolve, 0));
+      window._vditor.value = 'A-local\n\n';
+      window.onEditorInput();
+      resolveFirst({ applied: true, merged: false, newVersion: 2, content: 'A-local' });
+      await saving;
+      const deadline = Date.now() + 1000;
+      while ((calls.length < 2 || window.state.dirty) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return {
+        calls,
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        draft: localStorage.getItem(draftKey),
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      localStorage.removeItem(draftKey);
+    }
+  });
+
+  expect(result).toEqual({
+    calls: [
+      { baseVersion: 1, content: 'A-local', baseContent: 'A' },
+      { baseVersion: 2, content: 'A-local\n\n', baseContent: 'A-local' },
+    ],
+    dirty: false,
+    editor: 'A-local\n\n',
+    baseVersion: 3,
+    baseContent: 'A-local\n\n',
+    draft: null,
+  });
+});
+
+test('an authoritative lower-version resync is adopted and retried', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const mountId = 'rollback-resync-mount';
+    const path = '/rollback-resync.md';
+    const calls = [];
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      if (calls.length === 1) {
+        return {
+          applied: false,
+          merged: false,
+          resyncRequired: true,
+          newVersion: 3,
+          content: 'A-server',
+        };
+      }
+      return { applied: true, merged: true, newVersion: 4, content: args[7] };
+    };
+    Object.assign(window.state, {
+      currentMountId: mountId,
+      currentPath: path,
+      mounts: [{ id: mountId, readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 9,
+      baseContent: 'A-old',
+      fileVersions: { [`${mountId}:${path}`]: 9 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A-old';
+    window._vditor = {
+      value: 'A-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+
+    try {
+      await window.saveFile({ silent: true });
+      const deadline = Date.now() + 1000;
+      while ((calls.length < 2 || window.state.dirty) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return {
+        calls,
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        fileVersion: window.state.fileVersions[`${mountId}:${path}`],
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+    }
+  });
+
+  expect(result).toEqual({
+    calls: [
+      { baseVersion: 9, content: 'A-local', baseContent: 'A-old' },
+      { baseVersion: 3, content: 'A-local', baseContent: 'A-server' },
+    ],
+    dirty: false,
+    editor: 'A-local',
+    baseVersion: 4,
+    baseContent: 'A-local',
+    fileVersion: 4,
+  });
+});
+
+test('a transformed no-op acknowledges the canonical snapshot', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const mountId = 'noop-save-mount';
+    const path = '/noop-save.md';
+    const draftKey = window.nasmdDraftStorage.key(mountId, path);
+    const calls = [];
+    const originalSubmitChanges = API.submitChanges;
+    API.submitChanges = async (...args) => {
+      calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+      return { applied: false, merged: false, newVersion: 2, content: 'A-local' };
+    };
+    Object.assign(window.state, {
+      currentMountId: mountId,
+      currentPath: path,
+      mounts: [{ id: mountId, readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'A',
+      fileVersions: { [`${mountId}:${path}`]: 1 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A';
+    window._vditor = {
+      value: 'A-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    localStorage.removeItem(draftKey);
+    window.saveToLocalStorage(path, 'A-local');
+
+    try {
+      await window.saveFile({ silent: true });
+      return {
+        calls,
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+        draft: localStorage.getItem(draftKey),
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      localStorage.removeItem(draftKey);
+    }
+  });
+
+  expect(result).toEqual({
+    calls: [{ baseVersion: 1, content: 'A-local', baseContent: 'A' }],
+    dirty: false,
+    editor: 'A-local',
+    baseVersion: 2,
+    baseContent: 'A-local',
+    originalContent: 'A-local',
+    draft: null,
+  });
+});
+
+test('a stale editor after callback cannot replace the active file baseline', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(() => {
+    const OriginalVditor = window.Vditor;
+    const originalEnhanceMermaid = window._enhanceMermaid;
+    const afterCallbacks = [];
+    window._enhanceMermaid = null;
+    window.Vditor = function FakeVditor(_id, options) {
+      afterCallbacks.push(options.after);
+      return {
+        value: options.value,
+        getValue() {
+          return this.value;
+        },
+        getCurrentMode() {
+          return options.mode;
+        },
+        setValue(value) {
+          this.value = value;
+        },
+        vditor: { ir: { element: document.createElement('div') } },
+      };
+    };
+
+    try {
+      window.state.currentPath = '/file-a.md';
+      window.state.baseContent = 'A-base';
+      window.initEditor('A-local', 'ir', false, 'A-base');
+      window.state.currentPath = '/file-b.md';
+      window.state.baseContent = 'B-base';
+      window.initEditor('B-local', 'ir', false, 'B-base');
+      const beforeStaleCallback = {
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+      };
+
+      afterCallbacks[0]();
+
+      return {
+        callbackCount: afterCallbacks.length,
+        beforeStaleCallback,
+        afterStaleCallback: {
+          baseContent: window.state.baseContent,
+          originalContent: window._originalContent,
+        },
+      };
+    } finally {
+      window.Vditor = OriginalVditor;
+      window._enhanceMermaid = originalEnhanceMermaid;
+    }
+  });
+
+  expect(result).toEqual({
+    callbackCount: 2,
+    beforeStaleCallback: { baseContent: 'B-base', originalContent: 'B-base' },
+    afterStaleCallback: { baseContent: 'B-base', originalContent: 'B-base' },
+  });
+});
+
 test('lossless parser reconstructs normalized input', async ({ page }) => {
   await page.goto('/admin');
 
