@@ -546,13 +546,24 @@ test('a stale editor after callback cannot replace the active file baseline', as
       };
 
       afterCallbacks[0]();
+      const afterStaleCallback = {
+        baseContent: window.state.baseContent,
+        originalContent: window._originalContent,
+      };
+
+      window.state.baseContent = 'pending-active-init';
+      window._originalContent = 'pending-active-init';
+      window._lastSavedContent = 'pending-active-init';
+      afterCallbacks[1]();
 
       return {
         callbackCount: afterCallbacks.length,
         beforeStaleCallback,
-        afterStaleCallback: {
+        afterStaleCallback,
+        afterCurrentCallback: {
           baseContent: window.state.baseContent,
           originalContent: window._originalContent,
+          lastSavedContent: window._lastSavedContent,
         },
       };
     } finally {
@@ -561,10 +572,19 @@ test('a stale editor after callback cannot replace the active file baseline', as
     }
   });
 
-  expect(result).toEqual({
-    callbackCount: 2,
-    beforeStaleCallback: { baseContent: 'B-base', originalContent: 'B-base' },
-    afterStaleCallback: { baseContent: 'B-base', originalContent: 'B-base' },
+  expect(result.callbackCount).toBe(2);
+  expect(result.beforeStaleCallback).toEqual({
+    baseContent: 'B-base',
+    originalContent: 'B-base',
+  });
+  expect(result.afterStaleCallback).toEqual({
+    baseContent: 'B-base',
+    originalContent: 'B-base',
+  });
+  expect(result.afterCurrentCallback).toEqual({
+    baseContent: 'B-base',
+    originalContent: 'B-base',
+    lastSavedContent: 'B-base',
   });
 });
 
