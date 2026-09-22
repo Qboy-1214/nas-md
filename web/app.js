@@ -3412,6 +3412,8 @@ function toggleBacklinks() {
 let _saveInProgress = false;
 let _activeSaveToken = null;
 let _nextSaveToken = 0;
+const MAX_LOCAL_SAVE_ACKNOWLEDGEMENTS = 32;
+const _locallyAcknowledgedSaves = new Map();
 
 async function saveFile(options = {}) {
   const normalizedOptions =
@@ -3460,8 +3462,44 @@ async function saveFile(options = {}) {
     (state.currentMountId === saveContext.mountId &&
       state.currentPath === saveContext.path &&
       window._vditor === saveContext.editor);
-  const persistSaveContextDraft = (fallbackContent) => {
-    if (!saveContext) return;
+  const getSaveContextObservedVersion = () => {
+    if (!saveContext) return 0;
+    const fileKey = saveContext.mountId + ':' + saveContext.path;
+    let observedVersion = Number(state.fileVersions[fileKey]) || 0;
+    if (state.currentMountId === saveContext.mountId && state.currentPath === saveContext.path) {
+      observedVersion = Math.max(observedVersion, Number(state.baseVersion) || 0);
+    }
+    return observedVersion;
+  };
+  const hasNewerObservedProgress = () =>
+    !!saveContext && getSaveContextObservedVersion() > Number(saveContext.baseVersion || 0);
+  const getNewerLocalAcknowledgement = () => {
+    if (!saveContext) return null;
+    const fileKey = saveContext.mountId + ':' + saveContext.path;
+    const acknowledgement = _locallyAcknowledgedSaves.get(fileKey);
+    if (acknowledgement) {
+      _locallyAcknowledgedSaves.delete(fileKey);
+      _locallyAcknowledgedSaves.set(fileKey, acknowledgement);
+    }
+    return acknowledgement && acknowledgement.saveToken > saveToken ? acknowledgement : null;
+  };
+  const recordLocalAcknowledgement = (acknowledgedContent) => {
+    if (!saveContext) return null;
+    const fileKey = saveContext.mountId + ':' + saveContext.path;
+    const previous = _locallyAcknowledgedSaves.get(fileKey);
+    if (previous && saveToken <= previous.saveToken) return previous;
+    const acknowledgement = { saveToken, content: _normContent(acknowledgedContent) };
+    _locallyAcknowledgedSaves.delete(fileKey);
+    _locallyAcknowledgedSaves.set(fileKey, acknowledgement);
+    while (_locallyAcknowledgedSaves.size > MAX_LOCAL_SAVE_ACKNOWLEDGEMENTS) {
+      _locallyAcknowledgedSaves.delete(_locallyAcknowledgedSaves.keys().next().value);
+    }
+    return acknowledgement;
+  };
+  const ownsCurrentSaveOutcome = () =>
+    isCurrentSaveContext() && saveToken === _nextSaveToken && !hasNewerObservedProgress();
+  const persistSaveContextDraft = (fallbackContent, coveringAcknowledgement = null) => {
+    if (!saveContext) return false;
     let draftContent = fallbackContent;
     const currentFileMatches =
       state.currentMountId === saveContext.mountId && state.currentPath === saveContext.path;
@@ -3473,11 +3511,47 @@ async function saveFile(options = {}) {
         // A destroyed editor may no longer expose its live value; keep the submitted snapshot.
       }
     }
+    const newerAcknowledgement = coveringAcknowledgement || getNewerLocalAcknowledgement();
+    const matchesSubmittedContent = _normContent(draftContent) === _normContent(fallbackContent);
+    const matchesAcknowledgedContent =
+      newerAcknowledgement &&
+      _normContent(draftContent) === _normContent(newerAcknowledgement.content);
+    if (newerAcknowledgement && (matchesSubmittedContent || matchesAcknowledgedContent)) {
+      return false;
+    }
     saveToLocalStorage(saveContext.path, draftContent, {
       mountId: saveContext.mountId,
       baseVersion: saveContext.baseVersion,
       baseContent: saveContext.baseContent,
     });
+    return true;
+  };
+  const clearCoveredSaveContextDraft = (fallbackContent, acknowledgedContent) => {
+    const draft = loadFromLocalStorage(saveContext.path, saveContext.mountId);
+    if (
+      draft &&
+      typeof draft.content === 'string' &&
+      (_normContent(draft.content) === _normContent(fallbackContent) ||
+        _normContent(draft.content) === _normContent(acknowledgedContent))
+    ) {
+      clearLocalStorage(saveContext.path, saveContext.mountId);
+    }
+  };
+  const validateSaveResponse = (resp) => {
+    if (!resp || typeof resp !== 'object') throw new Error('Invalid response from server');
+    if (resp.errorCode) throw new Error(resp.message || 'Unable to save file');
+    if (resp.error) throw new Error(resp.error);
+    const hasValidOutcome =
+      typeof resp.applied === 'boolean' &&
+      (resp.resyncRequired === undefined || typeof resp.resyncRequired === 'boolean') &&
+      !(resp.applied && resp.resyncRequired);
+    const hasValidSnapshot =
+      Number.isSafeInteger(resp.newVersion) &&
+      resp.newVersion >= 0 &&
+      typeof resp.content === 'string';
+    if (!hasValidOutcome || ((resp.applied || resp.resyncRequired) && !hasValidSnapshot)) {
+      throw new Error('Invalid response from server');
+    }
   };
 
   const watchdogTimer = setTimeout(() => {
@@ -3617,6 +3691,7 @@ async function saveFile(options = {}) {
             _normContent(submittedContent) === _normContent(submittedBaseContent) &&
             !hasHigherPendingVersion;
           if (confirmsCurrentEditor) {
+            recordLocalAcknowledgement(submittedContent);
             clearLocalStorage(saveContext.path, saveContext.mountId);
             markClean();
           } else {
@@ -3645,32 +3720,25 @@ async function saveFile(options = {}) {
           submittedBaseContent,
         );
 
+        validateSaveResponse(resp);
+
         if (!isCurrentSaveContext()) {
-          persistSaveContextDraft(submittedContent);
+          const observedVersion = getSaveContextObservedVersion();
+          const hasStaleSnapshot =
+            (resp.applied || resp.resyncRequired) && resp.newVersion < observedVersion;
+          if (resp.applied && !hasStaleSnapshot) {
+            const acknowledgement = recordLocalAcknowledgement(resp.content);
+            const persisted = persistSaveContextDraft(submittedContent, acknowledgement);
+            if (!persisted) clearCoveredSaveContextDraft(submittedContent, resp.content);
+          } else {
+            persistSaveContextDraft(submittedContent);
+          }
           console.log('[saveFile] ignored response: active file changed');
           return;
         }
-
-        if (!resp || typeof resp !== 'object') {
-          throw new Error('Invalid response from server');
-        }
-        if (resp.errorCode) {
-          throw new Error(resp.message || 'Unable to save file');
-        }
-        if (resp.error) {
-          throw new Error(resp.error);
-        }
-
-        const hasValidOutcome =
-          typeof resp.applied === 'boolean' &&
-          (resp.resyncRequired === undefined || typeof resp.resyncRequired === 'boolean') &&
-          !(resp.applied && resp.resyncRequired);
-        const hasValidSnapshot =
-          Number.isSafeInteger(resp.newVersion) &&
-          resp.newVersion >= 0 &&
-          typeof resp.content === 'string';
-        if (!hasValidOutcome || ((resp.applied || resp.resyncRequired) && !hasValidSnapshot)) {
-          throw new Error('Invalid response from server');
+        if (!ownsCurrentSaveOutcome()) {
+          console.log('[saveFile] ignored response: save transaction was superseded');
+          return;
         }
 
         const acknowledgedVersion = Math.max(
@@ -3735,6 +3803,7 @@ async function saveFile(options = {}) {
         state.fileVersions[fileKey] = resp.newVersion;
         window._originalContent = resp.content;
         window._lastSavedContent = resp.content;
+        recordLocalAcknowledgement(resp.content);
         if (
           state.pendingRemoteVersion !== null &&
           Number(state.pendingRemoteVersion) <= resp.newVersion
@@ -3782,6 +3851,10 @@ async function saveFile(options = {}) {
         console.warn('[saveFile] ignored failure: active file changed', e);
         return;
       }
+      if (!ownsCurrentSaveOutcome()) {
+        console.warn('[saveFile] ignored failure: save transaction was superseded', e);
+        return;
+      }
       markDirty();
       const draftContent = window._vditor ? window._vditor.getValue() : content;
       saveToLocalStorage(state.currentPath, draftContent);
@@ -3804,6 +3877,7 @@ async function saveFile(options = {}) {
     }
     if (
       (retryAfterResync || retryAfterConcurrentInput) &&
+      saveToken === _nextSaveToken &&
       isCurrentSaveContext() &&
       state.dirty &&
       state.currentPath
@@ -3818,6 +3892,7 @@ async function saveFile(options = {}) {
       }, 0);
     } else if (
       !handledResync &&
+      saveToken === _nextSaveToken &&
       isCurrentSaveContext() &&
       state.dirty &&
       state.autoSave &&

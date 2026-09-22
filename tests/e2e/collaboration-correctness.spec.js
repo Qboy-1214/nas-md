@@ -14,6 +14,118 @@ function scopedDraftKey(mountId, path) {
   return `nasmd_draft_v2_${encodeURIComponent(mountId)}:${encodeURIComponent(path)}`;
 }
 
+async function runLateTimedOutOutcome(page, outcome, options = {}) {
+  await page.goto('/admin');
+
+  return page.evaluate(
+    async ({ lateOutcome, replaceEditorAfterNewerSave }) => {
+      const path = `/watchdog-late-${lateOutcome}.md`;
+      const mountId = 'watchdog-late-mount';
+      const fileKey = `${mountId}:${path}`;
+      const draftKey = window.nasmdDraftStorage.key(mountId, path);
+      const originalSubmitChanges = API.submitChanges;
+      const originalSetTimeout = window.setTimeout;
+      const originalClearTimeout = window.clearTimeout;
+      const calls = [];
+      const deferred = [];
+      const watchdogs = [];
+      let nextWatchdogId = 300000;
+
+      window.setTimeout = (callback, delay, ...args) => {
+        if (delay === 15000) {
+          const watchdog = { callback: () => callback(...args), id: nextWatchdogId++ };
+          watchdogs.push(watchdog);
+          return watchdog.id;
+        }
+        return originalSetTimeout(callback, delay, ...args);
+      };
+      window.clearTimeout = (timerId) => {
+        if (watchdogs.some((item) => item.id === timerId)) return;
+        originalClearTimeout(timerId);
+      };
+      API.submitChanges = async (...args) => {
+        calls.push({ baseVersion: args[2], content: args[7], baseContent: args[8] });
+        return new Promise((resolve, reject) => deferred.push({ reject, resolve }));
+      };
+      Object.assign(window.state, {
+        currentMountId: mountId,
+        currentPath: path,
+        mounts: [{ id: mountId, readonly: false }],
+        localMounts: {},
+        remoteFile: null,
+        baseVersion: 2,
+        baseContent: 'base-v2',
+        fileVersions: { [fileKey]: 2 },
+        pendingRemoteVersion: null,
+        dirty: true,
+        autoSave: false,
+      });
+      window._originalContent = 'base-v2';
+      window._lastSavedContent = 'base-v2';
+      window._vditor = {
+        value: 'local-edit',
+        getValue() {
+          return this.value;
+        },
+        setValue(value) {
+          this.value = value;
+        },
+      };
+      localStorage.removeItem(draftKey);
+      window.saveToLocalStorage(path, 'local-edit');
+
+      const snapshot = () => ({
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        baseVersion: window.state.baseVersion,
+        baseContent: window.state.baseContent,
+        fileVersion: window.state.fileVersions[fileKey],
+        pendingRemoteVersion: window.state.pendingRemoteVersion,
+        draft: localStorage.getItem(draftKey),
+      });
+
+      try {
+        const olderSave = window.saveFile({ silent: true });
+        while (deferred.length < 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+        watchdogs[0].callback();
+
+        const newerSave = window.saveFile({ silent: true });
+        while (deferred.length < 2) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+        deferred[1].resolve({ applied: true, merged: false, newVersion: 4, content: 'server-v4' });
+        await newerSave;
+        if (replaceEditorAfterNewerSave) {
+          window._vditor = {
+            value: 'server-v4',
+            getValue() {
+              return this.value;
+            },
+            setValue(value) {
+              this.value = value;
+            },
+          };
+        }
+        window.state.pendingRemoteVersion = 6;
+        const beforeLateOutcome = snapshot();
+
+        if (lateOutcome === 'reject') {
+          deferred[0].reject(new Error('late v2 request failed'));
+        } else {
+          deferred[0].resolve({ applied: false, merged: false });
+        }
+        await olderSave;
+
+        return { calls, beforeLateOutcome, afterLateOutcome: snapshot() };
+      } finally {
+        API.submitChanges = originalSubmitChanges;
+        window.setTimeout = originalSetTimeout;
+        window.clearTimeout = originalClearTimeout;
+        localStorage.removeItem(draftKey);
+      }
+    },
+    { lateOutcome: outcome, replaceEditorAfterNewerSave: !!options.replaceEditorAfterNewerSave },
+  );
+}
+
 test('paragraph contract matches the backend', async ({ page }) => {
   await page.goto('/admin');
 
@@ -1616,6 +1728,420 @@ test('a late timed-out save response cannot roll back a newer baseline', async (
     baseVersion: 4,
     baseContent: 'server-v4',
     fileVersion: 4,
+  });
+});
+
+test('a late timed-out save rejection cannot dirty a newer acknowledged save', async ({ page }) => {
+  const result = await runLateTimedOutOutcome(page, 'reject');
+
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2, 2]);
+  expect(result.beforeLateOutcome).toEqual({
+    dirty: false,
+    editor: 'server-v4',
+    baseVersion: 4,
+    baseContent: 'server-v4',
+    fileVersion: 4,
+    pendingRemoteVersion: 6,
+    draft: null,
+  });
+  expect(result.afterLateOutcome).toEqual(result.beforeLateOutcome);
+});
+
+test('a late timed-out not-applied response cannot dirty a newer acknowledged save', async ({
+  page,
+}) => {
+  const result = await runLateTimedOutOutcome(page, 'not-applied');
+
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2, 2]);
+  expect(result.beforeLateOutcome).toEqual({
+    dirty: false,
+    editor: 'server-v4',
+    baseVersion: 4,
+    baseContent: 'server-v4',
+    fileVersion: 4,
+    pendingRemoteVersion: 6,
+    draft: null,
+  });
+  expect(result.afterLateOutcome).toEqual(result.beforeLateOutcome);
+});
+
+test('a late timed-out failure cannot draft a confirmed replacement editor', async ({ page }) => {
+  const result = await runLateTimedOutOutcome(page, 'reject', {
+    replaceEditorAfterNewerSave: true,
+  });
+
+  expect(result.beforeLateOutcome).toEqual({
+    dirty: false,
+    editor: 'server-v4',
+    baseVersion: 4,
+    baseContent: 'server-v4',
+    fileVersion: 4,
+    pendingRemoteVersion: 6,
+    draft: null,
+  });
+  expect(result.afterLateOutcome).toEqual(result.beforeLateOutcome);
+});
+
+test('detached failures drop drafts only after a newer same-file local acknowledgement', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const originalSubmitChanges = API.submitChanges;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const watchdogs = [];
+    let nextWatchdogId = 400000;
+
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 15000) {
+        const watchdog = { callback: () => callback(...args), id: nextWatchdogId++ };
+        watchdogs.push(watchdog);
+        return watchdog.id;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    window.clearTimeout = (timerId) => {
+      if (watchdogs.some((item) => item.id === timerId)) return;
+      originalClearTimeout(timerId);
+    };
+
+    async function runCase(suffix, progressMode, addNewInput = false) {
+      const pathA = `/stale-origin-${suffix}.md`;
+      const pathB = `/active-destination-${suffix}.md`;
+      const fileKeyA = `mount-a:${pathA}`;
+      const draftKeyA = window.nasmdDraftStorage.key('mount-a', pathA);
+      const deferred = [];
+      API.submitChanges = async () =>
+        new Promise((resolve, reject) => deferred.push({ reject, resolve }));
+      const editorA = {
+        value: 'A-local',
+        getValue() {
+          return this.value;
+        },
+        setValue(value) {
+          this.value = value;
+        },
+      };
+      const editorB = {
+        value: 'B-clean',
+        getValue() {
+          return this.value;
+        },
+        setValue(value) {
+          this.value = value;
+        },
+      };
+      localStorage.removeItem(draftKeyA);
+      Object.assign(window.state, {
+        currentMountId: 'mount-a',
+        currentPath: pathA,
+        mounts: [
+          { id: 'mount-a', readonly: false },
+          { id: 'mount-b', readonly: false },
+        ],
+        localMounts: {},
+        remoteFile: null,
+        baseVersion: 1,
+        baseContent: 'A-base',
+        fileVersions: { [fileKeyA]: 1, [`mount-b:${pathB}`]: 10 },
+        pendingRemoteVersion: null,
+        dirty: true,
+        autoSave: false,
+      });
+      window._originalContent = 'A-base';
+      window._lastSavedContent = 'A-base';
+      window._vditor = editorA;
+
+      const olderSave = window.saveFile({ silent: true });
+      while (deferred.length < 1) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      if (addNewInput) editorA.value = 'A-local\n\nA-new';
+
+      const switchToDestination = (dirty = false) => {
+        Object.assign(window.state, {
+          currentMountId: 'mount-b',
+          currentPath: pathB,
+          baseVersion: 10,
+          baseContent: dirty ? 'B-base' : 'B-clean',
+          pendingRemoteVersion: null,
+          dirty,
+        });
+        editorB.value = dirty ? 'B-local' : 'B-clean';
+        window._originalContent = dirty ? 'B-base' : 'B-clean';
+        window._lastSavedContent = dirty ? 'B-base' : 'B-clean';
+        window._vditor = editorB;
+      };
+
+      if (progressMode === 'remote-high-water') {
+        window.state.fileVersions[fileKeyA] = 4;
+        switchToDestination();
+      } else {
+        watchdogs.at(-1).callback();
+        if (progressMode === 'cross-file-acknowledgement') switchToDestination(true);
+        const newerSave = window.saveFile({ silent: true });
+        while (deferred.length < 2) {
+          await new Promise((resolve) => originalSetTimeout(resolve, 0));
+        }
+        if (progressMode === 'detached-same-file-acknowledgement') switchToDestination();
+        if (
+          progressMode === 'same-file-acknowledgement' ||
+          progressMode === 'detached-same-file-acknowledgement'
+        ) {
+          deferred[1].resolve({
+            applied: true,
+            merged: false,
+            newVersion: 4,
+            content: 'server-v4',
+          });
+        } else {
+          deferred[1].resolve({
+            applied: true,
+            merged: false,
+            newVersion: 11,
+            content: 'B-clean',
+          });
+        }
+        await newerSave;
+        if (progressMode === 'same-file-acknowledgement') switchToDestination();
+      }
+      window.state.pendingRemoteVersion = 12;
+
+      deferred[0].reject(new Error('origin request failed after switch'));
+      await olderSave;
+      const draft = localStorage.getItem(draftKeyA);
+      localStorage.removeItem(draftKeyA);
+      return {
+        active: {
+          dirty: window.state.dirty,
+          editor: window._vditor.getValue(),
+          baseVersion: window.state.baseVersion,
+          baseContent: window.state.baseContent,
+          pendingRemoteVersion: window.state.pendingRemoteVersion,
+        },
+        draft: draft === null ? null : JSON.parse(draft),
+      };
+    }
+
+    try {
+      return {
+        remoteHighWater: await runCase('remote-high-water', 'remote-high-water'),
+        sameFileAcknowledged: await runCase('same-file-acknowledged', 'same-file-acknowledgement'),
+        detachedSameFileAcknowledged: await runCase(
+          'detached-same-file-acknowledged',
+          'detached-same-file-acknowledgement',
+        ),
+        crossFileAcknowledged: await runCase(
+          'cross-file-acknowledged',
+          'cross-file-acknowledgement',
+        ),
+        newerInput: await runCase('new-input', 'remote-high-water', true),
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  expect(result.remoteHighWater).toEqual({
+    active: {
+      dirty: false,
+      editor: 'B-clean',
+      baseVersion: 10,
+      baseContent: 'B-clean',
+      pendingRemoteVersion: 12,
+    },
+    draft: {
+      content: 'A-local',
+      mountId: 'mount-a',
+      baseVersion: 1,
+      baseContent: 'A-base',
+      savedAt: expect.any(Number),
+    },
+  });
+  expect(result.sameFileAcknowledged).toEqual({
+    active: {
+      dirty: false,
+      editor: 'B-clean',
+      baseVersion: 10,
+      baseContent: 'B-clean',
+      pendingRemoteVersion: 12,
+    },
+    draft: null,
+  });
+  expect(result.detachedSameFileAcknowledged).toEqual({
+    active: {
+      dirty: false,
+      editor: 'B-clean',
+      baseVersion: 10,
+      baseContent: 'B-clean',
+      pendingRemoteVersion: 12,
+    },
+    draft: null,
+  });
+  expect(result.crossFileAcknowledged).toEqual({
+    active: {
+      dirty: false,
+      editor: 'B-clean',
+      baseVersion: 11,
+      baseContent: 'B-clean',
+      pendingRemoteVersion: 12,
+    },
+    draft: {
+      content: 'A-local',
+      mountId: 'mount-a',
+      baseVersion: 1,
+      baseContent: 'A-base',
+      savedAt: expect.any(Number),
+    },
+  });
+  expect(result.newerInput).toEqual({
+    active: {
+      dirty: false,
+      editor: 'B-clean',
+      baseVersion: 10,
+      baseContent: 'B-clean',
+      pendingRemoteVersion: 12,
+    },
+    draft: {
+      content: 'A-local\n\nA-new',
+      mountId: 'mount-a',
+      baseVersion: 1,
+      baseContent: 'A-base',
+      savedAt: expect.any(Number),
+    },
+  });
+});
+
+test('acknowledgement cache eviction preserves an older origin draft conservatively', async ({
+  page,
+}) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const originalSubmitChanges = API.submitChanges;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const originPath = '/ack-cache-origin.md';
+    const originKey = `mount-cache:${originPath}`;
+    const draftKey = window.nasmdDraftStorage.key('mount-cache', originPath);
+    const watchdogs = [];
+    let rejectOrigin;
+    let requestCount = 0;
+
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay === 15000) {
+        const watchdog = { callback: () => callback(...args), id: 500000 + watchdogs.length };
+        watchdogs.push(watchdog);
+        return watchdog.id;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    window.clearTimeout = (timerId) => {
+      if (watchdogs.some((item) => item.id === timerId)) return;
+      originalClearTimeout(timerId);
+    };
+    API.submitChanges = async (...args) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Promise((_resolve, reject) => {
+          rejectOrigin = reject;
+        });
+      }
+      return {
+        applied: true,
+        merged: false,
+        newVersion: args[2] + 1,
+        content: args[7],
+      };
+    };
+
+    const originEditor = {
+      value: 'A-local',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    localStorage.removeItem(draftKey);
+    Object.assign(window.state, {
+      currentMountId: 'mount-cache',
+      currentPath: originPath,
+      mounts: [{ id: 'mount-cache', readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 1,
+      baseContent: 'A-base',
+      fileVersions: { [originKey]: 1 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'A-base';
+    window._lastSavedContent = 'A-base';
+    window._vditor = originEditor;
+
+    try {
+      const olderSave = window.saveFile({ silent: true });
+      while (!rejectOrigin) await new Promise((resolve) => originalSetTimeout(resolve, 0));
+      watchdogs.at(-1).callback();
+      await window.saveFile({ silent: true });
+
+      for (let index = 0; index < 40; index += 1) {
+        const path = `/ack-cache-${index}.md`;
+        const fileKey = `mount-cache:${path}`;
+        Object.assign(window.state, {
+          currentMountId: 'mount-cache',
+          currentPath: path,
+          baseVersion: 1,
+          baseContent: `base-${index}`,
+          fileVersions: { ...window.state.fileVersions, [fileKey]: 1 },
+          pendingRemoteVersion: null,
+          dirty: true,
+        });
+        window._originalContent = `base-${index}`;
+        window._lastSavedContent = `base-${index}`;
+        window._vditor = {
+          value: `local-${index}`,
+          getValue() {
+            return this.value;
+          },
+          setValue(value) {
+            this.value = value;
+          },
+        };
+        await window.saveFile({ silent: true });
+      }
+
+      rejectOrigin(new Error('origin failed after its acknowledgement was evicted'));
+      await olderSave;
+      const draft = localStorage.getItem(draftKey);
+      return {
+        activePath: window.state.currentPath,
+        activeDirty: window.state.dirty,
+        draft: draft === null ? null : JSON.parse(draft),
+      };
+    } finally {
+      API.submitChanges = originalSubmitChanges;
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+      localStorage.removeItem(draftKey);
+    }
+  });
+
+  expect(result).toEqual({
+    activePath: '/ack-cache-39.md',
+    activeDirty: false,
+    draft: {
+      content: 'A-local',
+      mountId: 'mount-cache',
+      baseVersion: 1,
+      baseContent: 'A-base',
+      savedAt: expect.any(Number),
+    },
   });
 });
 
