@@ -146,6 +146,210 @@ test('Mermaid native fullscreen owns a cloned chart and the active controls', as
   await expect(page.locator('.language-mermaid[data-mme-fullscreen="true"]')).toHaveCount(0);
 });
 
+test('Mermaid native fullscreen keeps an ordinary chart centered inside the visible chart area', async ({
+  page,
+}) => {
+  await prepareEditor(page);
+  await installNativeFullscreenStub(page);
+
+  await fullscreenButton(page).click();
+  await expect(page.locator('.mme-fullscreen-chart svg')).toBeVisible();
+  const geometry = await page.evaluate(() => {
+    const chart = document.querySelector('.mme-fullscreen-chart');
+    const svg = chart.querySelector('svg');
+    const chartRect = chart.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    return {
+      chart: { left: chartRect.left, right: chartRect.right, width: chartRect.width },
+      svg: { left: svgRect.left, right: svgRect.right, width: svgRect.width },
+    };
+  });
+
+  expect(geometry.svg.left).toBeGreaterThanOrEqual(geometry.chart.left - 1);
+  expect(geometry.svg.right).toBeLessThanOrEqual(geometry.chart.right + 1);
+  expect(geometry.svg.width).toBeGreaterThan(100);
+  expect(
+    Math.abs(
+      (geometry.svg.left + geometry.svg.right) / 2 -
+        (geometry.chart.left + geometry.chart.right) / 2,
+    ),
+  ).toBeLessThan(2);
+});
+
+test('Mermaid native fullscreen overrides inline SVG limits before fitting a large chart', async ({
+  page,
+}) => {
+  await prepareEditor(page);
+  await page.evaluate(() => {
+    const svg = document.querySelector('.language-mermaid[data-mme-enhanced] svg');
+    svg.style.width = '2400px';
+    svg.style.height = '1600px';
+    svg.style.maxWidth = '17px';
+  });
+  await installNativeFullscreenStub(page);
+
+  await fullscreenButton(page).click();
+  await expect(page.locator('.mme-fullscreen-chart svg')).toBeVisible();
+  const geometry = await page.evaluate(() => {
+    const chart = document.querySelector('.mme-fullscreen-chart');
+    const svg = chart.querySelector('svg');
+    const chartRect = chart.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    return {
+      chart: {
+        bottom: chartRect.bottom,
+        height: chartRect.height,
+        left: chartRect.left,
+        right: chartRect.right,
+        top: chartRect.top,
+        width: chartRect.width,
+      },
+      computedMaxWidth: getComputedStyle(svg).maxWidth,
+      svg: {
+        bottom: svgRect.bottom,
+        height: svgRect.height,
+        left: svgRect.left,
+        right: svgRect.right,
+        top: svgRect.top,
+        width: svgRect.width,
+      },
+    };
+  });
+
+  expect(geometry.computedMaxWidth).toBe('none');
+  expect(geometry.svg.left).toBeGreaterThanOrEqual(geometry.chart.left - 1);
+  expect(geometry.svg.right).toBeLessThanOrEqual(geometry.chart.right + 1);
+  expect(geometry.svg.top).toBeGreaterThanOrEqual(geometry.chart.top - 1);
+  expect(geometry.svg.bottom).toBeLessThanOrEqual(geometry.chart.bottom + 1);
+  expect(geometry.svg.width).toBeGreaterThan(geometry.chart.width * 0.5);
+  expect(
+    Math.abs(
+      (geometry.svg.left + geometry.svg.right) / 2 -
+        (geometry.chart.left + geometry.chart.right) / 2,
+    ),
+  ).toBeLessThan(2);
+});
+
+test('Mermaid native fullscreen preserves state after exit rejection and allows retry', async ({
+  page,
+}) => {
+  await prepareEditor(page);
+  await page.evaluate(() => {
+    let fakeFullscreenElement = null;
+    let rejectExit = true;
+    window.nativeRejectedExitCalls = 0;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fakeFullscreenElement,
+    });
+    const overlay = document.querySelector('.mme-overlay-item');
+    overlay.requestFullscreen = async function () {
+      fakeFullscreenElement = this;
+    };
+    document.exitFullscreen = async () => {
+      window.nativeRejectedExitCalls += 1;
+      if (rejectExit) throw new Error('native exit rejected');
+      fakeFullscreenElement = null;
+    };
+    window.allowNativeExitRetry = () => {
+      rejectExit = false;
+    };
+  });
+
+  await fullscreenButton(page).click();
+  await expect(page.locator('.mme-fullscreen-chart svg')).toBeVisible();
+  await fullscreenButton(page).click();
+  await expect.poll(async () => page.evaluate(() => window.nativeRejectedExitCalls)).toBe(1);
+
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+  await expect(page.locator('.mme-overlay-item[data-mme-fullscreen="true"]')).toHaveCount(1);
+  await expect(page.locator('.mme-fullscreen-chart svg')).toBeVisible();
+  await expect(fullscreenButton(page)).toHaveAttribute('title', '退出全屏');
+
+  await page.evaluate(() => window.allowNativeExitRetry());
+  await fullscreenButton(page).click();
+  await expect.poll(async () => page.evaluate(() => window.nativeRejectedExitCalls)).toBe(2);
+  await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
+  await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(0);
+});
+
+test('Mermaid native fullscreen clears preserved state when browser Escape exits', async ({ page }) => {
+  await prepareEditor(page);
+  await page.evaluate(() => {
+    let fakeFullscreenElement = null;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fakeFullscreenElement,
+    });
+    const overlay = document.querySelector('.mme-overlay-item');
+    overlay.requestFullscreen = async function () {
+      fakeFullscreenElement = this;
+    };
+    document.exitFullscreen = async () => {
+      throw new Error('native exit rejected');
+    };
+    window.simulateNativeEscape = () => {
+      fakeFullscreenElement = null;
+      document.dispatchEvent(new Event('fullscreenchange'));
+    };
+  });
+
+  await fullscreenButton(page).click();
+  await fullscreenButton(page).click();
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+  await page.evaluate(() => window.simulateNativeEscape());
+
+  await expect(page.locator('html')).not.toHaveClass(/mme-fullscreen-active/);
+  await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(0);
+});
+
+test('Mermaid aborts a block switch when the old native fullscreen cannot exit', async ({ page }) => {
+  await prepareEditor(page);
+  await page.evaluate((value) => window._vditor.setValue(value), twoMermaidMarkdown);
+  await expect.poll(async () => page.locator('.mme-overlay-item').count()).toBe(2);
+  await page.evaluate(() => {
+    let fakeFullscreenElement = null;
+    window.rejectedSwitchEvents = [];
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fakeFullscreenElement,
+    });
+    const overlays = document.querySelectorAll('.mme-overlay-item');
+    overlays[0].requestFullscreen = async function () {
+      window.rejectedSwitchEvents.push('request-a');
+      fakeFullscreenElement = this;
+    };
+    overlays[1].requestFullscreen = async function () {
+      window.rejectedSwitchEvents.push('request-b');
+      fakeFullscreenElement = this;
+    };
+    document.exitFullscreen = async () => {
+      window.rejectedSwitchEvents.push('reject-exit-a');
+      throw new Error('native exit rejected');
+    };
+  });
+
+  await fullscreenButton(page).first().click();
+  await expect.poll(async () => page.evaluate(() => window.rejectedSwitchEvents)).toEqual(['request-a']);
+  await page.evaluate(() => {
+    document
+      .querySelectorAll('.mme-overlay-item .mme-toolbar [data-action="toggleFullscreen"]')[1]
+      .click();
+  });
+
+  await expect.poll(async () => page.evaluate(() => window.rejectedSwitchEvents)).toEqual([
+    'request-a',
+    'reject-exit-a',
+  ]);
+  await expect(page.locator('html')).toHaveClass(/mme-fullscreen-active/);
+  await expect(page.locator('.mme-overlay-item[data-mme-fullscreen="true"]')).toHaveAttribute(
+    'data-mme-id',
+    await page.locator('.mme-overlay-item').first().getAttribute('data-mme-id'),
+  );
+  await expect(page.locator('.mme-fullscreen-chart')).toHaveCount(1);
+  await expect(page.locator('body')).not.toHaveClass(/mme-app-fullscreen/);
+});
+
 test('Mermaid source removal exits native fullscreen before clearing overlay state', async ({ page }) => {
   await prepareEditor(page);
   await page.evaluate(() => {

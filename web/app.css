@@ -2659,13 +2659,13 @@ html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] {
   overflow: auto;
   display: flex;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   pointer-events: auto;
 }
 
 .mme-fullscreen-chart svg {
   flex: 0 0 auto;
-  max-width: none;
+  max-width: none !important;
 }
 
 html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-toolbar {

@@ -172,7 +172,8 @@
           _fullscreenState.sessionId === state.fullscreenSessionId
         ) {
           state.fullscreenRemovalPending = true;
-          exitFullscreen(blockId).finally(function () {
+          exitFullscreen(blockId).then(function (exited) {
+            if (!exited) return;
             if (_blocks[blockId] !== state) return;
             removeTrackedBlock(blockId, state, ui);
           });
@@ -388,6 +389,13 @@
       document.body.classList.remove('mme-app-fullscreen');
       _fullscreenState = null;
     }
+    if (
+      state.fullscreenRemovalPending &&
+      (!state.targetEl || !document.contains(state.targetEl)) &&
+      _blocks[state.blockId] === state
+    ) {
+      removeTrackedBlock(state.blockId, state, state.uiContainer);
+    }
   }
 
   async function enterFullscreen(id) {
@@ -465,11 +473,11 @@
   }
 
   async function exitFullscreen(id) {
-    if (!_fullscreenState || _fullscreenState.blockId !== id) return;
+    if (!_fullscreenState || _fullscreenState.blockId !== id) return true;
     var fullscreenState = _fullscreenState;
     if (fullscreenState.exitPromise) return fullscreenState.exitPromise;
     fullscreenState.cancelled = true;
-    fullscreenState.exitPromise = (async function () {
+    var exitPromise = (async function () {
       try {
         if (fullscreenState.requestPromise) {
           await fullscreenState.requestPromise;
@@ -482,19 +490,49 @@
           await document.exitFullscreen();
         }
       } catch (_error) {
-        // Always clear the application state even if the browser API rejects.
-      } finally {
-        clearFullscreenState(fullscreenState.state, fullscreenState.sessionId);
+        // The browser may still own the overlay; inspect fullscreenElement below.
       }
+
+      if (
+        !_fullscreenState ||
+        _fullscreenState.state !== fullscreenState.state ||
+        _fullscreenState.sessionId !== fullscreenState.sessionId
+      ) {
+        return true;
+      }
+
+      if (document.fullscreenElement === fullscreenState.state.uiContainer) {
+        if (fullscreenState.mode !== 'native') {
+          fullscreenState.mode = 'native';
+          fullscreenState.state.fullscreenMode = 'native';
+          markFullscreenElements(fullscreenState.state, true);
+          resetFullscreenView(fullscreenState.blockId, fullscreenState.state);
+          updateFullscreenButton(fullscreenState.state);
+        }
+        return false;
+      }
+
+      clearFullscreenState(fullscreenState.state, fullscreenState.sessionId);
+      return true;
     })();
-    return fullscreenState.exitPromise;
+    fullscreenState.exitPromise = exitPromise;
+    var exited = await exitPromise;
+    if (
+      !exited &&
+      _fullscreenState &&
+      _fullscreenState.sessionId === fullscreenState.sessionId &&
+      fullscreenState.exitPromise === exitPromise
+    ) {
+      fullscreenState.exitPromise = null;
+    }
+    return exited;
   }
 
   function handleNativeFullscreenChange() {
     if (
       _fullscreenState &&
       _fullscreenState.mode === 'native' &&
-      !document.fullscreenElement
+      document.fullscreenElement !== _fullscreenState.state.uiContainer
     ) {
       var fullscreenState = _fullscreenState;
       clearFullscreenState(fullscreenState.state, fullscreenState.sessionId);
