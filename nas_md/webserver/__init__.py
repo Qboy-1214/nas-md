@@ -1547,7 +1547,9 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             )
             return abs_path
 
-        new_text = body.decode("utf-8", errors="replace")
+        new_text = TextIOWrapper(
+            BytesIO(body), encoding="utf-8", errors="replace", newline=None
+        ).read()
 
         from nas_md.webserver.file_version_store import get_store
         from nas_md.webserver.paragraph_diff import DiffWorkLimitExceeded, compute_diff
