@@ -123,6 +123,14 @@ async function runLateTimedOutOutcome(page, outcome, options = {}) {
             newVersion: 3,
             content: 'server-v3',
           });
+        } else if (lateOutcome === 'resync') {
+          deferred[0].resolve({
+            applied: false,
+            merged: false,
+            resyncRequired: true,
+            newVersion: 3,
+            content: 'server-v3',
+          });
         } else {
           deferred[0].resolve({ applied: false, merged: false });
         }
@@ -2058,6 +2066,24 @@ test('a completed save watchdog cannot unlock a newer save', async ({ page }) =>
 
 test('a late timed-out save response cannot roll back a newer baseline', async ({ page }) => {
   const result = await runLateTimedOutOutcome(page, 'applied');
+
+  expect(result.calls.map((call) => call.baseVersion)).toEqual([2]);
+  expect(result.beforeLateOutcome).toEqual({
+    dirty: false,
+    editor: 'server-v4',
+    baseVersion: 4,
+    baseContent: 'server-v4',
+    fileVersion: 4,
+    pendingRemoteVersion: 6,
+    draft: null,
+  });
+  expect(result.afterLateOutcome).toEqual(result.beforeLateOutcome);
+});
+
+test('a late resync cannot roll back progress observed after the request began', async ({
+  page,
+}) => {
+  const result = await runLateTimedOutOutcome(page, 'resync');
 
   expect(result.calls.map((call) => call.baseVersion)).toEqual([2]);
   expect(result.beforeLateOutcome).toEqual({

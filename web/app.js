@@ -3740,7 +3740,7 @@ async function saveFile(options = {}) {
           console.log('[saveFile] ignored response: active file changed');
           return;
         }
-        if (!resp.resyncRequired && !ownsCurrentSaveOutcome()) {
+        if (!ownsCurrentSaveOutcome()) {
           console.log('[saveFile] ignored response: save transaction was superseded');
           return;
         }
