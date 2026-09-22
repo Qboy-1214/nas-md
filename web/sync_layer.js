@@ -284,7 +284,6 @@
     try {
       var draftStorage = window.nasmdDraftStorage;
       if (!draftStorage) return false;
-      var maxDraftAgeMs = 7 * 24 * 3600 * 1000;
       var isLiveDraft = function (storageKey, allowAnonymousMount) {
         var storedDraft = window.localStorage.getItem(storageKey);
         if (storedDraft === null) return false;
@@ -293,18 +292,12 @@
         try {
           draft = JSON.parse(storedDraft);
         } catch (_parseError) {
+          if (typeof window.localStorage.removeItem === 'function') {
+            window.localStorage.removeItem(storageKey);
+          }
           return false;
         }
         if (!draft || typeof draft !== 'object' || typeof draft.content !== 'string') return false;
-        if (draft.savedAt !== undefined) {
-          if (typeof draft.savedAt !== 'number' || !isFinite(draft.savedAt)) return false;
-          if (Date.now() - draft.savedAt > maxDraftAgeMs) {
-            if (typeof window.localStorage.removeItem === 'function') {
-              window.localStorage.removeItem(storageKey);
-            }
-            return false;
-          }
-        }
         if (typeof draft.mountId === 'string' && draft.mountId.length > 0) {
           return draft.mountId === state.currentMountId;
         }

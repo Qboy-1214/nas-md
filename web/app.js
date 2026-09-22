@@ -5240,33 +5240,6 @@ async function refreshFromDisk(silent) {
 }
 
 // === 离线支持 ===
-const DRAFT_MAX_AGE_MS = 7 * 24 * 3600 * 1000; // 7 days
-
-function cleanExpiredDrafts() {
-  try {
-    const now = Date.now();
-    const drafts = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (window.nasmdDraftStorage.isDraftKey(k)) {
-        try {
-          const val = JSON.parse(localStorage.getItem(k));
-          if (val && val.savedAt && now - val.savedAt > DRAFT_MAX_AGE_MS) {
-            localStorage.removeItem(k);
-          } else if (val && val.savedAt) {
-            drafts.push({ key: k, savedAt: val.savedAt });
-          }
-        } catch (_e) {
-          localStorage.removeItem(k);
-        }
-      }
-    }
-    return drafts;
-  } catch (_e) {
-    return [];
-  }
-}
-
 function saveToLocalStorage(path, content, draftContext = null) {
   const mountId = draftContext ? draftContext.mountId : state.currentMountId;
   if (!mountId || !path) return;
@@ -5281,29 +5254,19 @@ function saveToLocalStorage(path, content, draftContext = null) {
   try {
     localStorage.setItem(key, data);
   } catch (_e) {
-    try {
-      const drafts = cleanExpiredDrafts();
-      drafts.sort((a, b) => a.savedAt - b.savedAt);
-      while (drafts.length > 5) {
-        const oldest = drafts.shift();
-        localStorage.removeItem(oldest.key);
-      }
-      localStorage.setItem(key, data);
-    } catch (_e2) {
-      /* quota exceeded */
-    }
+    /* quota exceeded */
   }
 }
 
 function _readDraftFromStorage(key) {
   const data = localStorage.getItem(key);
   if (!data) return null;
-  const parsed = JSON.parse(data);
-  if (parsed && parsed.savedAt && Date.now() - parsed.savedAt > DRAFT_MAX_AGE_MS) {
+  try {
+    return { data, parsed: JSON.parse(data) };
+  } catch (_e) {
     localStorage.removeItem(key);
     return null;
   }
-  return { data, parsed };
 }
 
 function loadFromLocalStorage(path, mountId = state.currentMountId) {

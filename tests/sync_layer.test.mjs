@@ -871,29 +871,19 @@ test('a modern mount-scoped draft blocks only its own collaboration stream', asy
   assert.equal(otherMount.state.pendingRemoteVersion, null);
 });
 
-test('malformed, invalid, and expired drafts do not block collaboration updates', async () => {
-  const maxAge = 7 * 24 * 3600 * 1000;
+test('malformed and invalid drafts do not block collaboration updates', async () => {
   const cases = [
-    { name: 'malformed legacy', key: 'nasmd_draft_/doc.md', value: '{' },
+    { name: 'malformed legacy', key: 'nasmd_draft_/doc.md', value: '{', removed: true },
     {
       name: 'invalid legacy',
       key: 'nasmd_draft_/doc.md',
       value: JSON.stringify({ mountId: 'mount-0', savedAt: 10000 }),
     },
     {
-      name: 'expired legacy',
-      key: 'nasmd_draft_/doc.md',
-      value: JSON.stringify({
-        mountId: 'mount-0',
-        content: 'old draft',
-        savedAt: 10000 - maxAge - 1,
-      }),
-      removed: true,
-    },
-    {
       name: 'malformed modern',
       key: 'nasmd_draft_v2_mount-0:%2Fdoc.md',
       value: '{',
+      removed: true,
     },
   ];
 
@@ -922,6 +912,38 @@ test('malformed, invalid, and expired drafts do not block collaboration updates'
     assert.equal(app.state.pendingRemoteVersion, null, draftCase.name);
     assert.equal(drafts.has(draftCase.key), !draftCase.removed, draftCase.name);
   }
+});
+
+test('an old valid current draft still blocks collaboration updates and remains stored', async () => {
+  const app = loadSyncLayer({ version: 1, content: 'old local draft', manualTimers: true });
+  const draftKey = 'nasmd_draft_v2_mount-0:%2Fdoc.md';
+  const storedDraft = JSON.stringify({
+    mountId: 'mount-0',
+    content: 'old local draft',
+    savedAt: 10000 - 8 * 24 * 3600 * 1000,
+  });
+  const drafts = new Map([[draftKey, storedDraft]]);
+  app.context.window.localStorage = {
+    getItem(key) {
+      return drafts.get(key) ?? null;
+    },
+    removeItem(key) {
+      drafts.delete(key);
+    },
+  };
+
+  app.context.window.nasmdSync.handleRemoteEdit({
+    type: 'remote_edit',
+    mountId: 'mount-0',
+    path: '/doc.md',
+    newVersion: 2,
+    changes: [{ type: 'replace', paraIdx: 0, content: 'remote-v2' }],
+  });
+  app.runTimers(300);
+
+  assert.equal(app.editor.value, 'old local draft');
+  assert.equal(app.state.pendingRemoteVersion, 2);
+  assert.equal(drafts.get(draftKey), storedDraft);
 });
 
 test('a current offline draft blocks queued and in-flight remote application', async () => {

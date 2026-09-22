@@ -2648,6 +2648,172 @@ test('draft storage loads and deletes modern mount-scoped keys and migrates matc
   expect(result.mismatchedLegacy).toMatchObject({ content: 'legacy-b', mountId: 'mount-b' });
 });
 
+test('a draft older than seven days is restored dirty and remains stored', async ({ page }) => {
+  const mount = await getWritableAdminMount(page);
+  const path = uniqueTestPath('old-draft-retention');
+  const serverContent = 'server content after the draft';
+  const draftContent = 'unconfirmed local content from eight days ago';
+  await putAdminFile(page, mount.id, path, serverContent);
+
+  try {
+    const storedDraft = await page.evaluate(
+      ({ mountId, filePath, content }) => {
+        const key = window.nasmdDraftStorage.key(mountId, filePath);
+        const raw = JSON.stringify({
+          content,
+          mountId,
+          savedAt: Date.now() - 8 * 24 * 3600 * 1000,
+        });
+        localStorage.setItem(key, raw);
+        return { key, raw };
+      },
+      { mountId: mount.id, filePath: path, content: draftContent },
+    );
+
+    await page.evaluate(async ({ mountId, filePath }) => window.openFile(filePath, mountId), {
+      mountId: mount.id,
+      filePath: path,
+    });
+    await page.waitForFunction(
+      ({ mountId, filePath }) =>
+        window.state.currentMountId === mountId &&
+        window.state.currentPath === filePath &&
+        window._vditor,
+      { mountId: mount.id, filePath: path },
+    );
+
+    const restored = await page.evaluate(
+      (key) => ({
+        dirty: window.state.dirty,
+        editor: window._vditor.getValue(),
+        storedDraft: localStorage.getItem(key),
+      }),
+      storedDraft.key,
+    );
+
+    expect(restored.dirty).toBe(true);
+    expect(restored.editor.replace(/\r\n/g, '\n').replace(/\n+$/, '')).toBe(draftContent);
+    expect(restored.storedDraft).toBe(storedDraft.raw);
+  } finally {
+    await page.evaluate(
+      ({ mountId, filePath }) =>
+        localStorage.removeItem(window.nasmdDraftStorage.key(mountId, filePath)),
+      { mountId: mount.id, filePath: path },
+    );
+    await deleteAdminFile(page, mount.id, path);
+  }
+});
+
+test('quota failure while saving preserves every existing unconfirmed draft', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(async () => {
+    const currentMountId = 'quota-current-mount';
+    const currentPath = '/quota-current.md';
+    const currentKey = window.nasmdDraftStorage.key(currentMountId, currentPath);
+    const originalSubmitChanges = API.submitChanges;
+    const storagePrototype = Object.getPrototypeOf(localStorage);
+    const originalSetItem = storagePrototype.setItem;
+    const entries = Array.from({ length: 7 }, (_, index) => {
+      const mountId = index === 0 ? currentMountId : `quota-mount-${index}`;
+      const path = index === 0 ? currentPath : `/quota-existing-${index}.md`;
+      const key = window.nasmdDraftStorage.key(mountId, path);
+      const raw = JSON.stringify({
+        content: `unconfirmed draft ${index}`,
+        mountId,
+        baseVersion: index,
+        baseContent: `base ${index}`,
+        savedAt: Date.now() - (index === 0 ? 8 * 24 * 3600 * 1000 : index * 1000),
+      });
+      localStorage.setItem(key, raw);
+      return [key, raw];
+    });
+
+    API.submitChanges = async () => {
+      throw new TypeError('network unavailable');
+    };
+    Object.assign(window.state, {
+      currentMountId,
+      currentPath,
+      mounts: [{ id: currentMountId, readonly: false }],
+      localMounts: {},
+      remoteFile: null,
+      baseVersion: 4,
+      baseContent: 'confirmed base',
+      fileVersions: { [`${currentMountId}:${currentPath}`]: 4 },
+      pendingRemoteVersion: null,
+      dirty: true,
+      autoSave: false,
+    });
+    window._originalContent = 'confirmed base';
+    window._vditor = {
+      value: 'new local edit',
+      getValue() {
+        return this.value;
+      },
+      setValue(value) {
+        this.value = value;
+      },
+    };
+    storagePrototype.setItem = function (key, value) {
+      if (key === currentKey) {
+        throw new DOMException('Storage quota exceeded', 'QuotaExceededError');
+      }
+      return originalSetItem.call(this, key, value);
+    };
+
+    try {
+      await window.saveFile({ silent: true });
+      return {
+        dirty: window.state.dirty,
+        entries: entries.map(([key, raw]) => ({ key, raw, after: localStorage.getItem(key) })),
+      };
+    } finally {
+      storagePrototype.setItem = originalSetItem;
+      API.submitChanges = originalSubmitChanges;
+      entries.forEach(([key]) => localStorage.removeItem(key));
+    }
+  });
+
+  expect(result.dirty).toBe(true);
+  for (const entry of result.entries) {
+    expect(entry.after, entry.key).toBe(entry.raw);
+  }
+});
+
+test('draft storage removes only malformed JSON records', async ({ page }) => {
+  await page.goto('/admin');
+
+  const result = await page.evaluate(() => {
+    const malformedPath = '/malformed-draft.md';
+    const invalidPath = '/parseable-invalid-draft.md';
+    const malformedKey = window.nasmdDraftStorage.key('mount-a', malformedPath);
+    const invalidKey = window.nasmdDraftStorage.key('mount-a', invalidPath);
+    const invalidRaw = JSON.stringify({ mountId: 'mount-a', savedAt: 1 });
+    localStorage.setItem(malformedKey, '{');
+    localStorage.setItem(invalidKey, invalidRaw);
+
+    try {
+      return {
+        malformed: window.loadFromLocalStorage(malformedPath, 'mount-a'),
+        malformedStored: localStorage.getItem(malformedKey),
+        invalid: window.loadFromLocalStorage(invalidPath, 'mount-a'),
+        invalidStored: localStorage.getItem(invalidKey),
+      };
+    } finally {
+      localStorage.removeItem(malformedKey);
+      localStorage.removeItem(invalidKey);
+    }
+  });
+
+  expect(result).toEqual({
+    malformed: null,
+    malformedStored: null,
+    invalid: { mountId: 'mount-a', savedAt: 1 },
+    invalidStored: JSON.stringify({ mountId: 'mount-a', savedAt: 1 }),
+  });
+});
+
 test('reconnect preserves anonymous legacy drafts unless their exact file is open', async ({
   page,
 }) => {
