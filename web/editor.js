@@ -640,6 +640,7 @@ function initEditor(content, mode, readonly, confirmedContent) {
     cache: { enable: false },
     upload: { url: '', linkToImgUrl: '' },
     after: () => {
+      if (_editorGeneration !== editorGeneration) return;
       const editorContent = _vditor.getValue();
       const baselineContent = preserveConfirmedContent ? initialConfirmedContent : editorContent;
       // Sync window._originalContent with Vditor's normalized content
