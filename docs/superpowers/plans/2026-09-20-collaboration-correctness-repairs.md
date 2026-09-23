@@ -33,7 +33,7 @@
 - Modify: `tests/e2e/poll-external-change.spec.js`
 - Modify: `tests/e2e/refresh-from-disk.spec.js`
 
-- [ ] **Step 1: Tighten one fixture to expose the current unauthorized setup**
+- [x] **Step 1: Tighten one fixture to expose the current unauthorized setup**
 
 In `refresh-from-disk.spec.js`, temporarily replace the nullable setup result and skip branch with an assertion:
 
@@ -46,13 +46,13 @@ expect(putResp.ok(), `fixture PUT failed: ${putResp.status()}`).toBeTruthy();
 return { mountInfo, testFileName };
 ```
 
-- [ ] **Step 2: Run the focused spec and observe RED**
+- [x] **Step 2: Run the focused spec and observe RED**
 
 Run: `npx playwright test tests/e2e/refresh-from-disk.spec.js`
 
 Expected: FAIL during fixture setup because the request has neither an `/admin` Referer nor `X-Admin: 1`.
 
-- [ ] **Step 3: Add the shared admin helper**
+- [x] **Step 3: Add the shared admin helper**
 
 Create `tests/e2e/helpers/admin.js` with this interface:
 
@@ -92,13 +92,13 @@ export async function deleteAdminFile(page, mountId, path) {
 
 Import these helpers in all three specs. Replace mount-null, missing-file, missing-button, and failed-auto-restore `test.skip()` branches with `expect` assertions. Use `putAdminFile` and `deleteAdminFile` for every private-mount write and cleanup.
 
-- [ ] **Step 4: Run the repaired fixture specs**
+- [x] **Step 4: Run the repaired fixture specs**
 
 Run: `npx playwright test tests/e2e/cursor-restore.spec.js tests/e2e/poll-external-change.spec.js tests/e2e/refresh-from-disk.spec.js`
 
 Expected: all tests PASS with no runtime skips.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/e2e/helpers/admin.js tests/e2e/cursor-restore.spec.js tests/e2e/poll-external-change.spec.js tests/e2e/refresh-from-disk.spec.js
@@ -113,7 +113,7 @@ git commit -m "test: make admin e2e setup failures visible"
 - Modify: `tests/test_paragraph_diff.py`
 - Modify: `web/app.js`
 
-- [ ] **Step 1: Add shared frontmatter fixtures**
+- [x] **Step 1: Add shared frontmatter fixtures**
 
 Create `tests/fixtures/paragraph_split_cases.json`:
 
@@ -144,7 +144,7 @@ Create `tests/fixtures/paragraph_split_cases.json`:
 
 Add a parametrized pytest that loads this file and asserts `split_paragraphs(case["text"]) == case["paragraphs"]`. Add a Playwright test that reads the same JSON with `readFileSync`, opens `/admin`, and evaluates `window.nasmdDiff.splitParagraphs` for every case.
 
-- [ ] **Step 2: Run both contracts and observe browser RED**
+- [x] **Step 2: Run both contracts and observe browser RED**
 
 Run: `python -m pytest tests/test_paragraph_diff.py -q`
 
@@ -154,7 +154,7 @@ Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js -g "paragr
 
 Expected: FAIL for `frontmatter-without-blank-line`; the browser currently joins `Body` into the frontmatter paragraph.
 
-- [ ] **Step 3: Align the browser splitter with the backend rule**
+- [x] **Step 3: Align the browser splitter with the backend rule**
 
 Replace the boolean-only frontmatter loop in `splitParagraphsWithDelims` with explicit extraction of a valid closing marker and following delimiter:
 
@@ -185,7 +185,7 @@ if (lines.length > 0 && lines[0].trim() === '---') {
 
 Remove the old `inFrontmatter` state and branch.
 
-- [ ] **Step 4: Add RED tests for browser index transformation and rebasing**
+- [x] **Step 4: Add RED tests for browser index transformation and rebasing**
 
 In `collaboration-correctness.spec.js`, assert the new public helpers preserve edits across an earlier remote insertion:
 
@@ -203,7 +203,7 @@ Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js -g "rebase
 
 Expected: FAIL because `rebaseContent` is not defined.
 
-- [ ] **Step 5: Implement and expose transform/rebase helpers**
+- [x] **Step 5: Implement and expose transform/rebase helpers**
 
 Port the backend position-map algorithm into `transformParagraphChanges(incoming, accumulated, baseCount)`. Implement the public composition function exactly as follows:
 
@@ -231,7 +231,7 @@ window.nasmdDiff = {
 
 The transform must map inserts, deletes, and replacements exactly like `transform_changes`: earlier inserts increase mapped positions, earlier deletes decrease later positions, replacing a remotely deleted paragraph becomes an insert, and deleting an already deleted paragraph is omitted.
 
-- [ ] **Step 6: Run the focused contracts**
+- [x] **Step 6: Run the focused contracts**
 
 Run: `python -m pytest tests/test_paragraph_diff.py -q`
 
@@ -239,7 +239,7 @@ Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js -g "paragr
 
 Expected: both commands PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add tests/fixtures/paragraph_split_cases.json tests/test_paragraph_diff.py tests/e2e/collaboration-correctness.spec.js web/app.js
@@ -255,7 +255,7 @@ git commit -m "fix: align paragraph coordinates across clients"
 - Modify: `nas_md/webserver/__init__.py`
 - Modify: `web/files.js`
 
-- [ ] **Step 1: Add failing restart, validation, and ahead-version tests**
+- [x] **Step 1: Add failing restart, validation, and ahead-version tests**
 
 Add tests using the common ancestor explicitly:
 
@@ -302,13 +302,13 @@ Also add:
 
 Each rejection must assert `applied is False`, `resyncRequired is True`, the current `newVersion/content`, and unchanged disk bytes. Update existing stale-merge tests to pass both `base_content` and `client_content`. Change the existing bogus-change/client-content test to expect resync rather than silent acceptance.
 
-- [ ] **Step 2: Run the store tests and observe RED**
+- [x] **Step 2: Run the store tests and observe RED**
 
 Run: `python -m pytest tests/test_file_version_store.py -q`
 
 Expected: FAIL because `apply_changes` has no `base_content` argument and restart merging still trusts missing deltas.
 
-- [ ] **Step 3: Implement canonical validation and three-way merge**
+- [x] **Step 3: Implement canonical validation and three-way merge**
 
 Add `base_content: str | None = None` after `client_content` in `FileVersionStore.apply_changes`. Add a private response helper:
 
@@ -359,7 +359,7 @@ new_content = apply_diff(fv.content, changes_to_apply)
 
 If `canonical_changes` is empty, return `applied: false` without increasing the version. Keep existing disk write, history record, pruning, and response fields for actual writes.
 
-- [ ] **Step 4: Pass `baseContent` through the HTTP and browser API**
+- [x] **Step 4: Pass `baseContent` through the HTTP and browser API**
 
 In `_handle_submit_changes`, parse `base_content = payload.get("baseContent")` and pass `base_content=base_content` to the store. Extend `API.submitChanges` with a final `baseContent` argument and add it to the JSON payload when defined:
 
@@ -371,13 +371,13 @@ if (baseContent !== undefined && baseContent !== null) {
 
 Add a webserver integration test that POSTs stale `baseVersion`, `baseContent`, `content`, and `changes`, then asserts the response and disk contain both clients' different-paragraph edits.
 
-- [ ] **Step 5: Run server and API tests**
+- [x] **Step 5: Run server and API tests**
 
 Run: `python -m pytest tests/test_file_version_store.py tests/test_webserver.py -q`
 
 Expected: all tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add nas_md/webserver/file_version_store.py nas_md/webserver/__init__.py web/files.js tests/test_file_version_store.py tests/test_webserver.py
@@ -391,7 +391,7 @@ git commit -m "fix: three-way merge stale collaboration saves"
 - Modify: `web/sync_layer.js`
 - Modify: `web/app.js`
 
-- [ ] **Step 1: Add failing dirty-event tests**
+- [x] **Step 1: Add failing dirty-event tests**
 
 Open a fixture file, disable auto-save, set a local editor value, call `markDirty()`, and invoke both exported handlers. Assert the entire acknowledged tuple remains unchanged:
 
@@ -432,13 +432,13 @@ expect(after.pendingRemoteVersion).toBe(before.baseVersion + 1);
 
 Repeat with `handleExternalReload`. Add a clean-state test asserting editor, version, base, and original all advance together.
 
-- [ ] **Step 2: Run the focused tests and observe RED**
+- [x] **Step 2: Run the focused tests and observe RED**
 
 Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js -g "dirty remote|clean remote"`
 
 Expected: dirty tests FAIL because handlers currently advance the version or replace the acknowledged content.
 
-- [ ] **Step 3: Add one dirty deferral gate**
+- [x] **Step 3: Add one dirty deferral gate**
 
 Add `state.pendingRemoteVersion = null` to state initialization and reset it on file load. In `sync_layer.js`, centralize the gate:
 
@@ -456,7 +456,7 @@ function deferWhileDirty(data) {
 
 For current-file `remote_edit`, call this before version checks or batching. For `external_reload`, call it before updating version metadata. In `fetchFullContent`, test dirty again after the request resolves and defer without changing any baseline field.
 
-- [ ] **Step 4: Make clean batching atomic**
+- [x] **Step 4: Make clean batching atomic**
 
 Include `newVersion`, `mountId`, and `path` in queued batch items. `applyBatchRemoteChanges` must:
 
@@ -466,13 +466,13 @@ Include `newVersion`, `mountId`, and `path` in queued batch items. `applyBatchRe
 4. update `baseContent`, `baseVersion`, `fileVersions`, and `_originalContent` together;
 5. clear `pendingRemoteVersion` only after successful application.
 
-- [ ] **Step 5: Run collaboration sync tests**
+- [x] **Step 5: Run collaboration sync tests**
 
 Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js -g "dirty remote|clean remote"`
 
 Expected: all focused tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/app.js web/sync_layer.js tests/e2e/collaboration-correctness.spec.js
@@ -485,7 +485,7 @@ git commit -m "fix: keep collaboration baselines atomic"
 - Modify: `tests/e2e/collaboration-correctness.spec.js`
 - Modify: `web/app.js`
 
-- [ ] **Step 1: Add failing offline recovery coverage**
+- [x] **Step 1: Add failing offline recovery coverage**
 
 Use the admin helper to open a server file. Disable auto-save, edit the document, set the browser context offline, and invoke `saveFile({ silent: true })`. Assert `state.dirty` remains true and the draft exists. Restore online and assert the API eventually returns the edited content, the draft disappears, and `state.dirty` becomes false.
 
@@ -493,7 +493,7 @@ Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js -g "offlin
 
 Expected: FAIL because offline save currently calls `markClean()` and reconnect skips the upload.
 
-- [ ] **Step 2: Keep offline saves dirty and persist their baseline**
+- [x] **Step 2: Keep offline saves dirty and persist their baseline**
 
 Change the draft record to retain merge context while accepting old records:
 
@@ -512,7 +512,7 @@ function saveToLocalStorage(path, content) {
 
 Remove `markClean()` from the offline branch. Keep the dirty button state and let the existing `online` listener call `syncOfflineDrafts`, which now sees `state.dirty` and invokes `saveFile({ silent: true })`.
 
-- [ ] **Step 3: Add failing stale-save and in-flight-input coverage**
+- [x] **Step 3: Add failing stale-save and in-flight-input coverage**
 
 Create a file with three paragraphs. Open it, disable auto-save, edit paragraph three locally, then perform an admin PUT that changes paragraph one. Assert the client baseline remains old. Trigger save and assert disk content contains both edits.
 
@@ -522,7 +522,7 @@ Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js -g "stale 
 
 Expected: FAIL because `baseContent` is not sent, the canonical response is not displayed, and post-submit input is not rebased.
 
-- [ ] **Step 4: Send the complete merge contract and handle resync**
+- [x] **Step 4: Send the complete merge contract and handle resync**
 
 Pass `baseContent` as the final `API.submitChanges` argument. Capture `submittedContent`, `submittedBaseContent`, and `submittedBaseVersion` before awaiting.
 
@@ -543,7 +543,7 @@ saveToLocalStorage(state.currentPath, rebased);
 return;
 ```
 
-- [ ] **Step 5: Rebase input typed during a successful save**
+- [x] **Step 5: Rebase input typed during a successful save**
 
 After an applied response, atomically adopt `resp.newVersion/resp.content`. If the live editor still equals `submittedContent`, set it to `resp.content`, mark clean, and clear the draft. Otherwise:
 
@@ -561,13 +561,13 @@ saveToLocalStorage(state.currentPath, rebasedLiveContent);
 
 Clear `state.pendingRemoteVersion` when the response baseline is adopted. Keep the next auto-save scheduling in `finally`.
 
-- [ ] **Step 6: Run all collaboration browser tests**
+- [x] **Step 6: Run all collaboration browser tests**
 
 Run: `npx playwright test tests/e2e/collaboration-correctness.spec.js`
 
 Expected: parser, rebase, dirty remote, clean remote, stale save, in-flight input, and offline draft tests all PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/app.js tests/e2e/collaboration-correctness.spec.js
@@ -581,7 +581,7 @@ git commit -m "fix: reconcile offline and concurrent saves"
 - Modify: `web/mermaid_enhancer.js`
 - Modify: `web/app.css`
 
-- [ ] **Step 1: Replace the native fullscreen stub with target assertions**
+- [x] **Step 1: Replace the native fullscreen stub with target assertions**
 
 Stub `requestFullscreen` on the active overlay, record its receiver, and expose a fake fullscreen element. Assert the requested element is `.mme-overlay-item` and contains a visible `.mme-fullscreen-chart svg`. Add a second test that removes the source Mermaid element, waits for the tracking loop, and asserts `document.exitFullscreen` was called before overlay state disappears.
 
@@ -589,7 +589,7 @@ Run: `npx playwright test tests/e2e/mermaid-fullscreen.spec.js -g "native fullsc
 
 Expected: FAIL because the document root is currently requested and source removal clears state without explicitly exiting browser fullscreen.
 
-- [ ] **Step 2: Add a temporary native visual instance**
+- [x] **Step 2: Add a temporary native visual instance**
 
 Extend each block state with `fullscreenChartEl: null`. Add these helpers:
 
@@ -618,11 +618,11 @@ function removeNativeFullscreenChart(state) {
 
 Create and bind drag/pan on this chart before calling `state.uiContainer.requestFullscreen()`. If the API rejects, remove the clone before entering application fullscreen. Route zoom, theme, mode, and downloads through `activeChartElement(state)` while native fullscreen is active.
 
-- [ ] **Step 3: Make native cleanup asynchronous and ordered**
+- [x] **Step 3: Make native cleanup asynchronous and ordered**
 
 When the tracking loop finds a missing source in native mode, call `exitFullscreen(blockId)` and remove the block only in its `finally` continuation. `clearFullscreenState` must remove the temporary chart after restoring the pre-fullscreen state. Keep `fullscreenchange` idempotent so an API-generated event cannot clear a newer fullscreen session.
 
-- [ ] **Step 4: Style the fullscreen-owned chart**
+- [x] **Step 4: Style the fullscreen-owned chart**
 
 Add focused CSS:
 
@@ -649,13 +649,13 @@ Add focused CSS:
 }
 ```
 
-- [ ] **Step 5: Run the entire Mermaid spec**
+- [x] **Step 5: Run the entire Mermaid spec**
 
 Run: `npx playwright test tests/e2e/mermaid-fullscreen.spec.js`
 
 Expected: all Mermaid fullscreen tests PASS, including fallback, undo/redo, zoom, native target, and source-removal cleanup.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/mermaid_enhancer.js web/app.css tests/e2e/mermaid-fullscreen.spec.js
@@ -670,7 +670,7 @@ git commit -m "fix: scope native Mermaid fullscreen to its overlay"
 - Modify: `web/app.css`
 - Modify any JavaScript file changed by Tasks 1-6 only when reported by ESLint or Prettier
 
-- [ ] **Step 1: Confirm the narrow quality failures**
+- [x] **Step 1: Confirm the narrow quality failures**
 
 Run: `python -m ruff check nas_md tests`
 
@@ -680,17 +680,17 @@ Run: `npx eslint web/ --rule "prettier/prettier: off"`
 
 Expected before repair: warnings for `_trackingTimer` and the unused `uiContainer` parameter in `web/mermaid_enhancer.js`.
 
-- [ ] **Step 2: Fix semantic warnings without suppression**
+- [x] **Step 2: Fix semantic warnings without suppression**
 
 Rename the three unused unpacked results from `data` to `_data`. Remove `_trackingTimer` and call `requestAnimationFrame(loop)` without assigning the return value. Remove the unused `uiContainer` parameter from `bindEvents` and its call site.
 
-- [ ] **Step 3: Format only the touched frontend files**
+- [x] **Step 3: Format only the touched frontend files**
 
 Run: `npx prettier --write web/app.js web/files.js web/sync_layer.js web/mermaid_enhancer.js web/app.css tests/e2e/helpers/admin.js tests/e2e/collaboration-correctness.spec.js tests/e2e/cursor-restore.spec.js tests/e2e/poll-external-change.spec.js tests/e2e/refresh-from-disk.spec.js tests/e2e/mermaid-fullscreen.spec.js`
 
 Expected: files are rewritten to the repository's configured LF and style rules; no unrelated frontend file changes.
 
-- [ ] **Step 4: Run focused quality gates**
+- [x] **Step 4: Run focused quality gates**
 
 Run: `python -m ruff check nas_md tests`
 
@@ -704,7 +704,7 @@ Run: `git diff --check`
 
 Expected: every command exits 0 with no warnings or whitespace errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/test_webserver_perf.py web/app.js web/files.js web/sync_layer.js web/mermaid_enhancer.js web/app.css tests/e2e/helpers/admin.js tests/e2e/collaboration-correctness.spec.js tests/e2e/cursor-restore.spec.js tests/e2e/poll-external-change.spec.js tests/e2e/refresh-from-disk.spec.js tests/e2e/mermaid-fullscreen.spec.js
@@ -718,13 +718,13 @@ Before committing, inspect `git diff --stat` and unstage any file not named in t
 **Files:**
 - No production edits expected
 
-- [ ] **Step 1: Run all Python tests**
+- [x] **Step 1: Run all Python tests**
 
 Run: `python -m pytest -q`
 
 Expected: all tests PASS; the previous baseline was 638 passing tests and the total increases by the new regression tests.
 
-- [ ] **Step 2: Run all Python quality gates**
+- [x] **Step 2: Run all Python quality gates**
 
 Run: `python -m ruff check nas_md tests`
 
@@ -732,7 +732,7 @@ Run: `python -m black --check nas_md tests`
 
 Expected: both commands exit 0.
 
-- [ ] **Step 3: Run all frontend quality gates**
+- [x] **Step 3: Run all frontend quality gates**
 
 Run: `npm run lint`
 
@@ -740,13 +740,13 @@ Run: `npm run format:check`
 
 Expected: both commands exit 0 with no ESLint warnings and no Prettier violations.
 
-- [ ] **Step 4: Run all browser tests**
+- [x] **Step 4: Run all browser tests**
 
 Run: `npx playwright test`
 
 Expected: all required tests PASS and the cursor, external-change, refresh, collaboration, and Mermaid flows have zero runtime setup skips.
 
-- [ ] **Step 5: Audit the final repository state**
+- [x] **Step 5: Audit the final repository state**
 
 Run: `git diff --check`
 
@@ -756,6 +756,6 @@ Run: `git log --oneline -12`
 
 Expected: no whitespace errors, no unexpected generated files, and the task commits appear in the planned order.
 
-- [ ] **Step 6: Stop on any verification regression**
+- [x] **Step 6: Stop on any verification regression**
 
 If a command fails, return to the task that owns the failing behavior, add a focused regression test there, and repeat that task's RED-GREEN cycle before rerunning Task 8. Do not create a catch-all verification commit.
