@@ -66,6 +66,7 @@ async function scrollToBottom(page) {
     if (!el) throw new Error(`Vditor ${mode} scroll container is unavailable`);
     el.scrollTop = el.scrollHeight - el.clientHeight;
   });
+  await expect.poll(() => getScrollTop(page), { timeout: 5000 }).toBeGreaterThan(0);
 }
 
 async function placeCursorAtHeading(page, headingText) {
@@ -143,8 +144,8 @@ test.describe('光标和滚动位置恢复', () => {
       await fileEl.click();
       await waitForTestDocumentReady(page);
 
-      // Scroll to bottom
-      await scrollToBottom(page);
+      // Place cursor at bottom section
+      await placeCursorAtHeading(page, 'Section 80');
       const scrollBefore = await getScrollTop(page);
       expect(scrollBefore, 'test document must be scrollable').toBeGreaterThan(0);
       await page.evaluate(() => {
