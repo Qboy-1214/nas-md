@@ -1104,3 +1104,29 @@ test('Dragging or clicking the Mermaid chart does not reveal raw markdown source
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await expect(codeBlockNode).not.toHaveClass(/vditor-ir__node--expand/);
 });
+
+test('Mermaid chart theme toggles background together with node colors', async ({ page }) => {
+  await prepareEditor(page);
+  const chartTarget = page.locator('.language-mermaid[data-mme-enhanced]').first();
+  const toolbar = page.locator('.mme-toolbar').first();
+  const themeToggle = toolbar.locator('.mme-btn[data-action="toggleTheme"]').first();
+
+  // In light mode, chart background should match warm surface rather than pure white #ffffff
+  const lightBg = await chartTarget.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(lightBg).not.toBe('rgb(255, 255, 255)');
+
+  // Toggle to dark mode
+  await themeToggle.click();
+  await expect(chartTarget).toHaveAttribute('data-mme-theme', 'dark');
+  await expect(toolbar).toHaveAttribute('data-mme-theme', 'dark');
+
+  // In dark mode, background must be dark and svg filter applied
+  const darkBg = await chartTarget.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(darkBg).toBe('rgb(30, 30, 46)');
+
+  const svgFilter = await chartTarget
+    .locator('svg')
+    .first()
+    .evaluate((el) => el.style.filter);
+  expect(svgFilter).toContain('invert');
+});

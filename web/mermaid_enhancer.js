@@ -276,8 +276,11 @@
       var moonIcon = state.uiContainer.querySelector('.mme-icon-moon');
       if (sunIcon) sunIcon.style.display = state.theme === 'dark' ? 'none' : '';
       if (moonIcon) moonIcon.style.display = state.theme === 'dark' ? '' : 'none';
+      if (state.theme) {
+        state.uiContainer.setAttribute('data-mme-theme', state.theme);
+        if (state.targetEl) state.targetEl.setAttribute('data-mme-theme', state.theme);
+      }
     }
-    if (svg) svg.style.opacity = view.opacity;
     state.preFullscreenView = null;
   }
 
@@ -288,6 +291,10 @@
     chart.className = 'mme-fullscreen-chart';
     if (state.mode === 'code') chart.style.display = 'none';
     chart.appendChild(sourceSvg.cloneNode(true));
+    if (state.theme) {
+      chart.setAttribute('data-mme-theme', state.theme);
+      state.uiContainer.setAttribute('data-mme-theme', state.theme);
+    }
     chart._mmeSvg = chart.querySelector('svg');
     state.uiContainer.appendChild(chart);
     state.fullscreenChartEl = chart;
@@ -611,7 +618,7 @@
     _blocks[blockId] = {
       blockId: blockId,
       zoom: 1,
-      theme: 'light',
+      theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
       mode: 'chart',
       sourceCode: sourceCode,
       targetEl: el,
@@ -665,6 +672,17 @@
     // Hide Vditor's chart when in code mode
     // We do this by toggling visibility of the svg
     el._mmeSvg = el.querySelector('svg');
+    var initialTheme = _blocks[blockId].theme;
+    el.setAttribute('data-mme-theme', initialTheme);
+    toolbar.setAttribute('data-mme-theme', initialTheme);
+    uiContainer.setAttribute('data-mme-theme', initialTheme);
+    var sunIcon = toolbar.querySelector('.mme-icon-sun');
+    var moonIcon = toolbar.querySelector('.mme-icon-moon');
+    if (sunIcon) sunIcon.style.display = initialTheme === 'dark' ? 'none' : '';
+    if (moonIcon) moonIcon.style.display = initialTheme === 'dark' ? '' : 'none';
+    if (initialTheme === 'dark' && el._mmeSvg) {
+      el._mmeSvg.style.filter = 'invert(0.88) hue-rotate(180deg) contrast(0.95)';
+    }
   }
 
   function escapeHTML(s) {
@@ -893,11 +911,21 @@
     var newTheme = state.theme === 'light' ? 'dark' : 'light';
     state.theme = newTheme;
 
+    // Sync theme data attribute to chartEl and toolbar
+    chartEl.setAttribute('data-mme-theme', newTheme);
+    toolbar.setAttribute('data-mme-theme', newTheme);
+    if (state.uiContainer) {
+      state.uiContainer.setAttribute('data-mme-theme', newTheme);
+    }
+    if (state.fullscreenChartEl) {
+      state.fullscreenChartEl.setAttribute('data-mme-theme', newTheme);
+    }
+
     // Apply theme filter to the svg
     var svg = chartEl.querySelector('svg');
     if (svg) {
       if (newTheme === 'dark') {
-        svg.style.filter = 'invert(0.9) hue-rotate(180deg)';
+        svg.style.filter = 'invert(0.88) hue-rotate(180deg) contrast(0.95)';
       } else {
         svg.style.filter = '';
       }
@@ -1065,6 +1093,47 @@
     } else alert(msg);
   }
 
+  function syncAllMermaidThemes(forcedTheme) {
+    var isDark =
+      typeof forcedTheme === 'string'
+        ? forcedTheme === 'dark'
+        : document.documentElement.classList.contains('dark');
+    var targetTheme = isDark ? 'dark' : 'light';
+    for (var id in _blocks) {
+      if (!Object.prototype.hasOwnProperty.call(_blocks, id)) continue;
+      var state = _blocks[id];
+      state.theme = targetTheme;
+      if (state.targetEl) {
+        state.targetEl.setAttribute('data-mme-theme', targetTheme);
+        var svg = state.targetEl.querySelector('svg');
+        if (svg) {
+          svg.style.filter =
+            targetTheme === 'dark' ? 'invert(0.88) hue-rotate(180deg) contrast(0.95)' : '';
+        }
+      }
+      if (state.uiContainer) {
+        state.uiContainer.setAttribute('data-mme-theme', targetTheme);
+        var toolbar = state.uiContainer.querySelector('.mme-toolbar');
+        if (toolbar) {
+          toolbar.setAttribute('data-mme-theme', targetTheme);
+          var sunIcon = toolbar.querySelector('.mme-icon-sun');
+          var moonIcon = toolbar.querySelector('.mme-icon-moon');
+          if (sunIcon) sunIcon.style.display = targetTheme === 'dark' ? 'none' : '';
+          if (moonIcon) moonIcon.style.display = targetTheme === 'dark' ? '' : 'none';
+        }
+      }
+      if (state.fullscreenChartEl) {
+        state.fullscreenChartEl.setAttribute('data-mme-theme', targetTheme);
+        var fsSvg = state.fullscreenChartEl.querySelector('svg');
+        if (fsSvg) {
+          fsSvg.style.filter =
+            targetTheme === 'dark' ? 'invert(0.88) hue-rotate(180deg) contrast(0.95)' : '';
+        }
+      }
+    }
+  }
+
   window._enhanceMermaid = enhanceAllMermaidBlocks;
   window._captureMermaidSources = captureMermaidSources;
+  window._syncMermaidTheme = syncAllMermaidThemes;
 })();

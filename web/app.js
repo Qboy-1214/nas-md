@@ -3366,7 +3366,11 @@ function toggleDarkMode() {
       isDark ? 'dark' : 'classic',
       isDark ? 'dark' : 'light',
       isDark ? 'dracula' : 'github',
+      isDark ? 'dracula' : 'github',
     );
+  }
+  if (typeof window._syncMermaidTheme === 'function') {
+    window._syncMermaidTheme(isDark ? 'dark' : 'light');
   }
 }
 

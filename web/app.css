@@ -2499,7 +2499,7 @@ a:hover {
   overflow: auto !important;
   max-height: 70vh !important;
   text-align: center !important;
-  background: var(--c-canvas, #fff) !important;
+  background: var(--c-surface, #f6f5f4) !important;
 }
 
 .mme-chart-target svg,
@@ -2541,47 +2541,65 @@ a:hover {
   white-space: pre-wrap !important;
 }
 
-/* ── Dark theme (chart area only, via CSS filter) ── */
-.mme-toolbar[data-mme-theme='dark'] ~ .language-mermaid[data-mme-enhanced],
-.mme-toolbar[data-mme-theme='dark'] ~ .mme-chart-target {
+/* ── Dark theme for Mermaid charts and toolbars ── */
+.language-mermaid[data-mme-enhanced][data-mme-theme='dark'],
+.mme-chart-target[data-mme-theme='dark'],
+.mme-fullscreen-chart[data-mme-theme='dark'],
+.mme-code-area[data-mme-theme='dark'],
+html.dark .language-mermaid[data-mme-enhanced]:not([data-mme-theme='light']),
+html.dark .mme-chart-target:not([data-mme-theme='light']),
+html.dark .mme-fullscreen-chart:not([data-mme-theme='light']),
+html.dark .mme-code-area:not([data-mme-theme='light']) {
   background: #1e1e2e !important;
+  border-color: #313244 !important;
 }
 
-.mme-toolbar[data-mme-theme='dark'] ~ .language-mermaid[data-mme-enhanced] svg,
-.mme-toolbar[data-mme-theme='dark'] ~ .mme-chart-target svg {
+.language-mermaid[data-mme-enhanced][data-mme-theme='dark'] svg,
+.mme-chart-target[data-mme-theme='dark'] svg,
+.mme-fullscreen-chart[data-mme-theme='dark'] svg,
+html.dark .language-mermaid[data-mme-enhanced]:not([data-mme-theme='light']) svg,
+html.dark .mme-chart-target:not([data-mme-theme='light']) svg,
+html.dark .mme-fullscreen-chart:not([data-mme-theme='light']) svg {
   filter: invert(0.88) hue-rotate(180deg) contrast(0.95);
 }
 
 /* Dark theme toolbar */
-.mme-toolbar[data-mme-theme='dark'] {
-  background: #181825;
-  border-color: #313244;
+.mme-toolbar[data-mme-theme='dark'],
+html.dark .mme-toolbar:not([data-mme-theme='light']) {
+  background: #181825 !important;
+  border-color: #313244 !important;
 }
 
-.mme-toolbar[data-mme-theme='dark'] .mme-tabs {
+.mme-toolbar[data-mme-theme='dark'] .mme-tabs,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-tabs {
   background: #313244;
 }
 
-.mme-toolbar[data-mme-theme='dark'] .mme-tab {
+.mme-toolbar[data-mme-theme='dark'] .mme-tab,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-tab {
   color: #a6adc8;
 }
 
-.mme-toolbar[data-mme-theme='dark'] .mme-tab.active {
+.mme-toolbar[data-mme-theme='dark'] .mme-tab.active,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-tab.active {
   background: #45475a;
   color: #cdd6f4;
 }
 
-.mme-toolbar[data-mme-theme='dark'] .mme-btn {
+.mme-toolbar[data-mme-theme='dark'] .mme-btn,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-btn {
   color: #a6adc8;
 }
 
-.mme-toolbar[data-mme-theme='dark'] .mme-btn:hover {
+.mme-toolbar[data-mme-theme='dark'] .mme-btn:hover,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #cdd6f4;
   border-color: #45475a;
 }
 
-.mme-toolbar[data-mme-theme='dark'] .mme-sep {
+.mme-toolbar[data-mme-theme='dark'] .mme-sep,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-sep {
   background: #45475a;
 }
 
@@ -2625,7 +2643,13 @@ html.mme-fullscreen-active .language-mermaid[data-mme-fullscreen='true'] {
   border: none !important;
   border-radius: 0 !important;
   overflow: auto !important;
-  background: var(--c-canvas, #ffffff) !important;
+  background: var(--c-surface, #f6f5f4) !important;
+}
+
+html.mme-fullscreen-active .language-mermaid[data-mme-fullscreen='true'][data-mme-theme='dark'],
+html.dark.mme-fullscreen-active
+  .language-mermaid[data-mme-fullscreen='true']:not([data-mme-theme='light']) {
+  background: #1e1e2e !important;
 }
 
 html.mme-fullscreen-active .language-mermaid[data-mme-fullscreen='true'] svg {
@@ -2650,7 +2674,12 @@ html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] {
 .mme-overlay-item:fullscreen {
   width: 100vw;
   height: 100vh;
-  background: var(--c-canvas, #ffffff);
+  background: var(--c-surface, #f6f5f4);
+}
+
+.mme-overlay-item[data-mme-theme='dark']:fullscreen,
+html.dark .mme-overlay-item:not([data-mme-theme='light']):fullscreen {
+  background: #1e1e2e !important;
 }
 
 .mme-fullscreen-chart {
