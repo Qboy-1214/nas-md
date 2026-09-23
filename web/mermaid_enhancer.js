@@ -798,11 +798,20 @@
       applyTransform(id, chartEl);
     }
 
-    function handleMouseUp() {
+    function handleMouseUp(e) {
       if (!dragging) return;
       dragging = false;
       chartEl.style.cursor = 'grab';
       chartEl.style.userSelect = '';
+      if (e) {
+        e.stopPropagation();
+      }
+    }
+
+    function handleClick(e) {
+      // Prevent Vditor IR from expanding raw markdown source code when clicking/dragging the chart
+      if (state.mode === 'code') return;
+      e.stopPropagation();
     }
 
     function handleWheel(e) {
@@ -816,16 +825,20 @@
     }
 
     chartEl.addEventListener('mousedown', handleMouseDown);
+    chartEl.addEventListener('click', handleClick);
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
+    chartEl.addEventListener('mouseup', handleMouseUp);
     chartEl.addEventListener('wheel', handleWheel);
 
     chartEl.style.cursor = 'grab';
     chartEl._mmeDragPanCleanup = function () {
       dragging = false;
       chartEl.removeEventListener('mousedown', handleMouseDown);
+      chartEl.removeEventListener('click', handleClick);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      chartEl.removeEventListener('mouseup', handleMouseUp);
       chartEl.removeEventListener('wheel', handleWheel);
       delete chartEl._mmeDragPanCleanup;
     };

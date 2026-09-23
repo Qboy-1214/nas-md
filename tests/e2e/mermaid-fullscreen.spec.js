@@ -1081,3 +1081,26 @@ test('Entering fullscreen resets an existing normal chart transform', async ({ p
   expect(Math.abs(centerAfterZoom.x - centerBeforeZoom.x)).toBeLessThan(2);
   expect(Math.abs(centerAfterZoom.y - centerBeforeZoom.y)).toBeLessThan(2);
 });
+
+test('Dragging or clicking the Mermaid chart does not reveal raw markdown source', async ({
+  page,
+}) => {
+  await prepareEditor(page);
+  const chartTarget = page.locator('.vditor-ir__preview .language-mermaid svg').first();
+  await expect(chartTarget).toBeVisible();
+  const box = await chartTarget.boundingBox();
+  expect(box).not.toBeNull();
+
+  // Drag the chart
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 40, { steps: 5 });
+  await page.mouse.up();
+
+  const codeBlockNode = page.locator('.vditor-ir__node[data-type="code-block"]').first();
+  await expect(codeBlockNode).not.toHaveClass(/vditor-ir__node--expand/);
+
+  // Click the chart
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(codeBlockNode).not.toHaveClass(/vditor-ir__node--expand/);
+});
