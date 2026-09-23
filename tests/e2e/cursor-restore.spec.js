@@ -147,6 +147,9 @@ test.describe('光标和滚动位置恢复', () => {
       await scrollToBottom(page);
       const scrollBefore = await getScrollTop(page);
       expect(scrollBefore, 'test document must be scrollable').toBeGreaterThan(0);
+      await page.evaluate(() => {
+        saveCursorScrollToStorage();
+      });
 
       // Reload page
       await page.reload();
@@ -157,6 +160,7 @@ test.describe('光标和滚动位置恢复', () => {
         testFileName,
         { timeout: 15000 },
       );
+      await waitForTestDocumentReady(page);
 
       // Check scroll position restored
       await expect

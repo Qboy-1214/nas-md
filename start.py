@@ -9,6 +9,7 @@ import time
 import threading
 import signal
 from pathlib import Path
+
 # Ensure UTF-8 output encoding on Windows console
 if sys.platform == "win32":
     try:
