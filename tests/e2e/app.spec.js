@@ -332,6 +332,137 @@ test.describe('HTML 文件树', () => {
 });
 
 test.describe('隔离 HTML 预览', () => {
+  async function prepareNavigationFiles(page) {
+    await page.route('**/api/mounts/html-navigation-test/preview/**', (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const content = path.endsWith('/second.html') ? 'Second HTML' : 'First HTML';
+      return route.fulfill({
+        contentType: 'text/html',
+        body: `<!doctype html><p id="preview-content">${content}</p>`,
+      });
+    });
+    await page.goto('/admin');
+    await page.waitForFunction(() => typeof openFile === 'function' && typeof API !== 'undefined');
+    await page.evaluate(() => {
+      const mount = { id: 'html-navigation-test', name: '导航测试', readonly: false };
+      state.mounts = [mount];
+      state.currentPath = '/welcome.md';
+      state.currentMountId = mount.id;
+      state.dirty = false;
+      window.navigationSseConnections = [];
+      window.nasmdSSE.connect = (...args) => window.navigationSseConnections.push(args);
+      API.getFile = async (_mountId, path) => ({
+        content:
+          path === '/first.html'
+            ? '<!doctype html><p id="preview-content">First HTML</p>'
+            : path === '/second.html'
+              ? '<!doctype html><p id="preview-content">Second HTML</p>'
+              : '# Markdown file',
+        mtime: 1,
+        version: 1,
+      });
+    });
+  }
+
+  test('HTML 文件显示预览并隐藏 Vditor 和 Markdown 控件', async ({ page }) => {
+    await prepareNavigationFiles(page);
+    await page.evaluate(() => {
+      localStorage.setItem(
+        nasmdDraftStorage.key('html-navigation-test', '/first.html'),
+        JSON.stringify({ content: 'Stale HTML draft', mountId: 'html-navigation-test' }),
+      );
+      window.previewContentSeen = [];
+      const show = window.nasmdHtmlPreview.show;
+      window.nasmdHtmlPreview.show = (options) => {
+        window.previewContentSeen.push(options.content);
+        return show(options);
+      };
+      return openFile('/first.html', 'html-navigation-test');
+    });
+
+    await expect(page.locator('#nasmd-html-preview-host')).toBeVisible();
+    await expect(page.locator('#nasmd-html-preview')).toBeVisible();
+    await expect(page.locator('#vditor')).toBeHidden();
+    await expect(page.locator('#editor-modes')).toBeHidden();
+    await expect(page.locator('#save-group')).toBeHidden();
+    await expect(page.locator('#export-pdf-top-btn')).toBeHidden();
+    await expect(page.locator('#history-top-btn')).toBeHidden();
+    await expect(page.frameLocator('#nasmd-html-preview').locator('#preview-content')).toHaveText(
+      'First HTML',
+    );
+    const previewContent = await page.evaluate(() => window.previewContentSeen[0]);
+    expect(previewContent).toContain('First HTML');
+    expect(previewContent).not.toContain('Stale HTML draft');
+    expect(await page.evaluate(() => window.navigationSseConnections)).toEqual([]);
+  });
+
+  test('从 HTML 切换到 Markdown 会清除预览并恢复编辑器控件', async ({ page }) => {
+    await prepareNavigationFiles(page);
+    await page.evaluate(() => openFile('/first.html', 'html-navigation-test'));
+    await page.evaluate(() => openFile('/notes.md', 'html-navigation-test'));
+
+    await expect(page.locator('#nasmd-html-preview')).toHaveCount(0);
+    await expect(page.locator('#nasmd-html-preview-host')).toBeHidden();
+    await expect(page.locator('#vditor')).toBeVisible();
+    await expect(page.locator('#editor-modes')).toBeVisible();
+    await expect(page.locator('#save-group')).toBeVisible();
+    await expect(page.locator('#export-pdf-top-btn')).toBeVisible();
+    await expect(page.locator('#history-top-btn')).toBeVisible();
+    await expect(page.locator('#vditor')).toContainText('Markdown file');
+    expect(await page.evaluate(() => window.navigationSseConnections)).toEqual([
+      ['html-navigation-test', '/notes.md'],
+    ]);
+  });
+
+  test('从一个 HTML 文件切换到另一个时销毁旧预览', async ({ page }) => {
+    await prepareNavigationFiles(page);
+    await page.evaluate(() => openFile('/first.html', 'html-navigation-test'));
+    await page.evaluate(() => openFile('/second.html', 'html-navigation-test'));
+
+    await expect(page.locator('#nasmd-html-preview')).toHaveCount(1);
+    await expect(page.frameLocator('#nasmd-html-preview').locator('#preview-content')).toHaveText(
+      'Second HTML',
+    );
+  });
+
+  test('从有未保存修改的 Markdown 切换到 HTML 仍会询问保存', async ({ page }) => {
+    await prepareNavigationFiles(page);
+    await page.evaluate(() => openFile('/notes.md', 'html-navigation-test'));
+    await page.waitForFunction(() => !!window._vditor);
+    expect(await page.evaluate(() => !!window._vditor)).toBe(true);
+    await page.evaluate(() => {
+      state.autoSave = false;
+      window._vditor.setValue('# Changed markdown');
+      onEditorInput();
+    });
+    await page.waitForFunction(() => state.dirty);
+    let confirmMessage;
+    page.once('dialog', async (dialog) => {
+      confirmMessage = dialog.message();
+      await dialog.dismiss();
+    });
+    await page.evaluate(() => openFile('/first.html', 'html-navigation-test'));
+
+    expect(confirmMessage).toContain('未保存的修改');
+    await expect(page.locator('#nasmd-html-preview')).toBeVisible();
+  });
+
+  test('预览模块出错时显示宿主错误状态并保留当前文件', async ({ page }) => {
+    await prepareNavigationFiles(page);
+    await page.evaluate(() => {
+      window.nasmdHtmlPreview.show = async () => {
+        throw new Error('preview failed');
+      };
+      return openFile('/first.html', 'html-navigation-test');
+    });
+
+    await expect(page.locator('#nasmd-html-preview-host .html-preview-error')).toHaveText(
+      'HTML 预览加载失败',
+    );
+    expect(await page.evaluate(() => state.currentPath)).toBe('/first.html');
+    await expect(page.locator('#toast')).toContainText('HTML 预览加载失败');
+  });
+
   test('服务端预览渲染静态页面并隔离父窗口', async ({ page }) => {
     await page.route('**/api/mounts/preview-test/preview/demo/index.html', (route) =>
       route.fulfill({
@@ -367,6 +498,7 @@ test.describe('隔离 HTML 预览', () => {
         mount: { id: 'preview-test', _local: false },
         path: '/demo/index.html',
         content: '',
+        container: document.body,
       }),
     );
 
@@ -442,6 +574,7 @@ test.describe('隔离 HTML 预览', () => {
           path: '/index.html',
           content:
             '<!doctype html><p id="message">Original</p><img id="picture" src="images/pixel.png"><img id="srcset" srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ZkAAAAASUVORK5CYII= 1x, images/pixel.png 2x"><img id="escape" src="../../../outside.png"><link rel="stylesheet" href="styles/site.css"><script src="scripts/page.js"></script>',
+          container: document.body,
         }),
       mountId,
     );
@@ -494,6 +627,7 @@ test.describe('隔离 HTML 预览', () => {
         mount,
         path: '/index.html',
         content: '<link rel="stylesheet" href="slow.css"><p>stale preview</p>',
+        container: document.body,
       });
     }, mountId);
     await page.waitForFunction(() => typeof window.releaseSlowPreviewCss === 'function');
@@ -504,6 +638,7 @@ test.describe('隔离 HTML 预览', () => {
         mount,
         path: '/index.html',
         content: '<p>latest preview</p>',
+        container: document.body,
       });
     }, mountId);
     await expect(page.locator('#nasmd-html-preview')).toHaveCount(1);
@@ -526,9 +661,7 @@ test.describe('隔离 HTML 预览', () => {
     await page.goto('/admin');
     await page.addScriptTag({ url: '/html_preview.js' });
     await page.evaluate(() => {
-      const firstHost = document.createElement('div');
-      firstHost.id = 'nasmd-html-preview-host';
-      document.body.appendChild(firstHost);
+      document.getElementById('nasmd-html-preview-host').style.display = '';
       window.nasmdHtmlPreview.show({ mount: { id: 'server-mount' }, path: '/index.html' });
     });
     await expect(page.locator('#nasmd-html-preview-host > #nasmd-html-preview')).toHaveCount(1);

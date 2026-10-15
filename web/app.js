@@ -3126,6 +3126,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
     renderRecentFiles();
 
     $('breadcrumb').textContent = mount.name + path + (mount.readonly ? ' (只读)' : '');
+    const isHtmlFile = /\.(?:html?|xhtml?)$/i.test(path);
     // Show rename/delete buttons if file is writable and not root
     const renameBtn = $('rename-top-btn');
     const deleteBtn = $('delete-top-btn');
@@ -3154,45 +3155,88 @@ async function openFile(path, preferredMountId, searchKeyword) {
     if (historyBtn) {
       historyBtn.style.display = path !== '/' && path.endsWith('.md') ? '' : 'none';
     }
-    $('editor-modes').style.display = mount.readonly ? 'none' : path.endsWith('.md') ? '' : 'none';
-    $('save-group').style.display = mount.readonly ? 'none' : '';
+    $('editor-modes').style.display =
+      !isHtmlFile && !mount.readonly && path.endsWith('.md') ? '' : 'none';
+    $('save-group').style.display = !isHtmlFile && !mount.readonly ? '' : 'none';
     // Show refresh button when a file is open
     const _refreshBtn2 = $('btn-refresh');
     if (_refreshBtn2) _refreshBtn2.style.display = path !== '/' ? '' : 'none';
     showPage('editor');
 
-    if (window._vditor) window._vditor.destroy();
+    if (window._vditor) {
+      window._vditor.destroy();
+      window._vditor = null;
+    }
+    const previewHost = $('nasmd-html-preview-host');
+    const vditorHost = $('vditor');
+    if (isHtmlFile) {
+      vditorHost.style.display = 'none';
+      previewHost.style.display = '';
+      previewHost.replaceChildren();
+      if (window.nasmdSSE) {
+        window.nasmdSSE.disconnect();
+        window.nasmdSSE._currentMountId = null;
+        window.nasmdSSE._currentPath = null;
+      }
+      try {
+        if (!window.nasmdHtmlPreview) throw new Error('HTML preview module is unavailable');
+        await window.nasmdHtmlPreview.show({
+          mount,
+          path,
+          content,
+          container: previewHost,
+        });
+      } catch (e) {
+        const error = document.createElement('div');
+        error.className = 'html-preview-error';
+        error.textContent = 'HTML 预览加载失败';
+        previewHost.replaceChildren(error);
+        showToast('HTML 预览加载失败');
+        console.error(e);
+      }
+    } else {
+      previewHost.style.display = 'none';
+      if (window.nasmdHtmlPreview) window.nasmdHtmlPreview.clear();
+      vditorHost.style.display = '';
+    }
     // Set mount context BEFORE initEditor so image rewriting (which runs during
     // Vditor's render/after callbacks) knows whether this is a local mount.
     setFileInfo(mount.id, path);
-    // Check for offline draft
-    const draftRestore = resolveDraftRestore(
-      path,
-      mount.id,
-      content,
-      state.baseVersion,
-      state.baseContent,
-    );
-    state.baseVersion = draftRestore.baseVersion;
-    state.baseContent = draftRestore.baseContent;
-    state.fileVersions[mount.id + ':' + path] = draftRestore.baseVersion;
-    if (draftRestore.hasDraft) {
-      showToast('已恢复本地缓存版本');
-    }
-    initEditor(
-      draftRestore.content,
-      state.editorMode,
-      !!mount.readonly,
-      draftRestore.hasDraft ? draftRestore.baseContent : undefined,
-    );
-    // Connect to SSE for collaborative editing (non-readonly files)
-    if (!mount.readonly && window.nasmdSSE) {
-      window.nasmdSSE.connect(mount.id, path);
+    let hasRestoredDraft = false;
+    if (isHtmlFile) {
+      state.dirty = false;
+      window._originalContent = content;
+    } else {
+      // Check for offline draft
+      const draftRestore = resolveDraftRestore(
+        path,
+        mount.id,
+        content,
+        state.baseVersion,
+        state.baseContent,
+      );
+      hasRestoredDraft = draftRestore.hasDraft;
+      state.baseVersion = draftRestore.baseVersion;
+      state.baseContent = draftRestore.baseContent;
+      state.fileVersions[mount.id + ':' + path] = draftRestore.baseVersion;
+      if (draftRestore.hasDraft) {
+        showToast('已恢复本地缓存版本');
+      }
+      initEditor(
+        draftRestore.content,
+        state.editorMode,
+        !!mount.readonly,
+        draftRestore.hasDraft ? draftRestore.baseContent : undefined,
+      );
+      // Connect to SSE for collaborative editing (non-readonly files)
+      if (!mount.readonly && window.nasmdSSE) {
+        window.nasmdSSE.connect(mount.id, path);
+      }
     }
     // Note: window._originalContent is set by Vditor's after() callback
     // to match Vditor's normalized content (e.g. trailing newline handling)
     state.pendingRemoteVersion = null;
-    if (draftRestore.hasDraft) {
+    if (hasRestoredDraft) {
       markDirty();
     } else {
       state.dirty = false;
