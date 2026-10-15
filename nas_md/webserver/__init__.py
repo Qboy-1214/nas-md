@@ -846,6 +846,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                 self._handle_find_path(qs)
                 return
 
+            # /api/mounts/{id}/preview/{relative_path} — serve raw bytes without history
+            preview_prefix = "/api/mounts/"
+            if path.startswith(preview_prefix) and "/preview/" in path:
+                mount_id, rel_path = path[len(preview_prefix) :].split("/preview/", 1)
+                self._handle_preview(mount_id, unquote(rel_path))
+                return
+
             # /api/mounts/{id}/tree
             if "/api/mounts/" in path and path.endswith("/tree"):
                 mount_id = path.split("/api/mounts/")[1].split("/tree")[0]
@@ -856,13 +863,6 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             if "/api/mounts/" in path and path.endswith("/tree-recursive"):
                 mount_id = path.split("/api/mounts/")[1].split("/tree-recursive")[0]
                 self._handle_recursive_tree(mount_id, qs)
-                return
-
-            # /api/mounts/{id}/preview/{relative_path} — serve raw bytes without history
-            preview_prefix = "/api/mounts/"
-            if path.startswith(preview_prefix) and "/preview/" in path:
-                mount_id, rel_path = path[len(preview_prefix) :].split("/preview/", 1)
-                self._handle_preview(mount_id, unquote(rel_path))
                 return
 
             # /api/mounts/{id}/file
@@ -1440,6 +1440,8 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", _content_type(abs_path))
         self.send_header("Content-Length", str(len(data)))
         self.send_header("X-Content-Type-Options", "nosniff")
+        if abs_path.lower().endswith((".html", ".htm")):
+            self.send_header("Content-Security-Policy", "sandbox allow-scripts")
         self.end_headers()
         self.wfile.write(data)
 

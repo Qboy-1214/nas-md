@@ -301,6 +301,36 @@ class TestHtmlPreviewRoute:
         assert headers["content-type"] == "text/html; charset=utf-8"
         assert headers["content-length"] == str(len(raw))
         assert headers["x-content-type-options"] == "nosniff"
+        csp = headers["content-security-policy"].lower().split()
+        assert "sandbox" in csp
+        assert "allow-same-origin" not in csp
+        assert "allow-top-navigation" not in csp
+        assert "allow-forms" not in csp
+        assert "allow-popups" not in csp
+
+    @pytest.mark.parametrize(
+        "relative_path", ["assets/tree", "assets/tree-recursive", "assets/file"]
+    )
+    def test_preview_route_handles_names_matching_api_suffixes(
+        self, server_url, storage_dir, relative_path
+    ):
+        import urllib.request
+
+        file_path = os.path.join(storage_dir, *relative_path.split("/"))
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        raw = b"static preview resource"
+        with open(file_path, "wb") as f:
+            f.write(raw)
+
+        try:
+            response = urllib.request.urlopen(
+                f"{server_url}/api/mounts/builtin-storage/preview/{relative_path}", timeout=5
+            )
+        except urllib.error.HTTPError as error:
+            assert error.code == 200, f"Preview route returned HTTP {error.code}"
+            raise
+        with response:
+            assert response.read() == raw
 
     @pytest.mark.parametrize(
         ("relative_path", "raw", "content_type"),
