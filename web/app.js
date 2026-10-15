@@ -3,6 +3,14 @@
  */
 
 // === 辅助函数 ===
+function isHtmlFile(path) {
+  return /\.html?$/i.test(path);
+}
+
+function isDisplayableFile(path) {
+  return path.toLowerCase().endsWith('.md') || isHtmlFile(path);
+}
+
 // Vditor's getValue() may normalize content (e.g. add trailing newline).
 // Use this for dirty comparison and originalContent sync to avoid false positives.
 function _normContent(s) {
@@ -593,6 +601,7 @@ async function readLocalDir(dirHandle, parentPath) {
     if (entry.kind === 'directory') {
       const subChildren = [];
       let hasMd = false;
+      let hasHtml = false;
       let isEmpty = true;
       let hasEmptyDir = false;
       try {
@@ -600,29 +609,32 @@ async function readLocalDir(dirHandle, parentPath) {
         const subResult = await readLocalDir(subHandle, entryPath);
         subChildren.push(...(subResult.children || []));
         hasMd = subResult.hasMd || false;
+        hasHtml = subResult.hasHtml || false;
         isEmpty = subResult.isEmpty || false;
         hasEmptyDir = subResult.hasEmptyDir || false;
       } catch (_e) {
         /* skip unreadable dirs */
       }
-      // Include dirs that contain .md files, are empty, or contain empty dirs
-      if (hasMd || isEmpty || hasEmptyDir) {
+      // Include dirs that contain displayable files, are empty, or contain empty dirs
+      if (hasMd || hasHtml || isEmpty || hasEmptyDir) {
         children.push({
           name: entry.name,
           path: entryPath,
           isDir: true,
           hasMd,
+          hasHtml,
           isEmpty,
           hasEmptyDir,
           children: subChildren,
         });
       }
-    } else if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.md')) {
+    } else if (entry.kind === 'file' && isDisplayableFile(entry.name)) {
       children.push({
         name: entry.name,
         path: entryPath,
         isDir: false,
-        hasMd: true,
+        hasMd: entry.name.toLowerCase().endsWith('.md'),
+        hasHtml: isHtmlFile(entry.name),
         size: 0,
         modTime: 0,
       });
@@ -635,6 +647,7 @@ async function readLocalDir(dirHandle, parentPath) {
     return a.name.localeCompare(b.name);
   });
   const hasMd = children.some((c) => c.hasMd);
+  const hasHtml = children.some((c) => c.hasHtml);
   const isEmpty = !hasRawEntries;
   const hasEmptyDir = children.some((c) => c.isDir && (c.isEmpty || c.hasEmptyDir));
   return {
@@ -643,6 +656,7 @@ async function readLocalDir(dirHandle, parentPath) {
     isDir: true,
     children,
     hasMd,
+    hasHtml,
     isEmpty,
     hasEmptyDir,
   };
@@ -771,7 +785,14 @@ function onDirPicked(event) {
   const mountId = 'local-' + Date.now();
 
   // Build tree from flat file list
-  const root = { name: dirName, path: '/', isDir: true, children: [], hasMd: false };
+  const root = {
+    name: dirName,
+    path: '/',
+    isDir: true,
+    children: [],
+    hasMd: false,
+    hasHtml: false,
+  };
   const dirMap = { '/': root };
   const fileMap = {};
 
@@ -780,7 +801,9 @@ function onDirPicked(event) {
     if (!relPath) continue;
     const parts = relPath.split('/');
     const fileName = parts[parts.length - 1];
-    if (!fileName.toLowerCase().endsWith('.md')) continue;
+    if (!isDisplayableFile(fileName)) continue;
+    const hasMd = fileName.toLowerCase().endsWith('.md');
+    const hasHtml = isHtmlFile(fileName);
 
     // Save into fileMap and ensure all parent directories exist in the tree
     let currentPath = '';
@@ -794,6 +817,7 @@ function onDirPicked(event) {
           isDir: true,
           children: [],
           hasMd: false,
+          hasHtml: false,
         };
         dirMap[currentPath] = dirEntry;
         const parent = dirMap[parentPath] || root;
@@ -808,18 +832,23 @@ function onDirPicked(event) {
       name: fileName,
       path: filePath,
       isDir: false,
-      hasMd: true,
+      hasMd,
+      hasHtml,
       size: file.size,
       modTime: file.lastModified,
     });
-    // Mark all ancestors as having .md
+    // Mark all ancestors as containing Markdown or HTML
     let markPath = currentPath;
     while (markPath) {
-      if (dirMap[markPath]) dirMap[markPath].hasMd = true;
+      if (dirMap[markPath]) {
+        if (hasMd) dirMap[markPath].hasMd = true;
+        if (hasHtml) dirMap[markPath].hasHtml = true;
+      }
       const idx = markPath.lastIndexOf('/');
       markPath = idx > 0 ? markPath.substring(0, idx) : '';
     }
-    root.hasMd = true;
+    if (hasMd) root.hasMd = true;
+    if (hasHtml) root.hasHtml = true;
   }
 
   // Sort children: dirs first, then files
@@ -1123,7 +1152,14 @@ function renderSidebar() {
   const builtinEntries = builtinRoot?.children || null;
   if (builtinEntries) {
     const items = builtinEntries
-      .filter((e) => !e.name.startsWith('.') && e.name !== 'mounts.json')
+      .filter(
+        (e) =>
+          !e.name.startsWith('.') &&
+          e.name !== 'mounts.json' &&
+          (e.isDir
+            ? e.hasMd || e.hasHtml || e.isEmpty || e.hasEmptyDir
+            : isDisplayableFile(e.name)),
+      )
       .sort((a, b) => {
         if (a.isDir && !b.isDir) return -1;
         if (!a.isDir && b.isDir) return 1;
@@ -1178,11 +1214,10 @@ function renderEntries(entries, mountId, _parentPath) {
   const items = entries
     .filter((e) => {
       if (e.name.startsWith('.')) return false;
-      // Always show .md files
-      if (!e.isDir && e.name.toLowerCase().endsWith('.md')) return true;
-      // Show directories that have .md files, are empty, or contain empty dirs
-      if (e.isDir && (e.hasMd || e.isEmpty || e.hasEmptyDir)) return true;
-      // Hide non-md files and directories without .md files that aren't empty
+      // Show Markdown and HTML files, plus dirs that contain them or are empty.
+      if (!e.isDir && isDisplayableFile(e.name)) return true;
+      if (e.isDir && (e.hasMd || e.hasHtml || e.isEmpty || e.hasEmptyDir)) return true;
+      // Hide unsupported files and directories without displayable content.
       return false;
     })
     .sort((a, b) => {

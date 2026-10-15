@@ -182,6 +182,117 @@ test.describe('文件操作', () => {
   });
 });
 
+test.describe('HTML 文件树', () => {
+  test('服务端目录树显示大小写不敏感的 HTML 文件和父目录', async ({ page }) => {
+    await page.route('**/api/mounts', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { id: 'html-tree-test', name: 'HTML 测试', path: '/html-test', readonly: true },
+        ]),
+      }),
+    );
+    await page.route('**/api/mounts/html-tree-test/tree-recursive?*', (route) => {
+      const path = new URL(route.request().url()).searchParams.get('path');
+      const entries =
+        path === '/'
+          ? [
+              {
+                name: 'index.HTML',
+                path: '/index.HTML',
+                isDir: false,
+                hasMd: false,
+                hasHtml: true,
+              },
+              { name: 'docs', path: '/docs', isDir: true, hasMd: false, hasHtml: true },
+              { name: 'notes.txt', path: '/notes.txt', isDir: false, hasMd: false, hasHtml: false },
+              {
+                name: '.hidden.HTML',
+                path: '/.hidden.HTML',
+                isDir: false,
+                hasMd: false,
+                hasHtml: true,
+              },
+            ]
+          : [
+              {
+                name: 'nested.htm',
+                path: '/docs/nested.htm',
+                isDir: false,
+                hasMd: false,
+                hasHtml: true,
+              },
+              {
+                name: 'nested.txt',
+                path: '/docs/nested.txt',
+                isDir: false,
+                hasMd: false,
+                hasHtml: false,
+              },
+            ];
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          name: path === '/' ? 'html-test' : 'docs',
+          path,
+          isDir: true,
+          children: entries,
+          hasMd: false,
+          hasHtml: true,
+          isEmpty: false,
+          hasEmptyDir: false,
+        }),
+      });
+    });
+
+    await page.goto('/admin');
+    await page.evaluate(() => toggleMount('html-tree-test'));
+
+    const tree = page.locator('#file-tree');
+    await expect(tree.locator('.tree-item').filter({ hasText: 'index.HTML' })).toBeVisible();
+    await expect(tree.locator('.tree-folder[title="docs"]')).toBeVisible();
+    await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
+    await expect(tree.locator('.tree-item').filter({ hasText: '.hidden.HTML' })).toHaveCount(0);
+
+    await tree.locator('.tree-folder[title="docs"]').click();
+    await expect(tree.locator('.tree-item').filter({ hasText: 'nested.htm' })).toBeVisible();
+    await expect(tree.locator('.tree-item').filter({ hasText: 'nested.txt' })).toHaveCount(0);
+  });
+
+  test('webkitdirectory fallback 收录 HTML 和 HTM 并显示父目录', async ({ page }) => {
+    await page.goto('/admin');
+    await page.evaluate(() => {
+      const makeFile = (name, relativePath) => {
+        const file = new File(['test'], name, { type: 'text/html' });
+        Object.defineProperty(file, 'webkitRelativePath', { value: relativePath });
+        return file;
+      };
+      onDirPicked({
+        target: {
+          files: [
+            makeFile('index.HTML', 'local-html/index.HTML'),
+            makeFile('nested.htm', 'local-html/docs/nested.htm'),
+            makeFile('notes.txt', 'local-html/docs/notes.txt'),
+            makeFile('.hidden.html', 'local-html/.hidden.html'),
+          ],
+          value: '',
+        },
+      });
+    });
+
+    const tree = page.locator('#file-tree');
+    await tree.locator('.mount-name').filter({ hasText: 'local-html' }).click();
+    await expect(tree.locator('.tree-item').filter({ hasText: 'index.HTML' })).toBeVisible();
+    await expect(tree.locator('.tree-folder[title="docs"]')).toBeVisible();
+    await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
+    await expect(tree.locator('.tree-item').filter({ hasText: '.hidden.html' })).toHaveCount(0);
+
+    await tree.locator('.tree-folder[title="docs"]').click();
+    await expect(tree.locator('.tree-item').filter({ hasText: 'nested.htm' })).toBeVisible();
+    await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
+  });
+});
+
 test.describe('拖拽功能', () => {
   test('文件条目可拖拽', async ({ page }) => {
     await page.goto('/admin');
