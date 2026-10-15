@@ -624,6 +624,10 @@ test.describe('隔离 HTML 预览', () => {
   });
 
   test('本机相对资源缺失或越出挂载点时保留 HTML 页面', async ({ page }) => {
+    const resourceWarnings = [];
+    page.on('console', (message) => {
+      if (message.type() === 'warning') resourceWarnings.push(message.text());
+    });
     await page.goto('/admin');
     await page.addScriptTag({ url: '/html_preview.js' });
     const mountId = await page.evaluate(() => {
@@ -635,7 +639,15 @@ test.describe('隔离 HTML 预览', () => {
         { type: 'text/html' },
       );
       Object.defineProperty(file, 'webkitRelativePath', { value: 'missing-assets/index.html' });
-      onDirPicked({ target: { files: [file], value: '' } });
+      const stylesheet = new File(
+        ['@import url("missing-import.css"); @import url("../../outside.css");'],
+        'broken.css',
+        { type: 'text/css' },
+      );
+      Object.defineProperty(stylesheet, 'webkitRelativePath', {
+        value: 'missing-assets/assets/broken.css',
+      });
+      onDirPicked({ target: { files: [file, stylesheet], value: '' } });
       return state.mounts.at(-1).id;
     });
 
@@ -645,7 +657,7 @@ test.describe('隔离 HTML 预览', () => {
         mount,
         path: '/index.html',
         content:
-          '<!doctype html><h1 id="ready">Still usable</h1><img id="missing" src="assets/gone.png"><img id="escape" src="../../outside.png"><link rel="stylesheet" href="missing.css">',
+          '<!doctype html><h1 id="ready">Still usable</h1><img id="missing" src="assets/gone.png"><img id="escape" src="../../outside.png"><link rel="stylesheet" href="missing.css"><link rel="stylesheet" href="assets/broken.css">',
         container: document.body,
       });
     }, mountId);
@@ -654,7 +666,14 @@ test.describe('隔离 HTML 预览', () => {
     await expect(preview.locator('#ready')).toHaveText('Still usable');
     await expect(preview.locator('#missing')).toHaveAttribute('src', 'about:blank');
     await expect(preview.locator('#escape')).toHaveAttribute('src', 'about:blank');
-    await expect(preview.locator('link[rel="stylesheet"]')).toHaveAttribute('href', 'about:blank');
+    await expect(preview.locator('link[rel="stylesheet"]').first()).toHaveAttribute(
+      'href',
+      'about:blank',
+    );
+    expect(resourceWarnings.some((message) => message.includes('assets/gone.png'))).toBe(true);
+    expect(resourceWarnings.some((message) => message.includes('../../outside.png'))).toBe(true);
+    expect(resourceWarnings.some((message) => message.includes('missing-import.css'))).toBe(true);
+    expect(resourceWarnings.some((message) => message.includes('../../outside.css'))).toBe(true);
   });
 
   test('新预览使未完成的旧预览失效并由清除移除全部预览帧', async ({ page }) => {

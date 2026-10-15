@@ -32,6 +32,10 @@ function extension(path) {
   return match ? match[0] : '';
 }
 
+function reportResourceFailure(documentPath, resource, reason) {
+  console.warn(`HTML preview resource failed: ${resource} (from ${documentPath}) — ${reason}`);
+}
+
 function clear() {
   renderGeneration += 1;
   for (const frame of previewFrames) frame.remove();
@@ -104,11 +108,17 @@ async function toDataUrl(blob) {
 async function createResourceUrl(mountId, documentPath, resource, cssStack = new Set()) {
   const resolved = normalizeResourcePath(documentPath, resource);
   if (resolved.external) return resolved.value;
-  if (resolved.rejected) return 'about:blank';
+  if (resolved.rejected) {
+    reportResourceFailure(documentPath, resource, 'path escapes the selected mount');
+    return 'about:blank';
+  }
 
   try {
     const file = await getLocalFile(mountId, resolved.path);
-    if (!file) return 'about:blank';
+    if (!file) {
+      reportResourceFailure(documentPath, resource, 'file is missing');
+      return 'about:blank';
+    }
     const ext = extension(resolved.path);
 
     if (ext === '.css') {
@@ -124,9 +134,10 @@ async function createResourceUrl(mountId, documentPath, resource, cssStack = new
       (await toDataUrl(await asBlob(file, resolved.path))) +
       (resolved.suffix.match(/#[^#]*$/)?.[0] || '')
     );
-  } catch (_error) {
+  } catch (error) {
     // A local file may disappear or become unreadable after the directory was selected.
     // Keep the HTML page usable and show an empty placeholder for this asset.
+    reportResourceFailure(documentPath, resource, error.message || 'file could not be read');
     return 'about:blank';
   }
 }
@@ -140,19 +151,29 @@ async function rewriteCss(css, mountId, cssPath, cssStack) {
     rewritten += css.slice(cursor, index);
     const resource = match[2];
     const resolved = normalizeResourcePath(cssPath, resource);
-    if (resolved.external || resolved.rejected || extension(resolved.path) !== '.css') {
+    if (resolved.external) {
       rewritten += match[0];
+    } else if (resolved.rejected) {
+      reportResourceFailure(cssPath, resource, 'path escapes the selected mount');
+    } else if (extension(resolved.path) !== '.css') {
+      reportResourceFailure(cssPath, resource, 'local @import target is not a CSS file');
     } else if (!cssStack.has(resolved.path)) {
-      const imported = await getLocalFile(mountId, resolved.path);
-      if (imported) {
-        const importedText = await rewriteCss(
-          await imported.text(),
-          mountId,
-          resolved.path,
-          new Set(cssStack).add(resolved.path),
-        );
-        const media = match[3].trim();
-        rewritten += media ? `@media ${media} {${importedText}}` : importedText;
+      try {
+        const imported = await getLocalFile(mountId, resolved.path);
+        if (!imported) {
+          reportResourceFailure(cssPath, resource, 'file is missing');
+        } else {
+          const importedText = await rewriteCss(
+            await imported.text(),
+            mountId,
+            resolved.path,
+            new Set(cssStack).add(resolved.path),
+          );
+          const media = match[3].trim();
+          rewritten += media ? `@media ${media} {${importedText}}` : importedText;
+        }
+      } catch (error) {
+        reportResourceFailure(cssPath, resource, error.message || 'file could not be read');
       }
     }
     cursor = index + match[0].length;
