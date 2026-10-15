@@ -462,15 +462,16 @@ class MountManager:
                     continue
                 entry_rel = f"{rel_path.rstrip('/')}/{name}" if rel_path != "/" else f"/{name}"
                 is_dir = stat.S_ISDIR(st.st_mode)
-                entries.append(
-                    DirEntry(
-                        name=name,
-                        path=entry_rel,
-                        is_dir=is_dir,
-                        size=st.st_size,
-                        mod_time=int(st.st_mtime * 1000),
-                    )
+                entry = DirEntry(
+                    name=name,
+                    path=entry_rel,
+                    is_dir=is_dir,
+                    size=st.st_size,
+                    mod_time=int(st.st_mtime * 1000),
                 )
+                if not is_dir and name.lower().endswith((".html", ".htm")):
+                    entry.has_html = True
+                entries.append(entry)
             return entries
         except OSError:
             return []

@@ -242,6 +242,18 @@ class TestTreeRoute:
 
 
 class TestHtmlPreviewRoute:
+    def test_shallow_tree_marks_html_and_htm_files(self, server_url, storage_dir):
+        for name in ("page.html", "legacy.HTM"):
+            with open(os.path.join(storage_dir, name), "w", encoding="utf-8") as f:
+                f.write("<p>hello</p>")
+
+        status, body, _ = _get(f"{server_url}/api/mounts/builtin-storage/tree?path=/")
+
+        assert status == 200
+        entries = {entry["name"]: entry for entry in json.loads(body)}
+        assert entries["page.html"]["hasHtml"] is True
+        assert entries["legacy.HTM"]["hasHtml"] is True
+
     def test_recursive_tree_marks_html_files_and_subtrees(self, server_url, storage_dir):
         nested = os.path.join(storage_dir, "pages", "deep")
         os.makedirs(nested)
@@ -289,6 +301,33 @@ class TestHtmlPreviewRoute:
         assert headers["content-type"] == "text/html; charset=utf-8"
         assert headers["content-length"] == str(len(raw))
         assert headers["x-content-type-options"] == "nosniff"
+
+    @pytest.mark.parametrize(
+        ("relative_path", "raw", "content_type"),
+        [
+            ("assets/site.css", b"body{color:red}\x00", "text/css; charset=utf-8"),
+            ("assets/pixel.png", b"\x89PNG\r\n\x1a\n\x00\xff", "image/png"),
+        ],
+    )
+    def test_preview_serves_raw_non_html_resources(
+        self, server_url, storage_dir, relative_path, raw, content_type
+    ):
+        import urllib.request
+
+        assets_dir = os.path.join(storage_dir, "assets")
+        os.makedirs(assets_dir, exist_ok=True)
+        with open(os.path.join(storage_dir, *relative_path.split("/")), "wb") as f:
+            f.write(raw)
+
+        with urllib.request.urlopen(
+            f"{server_url}/api/mounts/builtin-storage/preview/{relative_path}", timeout=5
+        ) as response:
+            body = response.read()
+            headers = {k.lower(): v for k, v in response.headers.items()}
+
+        assert body == raw
+        assert headers["content-type"] == content_type
+        assert headers["content-length"] == str(len(raw))
 
     def test_preview_rejects_traversal(self, server_url, storage_dir):
         from urllib.parse import quote
