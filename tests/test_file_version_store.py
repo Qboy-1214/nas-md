@@ -1616,7 +1616,9 @@ def test_new_atomic_file_uses_normal_create_mode_under_umask(store, tmp_path):
         os.umask(previous_umask)
 
     assert result["applied"] is True
-    assert content_temp_modes == [0o600]
+    # The content temp is created private, but it receives the umask-derived
+    # create mode right before publication so the published file is not private.
+    assert content_temp_modes == [0o644]
     assert stat.S_IMODE(file_path.stat().st_mode) == 0o644
 
 
