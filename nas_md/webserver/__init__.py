@@ -22,7 +22,7 @@ from collections.abc import Callable
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from http.cookies import SimpleCookie
 from io import BytesIO, TextIOWrapper
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger("webserver")
@@ -206,6 +206,7 @@ class DirEntry:
         self.mod_time = mod_time
         self.children: list[DirEntry] = []
         self.has_md: bool = False  # True if this subtree contains any .md file
+        self.has_html: bool = False  # True if this subtree contains any .html/.htm file
         self.is_empty: bool = False  # True if this directory has no children
         # True if this subtree contains any empty directory (propagated upward)
         self.has_empty_dir: bool = False
@@ -218,6 +219,7 @@ class DirEntry:
             "size": self.size,
             "modTime": self.mod_time,
             "hasMd": self.has_md,
+            "hasHtml": self.has_html,
             "isEmpty": self.is_empty,
             "hasEmptyDir": self.has_empty_dir,
         }
@@ -494,6 +496,8 @@ class MountManager:
         # Check if this is a .md file
         if not is_dir and abs_path.lower().endswith(".md"):
             entry.has_md = True
+        if not is_dir and abs_path.lower().endswith((".html", ".htm")):
+            entry.has_html = True
         if is_dir and depth < max_depth:
             raw_children = self.list_dir(mount, rel_path)
             entry.is_empty = len(raw_children) == 0
@@ -503,6 +507,8 @@ class MountManager:
                     entry.children.append(child_tree)
                     if child_tree.has_md:
                         entry.has_md = True
+                    if child_tree.has_html:
+                        entry.has_html = True
                     # Propagate has_empty_dir: child is empty or contains empty dirs
                     if child_tree.is_empty or child_tree.has_empty_dir:
                         entry.has_empty_dir = True
@@ -849,6 +855,13 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
             if "/api/mounts/" in path and path.endswith("/tree-recursive"):
                 mount_id = path.split("/api/mounts/")[1].split("/tree-recursive")[0]
                 self._handle_recursive_tree(mount_id, qs)
+                return
+
+            # /api/mounts/{id}/preview/{relative_path} — serve raw bytes without history
+            preview_prefix = "/api/mounts/"
+            if path.startswith(preview_prefix) and "/preview/" in path:
+                mount_id, rel_path = path[len(preview_prefix) :].split("/preview/", 1)
+                self._handle_preview(mount_id, unquote(rel_path))
                 return
 
             # /api/mounts/{id}/file
@@ -1399,6 +1412,35 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         if tree is None:
             return self._send_error("Cannot build tree", 500)
         self._send_json(tree.to_dict())
+
+    def _handle_preview(self, mount_id: str, rel_path: str):
+        """Serve a mounted resource's bytes without consulting version history."""
+        if not self.mount_manager:
+            return self._send_error("No mounts configured", 404)
+        mount = self.mount_manager.find_mount(mount_id)
+        if not mount:
+            return self._send_error("Mount not found", 404)
+        session_id = self._get_session_id()
+        if mount not in self._visible_mounts(session_id):
+            return self._send_error("Mount not found", 404)
+        if not rel_path:
+            return self._send_error("Missing path", 400)
+        abs_path = self.mount_manager._safe_path(mount, rel_path)
+        if abs_path is None:
+            return self._send_error("Path escapes mount root", 403)
+        if not os.path.isfile(abs_path):
+            return self._send_error("File not found", 404)
+        try:
+            with open(abs_path, "rb") as f:
+                data = f.read()
+        except OSError:
+            return self._send_error("File not found", 404)
+        self.send_response(200)
+        self.send_header("Content-Type", _content_type(abs_path))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_file(self, mount_id: str, qs: dict):
         if not self.mount_manager:

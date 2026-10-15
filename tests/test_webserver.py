@@ -241,6 +241,98 @@ class TestTreeRoute:
         assert isinstance(data, list)
 
 
+class TestHtmlPreviewRoute:
+    def test_recursive_tree_marks_html_files_and_subtrees(self, server_url, storage_dir):
+        nested = os.path.join(storage_dir, "pages", "deep")
+        os.makedirs(nested)
+        with open(os.path.join(nested, "INDEX.HTM"), "wb") as f:
+            f.write(b"<h1>hello</h1>")
+
+        status, body, _ = _get(f"{server_url}/api/mounts/builtin-storage/tree-recursive")
+
+        assert status == 200
+        tree = json.loads(body)
+        assert tree["hasMd"] is True
+        assert tree["hasHtml"] is True
+        pages = next(child for child in tree["children"] if child["name"] == "pages")
+        deep = pages["children"][0]
+        html_file = deep["children"][0]
+        assert pages["hasHtml"] is True
+        assert deep["hasHtml"] is True
+        assert html_file["hasHtml"] is True
+        assert html_file["hasMd"] is False
+
+    def test_preview_serves_raw_html_bytes_with_safe_headers(self, server_url, storage_dir):
+        import urllib.request
+
+        relative_path = "nested/page.html"
+        page_dir = os.path.join(storage_dir, "nested")
+        os.makedirs(page_dir)
+        raw = b"\x00<html>raw\xff</html>"
+        with open(os.path.join(page_dir, "page.html"), "wb") as f:
+            f.write(raw)
+
+        request = urllib.request.Request(
+            f"{server_url}/api/mounts/builtin-storage/preview/{relative_path}"
+        )
+        try:
+            response = urllib.request.urlopen(request, timeout=5)
+        except urllib.error.HTTPError as error:
+            assert error.code == 200, f"Preview route returned HTTP {error.code}"
+            raise
+        with response:
+            body = response.read()
+            headers = {k.lower(): v for k, v in response.headers.items()}
+
+        assert response.status == 200
+        assert body == raw
+        assert headers["content-type"] == "text/html; charset=utf-8"
+        assert headers["content-length"] == str(len(raw))
+        assert headers["x-content-type-options"] == "nosniff"
+
+    def test_preview_rejects_traversal(self, server_url, storage_dir):
+        from urllib.parse import quote
+
+        fd, outside = tempfile.mkstemp(
+            prefix="nasmd_outside_", suffix=".html", dir=os.path.dirname(storage_dir)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("outside")
+            relative_path = "../" + os.path.basename(outside)
+            status, _body, _ = _get(
+                f"{server_url}/api/mounts/builtin-storage/preview/{quote(relative_path, safe='/')}"
+            )
+            assert status == 403
+        finally:
+            os.remove(outside)
+
+    def test_preview_rejects_directories_and_missing_files(self, server_url, storage_dir):
+        os.makedirs(os.path.join(storage_dir, "nested"), exist_ok=True)
+        for path in ("nested", "missing.html"):
+            status, _body, _ = _get(
+                f"{server_url}/api/mounts/builtin-storage/preview/{path}"
+            )
+            assert status == 404
+
+    def test_preview_hides_non_visible_mount(self, server_url, storage_dir):
+        from nas_md.webserver import MountEntry, MountHTTPHandler
+
+        private_dir = tempfile.mkdtemp(prefix="nasmd_private_")
+        try:
+            with open(os.path.join(private_dir, "secret.html"), "w", encoding="utf-8") as f:
+                f.write("secret")
+            MountHTTPHandler.mount_manager.mounts.append(
+                MountEntry("private-preview", "private", private_dir, public=False, host=True)
+            )
+            status, _body, _ = _get(
+                f"{server_url}/api/mounts/private-preview/preview/secret.html"
+            )
+            assert status == 404
+        finally:
+            shutil.rmtree(private_dir, ignore_errors=True)
+
+
 # --- Static file serving tests ---
 
 
