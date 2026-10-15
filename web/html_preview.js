@@ -1,4 +1,5 @@
-let previewFrame = null;
+let renderGeneration = 0;
+const previewFrames = new Set();
 
 const MIME_TYPES = {
   '.avif': 'image/avif',
@@ -32,8 +33,9 @@ function extension(path) {
 }
 
 function clear() {
-  previewFrame?.remove();
-  previewFrame = null;
+  renderGeneration += 1;
+  for (const frame of previewFrames) frame.remove();
+  previewFrames.clear();
 }
 
 function normalizeResourcePath(documentPath, resource) {
@@ -165,9 +167,25 @@ async function rewriteCss(css, mountId, cssPath, cssStack) {
 }
 
 async function rewriteSrcset(mountId, documentPath, value) {
-  const entries = value.split(',');
+  const entries = [];
+  let start = 0;
+  let dataUrlCommaSeen = false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== ',') continue;
+    const candidatePart = value.slice(start, index).trim();
+    const candidateUrl = candidatePart.split(/\s+/, 1)[0] || '';
+    const isDataUrl = candidateUrl.toLowerCase().startsWith('data:');
+    if (isDataUrl && !dataUrlCommaSeen && !/\s/.test(candidatePart)) {
+      dataUrlCommaSeen = true;
+      continue;
+    }
+    entries.push(candidatePart);
+    start = index + 1;
+    dataUrlCommaSeen = false;
+  }
+  entries.push(value.slice(start).trim());
   const rewritten = await Promise.all(
-    entries.map(async (entry) => {
+    entries.filter(Boolean).map(async (entry) => {
       const [url, ...descriptor] = entry.trim().split(/\s+/);
       return `${await createResourceUrl(mountId, documentPath, url)}${descriptor.length ? ' ' + descriptor.join(' ') : ''}`;
     }),
@@ -206,8 +224,9 @@ async function prepareLocalHtml(mountId, path, content) {
   return '<!doctype html>' + parsed.documentElement.outerHTML;
 }
 
-async function show({ mount, path, content }) {
+async function show({ mount, path, content, container }) {
   clear();
+  const generation = renderGeneration;
   if (!mount || !mount.id) throw new Error('A mount is required to preview HTML');
 
   const iframe = document.createElement('iframe');
@@ -223,8 +242,14 @@ async function show({ mount, path, content }) {
     iframe.src = API.previewResourceUrl(mount.id, path);
   }
 
-  previewFrame = iframe;
-  document.body.appendChild(iframe);
+  if (generation !== renderGeneration) return;
+
+  const host =
+    container && typeof container.appendChild === 'function'
+      ? container
+      : document.getElementById('nasmd-html-preview-host') || document.body;
+  previewFrames.add(iframe);
+  host.appendChild(iframe);
 }
 
 window.nasmdHtmlPreview = { show, clear };

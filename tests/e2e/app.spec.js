@@ -396,7 +396,7 @@ test.describe('隔离 HTML 预览', () => {
             makeFile(
               'index.html',
               'preview-local/index.html',
-              '<!doctype html><p id="message">Original</p><img id="picture" src="images/pixel.png"><img id="escape" src="../../../outside.png"><link rel="stylesheet" href="styles/site.css"><script src="scripts/page.js"></script>',
+              '<!doctype html><p id="message">Original</p><img id="picture" src="images/pixel.png"><img id="srcset" srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ZkAAAAASUVORK5CYII= 1x, images/pixel.png 2x"><img id="escape" src="../../../outside.png"><link rel="stylesheet" href="styles/site.css"><script src="scripts/page.js"></script>',
               'text/html',
             ),
             makeFile(
@@ -441,7 +441,7 @@ test.describe('隔离 HTML 预览', () => {
           mount: state.mounts.find((mount) => mount.id === id),
           path: '/index.html',
           content:
-            '<!doctype html><p id="message">Original</p><img id="picture" src="images/pixel.png"><img id="escape" src="../../../outside.png"><link rel="stylesheet" href="styles/site.css"><script src="scripts/page.js"></script>',
+            '<!doctype html><p id="message">Original</p><img id="picture" src="images/pixel.png"><img id="srcset" srcset="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ZkAAAAASUVORK5CYII= 1x, images/pixel.png 2x"><img id="escape" src="../../../outside.png"><link rel="stylesheet" href="styles/site.css"><script src="scripts/page.js"></script>',
         }),
       mountId,
     );
@@ -453,6 +453,10 @@ test.describe('隔离 HTML 预览', () => {
     await expect(preview.locator('#message')).toHaveCSS('font-weight', '700');
     await expect(preview.locator('#message')).toHaveCSS('background-image', /data:image\/png/);
     await expect(preview.locator('#picture')).toHaveJSProperty('naturalWidth', 1);
+    await expect(preview.locator('#srcset')).toHaveAttribute(
+      'srcset',
+      /^data:image\/png;base64,[^ ]+ 1x, data:image\/png;base64,[^ ]+ 2x$/,
+    );
     await expect(preview.locator('#escape')).toHaveAttribute('src', 'about:blank');
     const previewDocumentUrl = await frame.getAttribute('src');
     expect(previewDocumentUrl).toMatch(/^data:text\/html;base64,/);
@@ -464,6 +468,84 @@ test.describe('隔离 HTML 预览', () => {
       previewDocumentUrl,
     );
     expect(retainedPreviewContent).toBe(false);
+  });
+
+  test('新预览使未完成的旧预览失效并由清除移除全部预览帧', async ({ page }) => {
+    await page.goto('/admin');
+    await page.addScriptTag({ url: '/html_preview.js' });
+    const mountId = await page.evaluate(() => {
+      const html = new File(['<p>placeholder</p>'], 'index.html', { type: 'text/html' });
+      Object.defineProperty(html, 'webkitRelativePath', { value: 'race-local/index.html' });
+      onDirPicked({ target: { files: [html], value: '' } });
+      const mount = state.mounts.at(-1);
+      state.localMounts[mount.id].fileMap['/slow.css'] = {
+        type: 'text/css',
+        text: () =>
+          new Promise((resolve) => {
+            window.releaseSlowPreviewCss = () => resolve('p { color: red; }');
+          }),
+      };
+      return mount.id;
+    });
+
+    await page.evaluate((id) => {
+      const mount = state.mounts.find((item) => item.id === id);
+      window.oldPreview = window.nasmdHtmlPreview.show({
+        mount,
+        path: '/index.html',
+        content: '<link rel="stylesheet" href="slow.css"><p>stale preview</p>',
+      });
+    }, mountId);
+    await page.waitForFunction(() => typeof window.releaseSlowPreviewCss === 'function');
+
+    await page.evaluate((id) => {
+      const mount = state.mounts.find((item) => item.id === id);
+      return window.nasmdHtmlPreview.show({
+        mount,
+        path: '/index.html',
+        content: '<p>latest preview</p>',
+      });
+    }, mountId);
+    await expect(page.locator('#nasmd-html-preview')).toHaveCount(1);
+    await expect(page.frameLocator('#nasmd-html-preview').locator('p')).toHaveText(
+      'latest preview',
+    );
+
+    await page.evaluate(() => window.releaseSlowPreviewCss());
+    await page.evaluate(() => window.oldPreview);
+    await expect(page.locator('#nasmd-html-preview')).toHaveCount(1);
+    await expect(page.frameLocator('#nasmd-html-preview').locator('p')).toHaveText(
+      'latest preview',
+    );
+
+    await page.evaluate(() => window.nasmdHtmlPreview.clear());
+    await expect(page.locator('iframe#nasmd-html-preview')).toHaveCount(0);
+  });
+
+  test('优先使用明确的容器或默认预览宿主', async ({ page }) => {
+    await page.goto('/admin');
+    await page.addScriptTag({ url: '/html_preview.js' });
+    await page.evaluate(() => {
+      const firstHost = document.createElement('div');
+      firstHost.id = 'nasmd-html-preview-host';
+      document.body.appendChild(firstHost);
+      window.nasmdHtmlPreview.show({ mount: { id: 'server-mount' }, path: '/index.html' });
+    });
+    await expect(page.locator('#nasmd-html-preview-host > #nasmd-html-preview')).toHaveCount(1);
+
+    await page.evaluate(() => {
+      window.nasmdHtmlPreview.clear();
+      const explicitHost = document.createElement('div');
+      explicitHost.id = 'explicit-preview-host';
+      document.body.appendChild(explicitHost);
+      window.nasmdHtmlPreview.show({
+        mount: { id: 'server-mount' },
+        path: '/index.html',
+        container: explicitHost,
+      });
+    });
+    await expect(page.locator('#explicit-preview-host > #nasmd-html-preview')).toHaveCount(1);
+    await expect(page.locator('#nasmd-html-preview-host > #nasmd-html-preview')).toHaveCount(0);
   });
 });
 
