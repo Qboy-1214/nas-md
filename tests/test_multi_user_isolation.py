@@ -83,14 +83,15 @@ class ServerFixture:
                 web_root="",
                 port=self.port,
                 storage_dir=self.storage_dir,
+                https_port=0,
             )
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
         # Wait for server to be ready
-        for _ in range(40):
+        for _ in range(30):
             try:
-                urllib.request.urlopen(f"{self.base}/api/health")
+                urllib.request.urlopen(f"{self.base}/api/health", timeout=2)
                 return
             except Exception:
                 time.sleep(0.1)
@@ -116,7 +117,7 @@ class ServerFixture:
         if cookie:
             req.add_header("Cookie", cookie)
         try:
-            r = urllib.request.urlopen(req)
+            r = urllib.request.urlopen(req, timeout=10)
             resp_cookie = r.headers.get("Set-Cookie", "")
             raw = r.read()
             ct = r.headers.get("Content-Type", "")

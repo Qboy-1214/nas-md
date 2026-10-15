@@ -3029,8 +3029,11 @@ def serve(
     if cert_dir and https_port:
         try:
             https_server = _create_server(host, https_port, MountHTTPHandler, cert_dir=cert_dir)
-        except Exception as e:
-            logger.warning(f"HTTPS server initialization failed: {e}")
+        except (Exception, SystemExit) as e:
+            # HTTPS is optional: a busy port must not abort HTTP serving.
+            # _create_server raises SystemExit on bind failure, which would
+            # otherwise escape as a BaseException and kill the caller.
+            logger.warning("HTTPS server initialization failed: %s", e)
 
     mounts_str = (
         ", ".join(f"{m.name} ({m.id})={m.path}" for m in mgr.mounts)
