@@ -66,7 +66,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          PYTHONPATH=. python3 -m pytest tests/ -v --cov=nas_md --cov-report=term-missing --cov-report=xml --timeout=180
+          PYTHONPATH=. python3 -m pytest tests/ -v --cov=nas_md --cov-report=term-missing --cov-report=xml --timeout=60 --timeout-method=thread
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
