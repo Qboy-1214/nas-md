@@ -379,9 +379,7 @@ class TestHtmlPreviewRoute:
     def test_preview_rejects_directories_and_missing_files(self, server_url, storage_dir):
         os.makedirs(os.path.join(storage_dir, "nested"), exist_ok=True)
         for path in ("nested", "missing.html"):
-            status, _body, _ = _get(
-                f"{server_url}/api/mounts/builtin-storage/preview/{path}"
-            )
+            status, _body, _ = _get(f"{server_url}/api/mounts/builtin-storage/preview/{path}")
             assert status == 404
 
     def test_preview_hides_non_visible_mount(self, server_url, storage_dir):
@@ -394,9 +392,7 @@ class TestHtmlPreviewRoute:
             MountHTTPHandler.mount_manager.mounts.append(
                 MountEntry("private-preview", "private", private_dir, public=False, host=True)
             )
-            status, _body, _ = _get(
-                f"{server_url}/api/mounts/private-preview/preview/secret.html"
-            )
+            status, _body, _ = _get(f"{server_url}/api/mounts/private-preview/preview/secret.html")
             assert status == 404
         finally:
             shutil.rmtree(private_dir, ignore_errors=True)
