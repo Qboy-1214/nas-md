@@ -291,6 +291,180 @@ test.describe('HTML 文件树', () => {
     await expect(tree.locator('.tree-item').filter({ hasText: 'nested.htm' })).toBeVisible();
     await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
   });
+
+  test('本机目录保留隐藏的静态资源供预览加载', async ({ page }) => {
+    await page.goto('/admin');
+    const mountId = await page.evaluate(() => {
+      const makeFile = (name, relativePath, content, type) => {
+        const file = new File([content], name, { type });
+        Object.defineProperty(file, 'webkitRelativePath', { value: relativePath });
+        return file;
+      };
+      onDirPicked({
+        target: {
+          files: [
+            makeFile('index.html', 'local-assets/index.html', '<p>hi</p>', 'text/html'),
+            makeFile('site.css', 'local-assets/site.css', 'p { color: red }', 'text/css'),
+            makeFile('photo.png', 'local-assets/photo.png', 'image', 'image/png'),
+            makeFile('notes.txt', 'local-assets/notes.txt', 'notes', 'text/plain'),
+          ],
+          value: '',
+        },
+      });
+      return state.mounts.at(-1).id;
+    });
+
+    const assets = await page.evaluate((id) => {
+      const files = state.localMounts[id].fileMap;
+      return {
+        css: files['/site.css']?.type,
+        image: files['/photo.png']?.type,
+        text: files['/notes.txt']?.type,
+      };
+    }, mountId);
+    expect(assets).toEqual({ css: 'text/css', image: 'image/png', text: 'text/plain' });
+
+    const tree = page.locator('#file-tree');
+    await expect(tree.locator('.tree-item').filter({ hasText: 'site.css' })).toHaveCount(0);
+    await expect(tree.locator('.tree-item').filter({ hasText: 'photo.png' })).toHaveCount(0);
+    await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
+  });
+});
+
+test.describe('隔离 HTML 预览', () => {
+  test('服务端预览渲染静态页面并隔离父窗口', async ({ page }) => {
+    await page.route('**/api/mounts/preview-test/preview/demo/index.html', (route) =>
+      route.fulfill({
+        contentType: 'text/html',
+        body: '<!doctype html><link rel="stylesheet" href="styles/site.css"><p id="result">Loading</p><img id="picture" src="images/pixel.png"><script src="scripts/page.js"></script><script>try { parent.document.body.dataset.previewAccess = "allowed"; } catch { document.body.dataset.parentBlocked = "true"; }</script>',
+      }),
+    );
+    await page.route('**/api/mounts/preview-test/preview/demo/styles/site.css', (route) =>
+      route.fulfill({ contentType: 'text/css', body: '#result { color: rgb(255, 0, 0); }' }),
+    );
+    await page.route('**/api/mounts/preview-test/preview/demo/images/pixel.png', (route) =>
+      route.fulfill({
+        contentType: 'image/png',
+        body: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ZkAAAAASUVORK5CYII=',
+          'base64',
+        ),
+      }),
+    );
+    await page.route('**/api/mounts/preview-test/preview/demo/scripts/page.js', (route) =>
+      route.fulfill({
+        contentType: 'text/javascript',
+        body: 'document.querySelector("#result").textContent = "Rendered";',
+      }),
+    );
+    await page.goto('/admin');
+    await page.addScriptTag({ url: '/html_preview.js' });
+    expect(
+      await page.evaluate(() => API.previewResourceUrl('preview-test', '/demo/index.html')),
+    ).toBe('http://127.0.0.1:8080/api/mounts/preview-test/preview/demo/index.html');
+    await page.evaluate(() =>
+      window.nasmdHtmlPreview.show({
+        mount: { id: 'preview-test', _local: false },
+        path: '/demo/index.html',
+        content: '',
+      }),
+    );
+
+    const frame = page.locator('#nasmd-html-preview');
+    await expect(frame).toBeVisible();
+    await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+    const preview = page.frameLocator('#nasmd-html-preview');
+    await expect(preview.locator('#result')).toHaveText('Rendered');
+    await expect(preview.locator('body')).toHaveAttribute('data-parent-blocked', 'true');
+    await expect(preview.locator('#result')).toHaveCSS('color', 'rgb(255, 0, 0)');
+    await expect(preview.locator('#picture')).toHaveJSProperty('naturalWidth', 1);
+    expect(await page.locator('body').getAttribute('data-preview-access')).toBeNull();
+  });
+
+  test('本机预览解析相对 CSS、图片和脚本并在清除时移除资源', async ({ page }) => {
+    await page.goto('/admin');
+    await page.addScriptTag({ url: '/html_preview.js' });
+    const mountId = await page.evaluate(() => {
+      const makeFile = (name, relativePath, content, type) => {
+        const file = new File([content], name, { type });
+        Object.defineProperty(file, 'webkitRelativePath', { value: relativePath });
+        return file;
+      };
+      onDirPicked({
+        target: {
+          files: [
+            makeFile(
+              'index.html',
+              'preview-local/index.html',
+              '<!doctype html><p id="message">Original</p><img id="picture" src="images/pixel.png"><img id="escape" src="../../../outside.png"><link rel="stylesheet" href="styles/site.css"><script src="scripts/page.js"></script>',
+              'text/html',
+            ),
+            makeFile(
+              'site.css',
+              'preview-local/styles/site.css',
+              '@import "theme.css"; #message { color: rgb(255, 0, 0); background-image: url("../images/pixel.png") }',
+              'text/css',
+            ),
+            makeFile(
+              'theme.css',
+              'preview-local/styles/theme.css',
+              '#message { font-weight: bold; }',
+              'text/css',
+            ),
+            makeFile(
+              'pixel.png',
+              'preview-local/images/pixel.png',
+              Uint8Array.from(
+                atob(
+                  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ZkAAAAASUVORK5CYII=',
+                ),
+                (c) => c.charCodeAt(0),
+              ),
+              'image/png',
+            ),
+            makeFile(
+              'page.js',
+              'preview-local/scripts/page.js',
+              'document.querySelector("#message").textContent = "Loaded";',
+              'text/javascript',
+            ),
+          ],
+          value: '',
+        },
+      });
+      return state.mounts.at(-1).id;
+    });
+
+    await page.evaluate(
+      (id) =>
+        window.nasmdHtmlPreview.show({
+          mount: state.mounts.find((mount) => mount.id === id),
+          path: '/index.html',
+          content:
+            '<!doctype html><p id="message">Original</p><img id="picture" src="images/pixel.png"><img id="escape" src="../../../outside.png"><link rel="stylesheet" href="styles/site.css"><script src="scripts/page.js"></script>',
+        }),
+      mountId,
+    );
+    const frame = page.locator('#nasmd-html-preview');
+    await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+    const preview = page.frameLocator('#nasmd-html-preview');
+    await expect(preview.locator('#message')).toHaveText('Loaded');
+    await expect(preview.locator('#message')).toHaveCSS('color', 'rgb(255, 0, 0)');
+    await expect(preview.locator('#message')).toHaveCSS('font-weight', '700');
+    await expect(preview.locator('#message')).toHaveCSS('background-image', /data:image\/png/);
+    await expect(preview.locator('#picture')).toHaveJSProperty('naturalWidth', 1);
+    await expect(preview.locator('#escape')).toHaveAttribute('src', 'about:blank');
+    const previewDocumentUrl = await frame.getAttribute('src');
+    expect(previewDocumentUrl).toMatch(/^data:text\/html;base64,/);
+
+    await page.evaluate(() => window.nasmdHtmlPreview.clear());
+    await expect(frame).toHaveCount(0);
+    const retainedPreviewContent = await page.evaluate(
+      (url) => document.body.innerHTML.includes(url),
+      previewDocumentUrl,
+    );
+    expect(retainedPreviewContent).toBe(false);
+  });
 });
 
 test.describe('拖拽功能', () => {

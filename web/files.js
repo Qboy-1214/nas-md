@@ -18,6 +18,15 @@ const _apiBase = (() => {
 })();
 
 const API = {
+  previewResourceUrl(mountId, path) {
+    const encodedPath = String(path || '')
+      .split('/')
+      .filter(Boolean)
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return `${_apiBase}/api/mounts/${encodeURIComponent(mountId)}/preview/${encodedPath}`;
+  },
+
   async request(path, options = {}) {
     const headers = { ...options.headers };
     if (options.body && typeof options.body === 'string') {

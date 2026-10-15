@@ -801,6 +801,9 @@ function onDirPicked(event) {
     if (!relPath) continue;
     const parts = relPath.split('/');
     const fileName = parts[parts.length - 1];
+    // Keep every selected file available to the isolated HTML preview while
+    // exposing only Markdown and HTML documents in the navigation tree.
+    fileMap['/' + parts.slice(1).join('/')] = file;
     if (!isDisplayableFile(fileName)) continue;
     const hasMd = fileName.toLowerCase().endsWith('.md');
     const hasHtml = isHtmlFile(fileName);
