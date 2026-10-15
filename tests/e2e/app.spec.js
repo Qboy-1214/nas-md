@@ -463,6 +463,26 @@ test.describe('隔离 HTML 预览', () => {
     await expect(page.locator('#toast')).toContainText('HTML 预览加载失败');
   });
 
+  test('主 HTML 文件消失时显示可恢复的宿主错误状态', async ({ page }) => {
+    await prepareNavigationFiles(page);
+    await page.evaluate(() => {
+      API.getFile = async () => null;
+      return openFile('/missing.html', 'html-navigation-test');
+    });
+
+    await expect(page.locator('#nasmd-html-preview-host')).toBeVisible();
+    await expect(page.locator('#nasmd-html-preview-host .html-preview-error')).toHaveText(
+      'HTML 文件不存在或无法读取',
+    );
+    await expect(page.locator('#vditor')).toBeHidden();
+    await expect(page.locator('#editor-modes')).toBeHidden();
+    await expect(page.locator('#save-group')).toBeHidden();
+    await expect(page.locator('#export-pdf-top-btn')).toBeHidden();
+    await expect(page.locator('#history-top-btn')).toBeHidden();
+    await expect(page.locator('#toast')).toContainText('HTML 文件不存在或无法读取');
+    expect(await page.evaluate(() => state.currentPath)).toBe('/missing.html');
+  });
+
   test('服务端预览渲染静态页面并隔离父窗口', async ({ page }) => {
     await page.route('**/api/mounts/preview-test/preview/demo/index.html', (route) =>
       route.fulfill({
@@ -601,6 +621,40 @@ test.describe('隔离 HTML 预览', () => {
       previewDocumentUrl,
     );
     expect(retainedPreviewContent).toBe(false);
+  });
+
+  test('本机相对资源缺失或越出挂载点时保留 HTML 页面', async ({ page }) => {
+    await page.goto('/admin');
+    await page.addScriptTag({ url: '/html_preview.js' });
+    const mountId = await page.evaluate(() => {
+      const file = new File(
+        [
+          '<!doctype html><h1 id="ready">Still usable</h1><img id="missing" src="assets/gone.png"><img id="escape" src="../../outside.png"><link rel="stylesheet" href="missing.css">',
+        ],
+        'index.html',
+        { type: 'text/html' },
+      );
+      Object.defineProperty(file, 'webkitRelativePath', { value: 'missing-assets/index.html' });
+      onDirPicked({ target: { files: [file], value: '' } });
+      return state.mounts.at(-1).id;
+    });
+
+    await page.evaluate((id) => {
+      const mount = state.mounts.find((item) => item.id === id);
+      return window.nasmdHtmlPreview.show({
+        mount,
+        path: '/index.html',
+        content:
+          '<!doctype html><h1 id="ready">Still usable</h1><img id="missing" src="assets/gone.png"><img id="escape" src="../../outside.png"><link rel="stylesheet" href="missing.css">',
+        container: document.body,
+      });
+    }, mountId);
+
+    const preview = page.frameLocator('#nasmd-html-preview');
+    await expect(preview.locator('#ready')).toHaveText('Still usable');
+    await expect(preview.locator('#missing')).toHaveAttribute('src', 'about:blank');
+    await expect(preview.locator('#escape')).toHaveAttribute('src', 'about:blank');
+    await expect(preview.locator('link[rel="stylesheet"]')).toHaveAttribute('href', 'about:blank');
   });
 
   test('新预览使未完成的旧预览失效并由清除移除全部预览帧', async ({ page }) => {

@@ -106,23 +106,29 @@ async function createResourceUrl(mountId, documentPath, resource, cssStack = new
   if (resolved.external) return resolved.value;
   if (resolved.rejected) return 'about:blank';
 
-  const file = await getLocalFile(mountId, resolved.path);
-  if (!file) return 'about:blank';
-  const ext = extension(resolved.path);
+  try {
+    const file = await getLocalFile(mountId, resolved.path);
+    if (!file) return 'about:blank';
+    const ext = extension(resolved.path);
 
-  if (ext === '.css') {
-    if (cssStack.has(resolved.path)) return 'about:blank';
-    const nextStack = new Set(cssStack).add(resolved.path);
-    const cssText = await file.text();
-    const rewritten = await rewriteCss(cssText, mountId, resolved.path, nextStack);
-    const cssBlob = new Blob([rewritten], { type: 'text/css' });
-    return (await toDataUrl(cssBlob)) + (resolved.suffix.match(/#[^#]*$/)?.[0] || '');
+    if (ext === '.css') {
+      if (cssStack.has(resolved.path)) return 'about:blank';
+      const nextStack = new Set(cssStack).add(resolved.path);
+      const cssText = await file.text();
+      const rewritten = await rewriteCss(cssText, mountId, resolved.path, nextStack);
+      const cssBlob = new Blob([rewritten], { type: 'text/css' });
+      return (await toDataUrl(cssBlob)) + (resolved.suffix.match(/#[^#]*$/)?.[0] || '');
+    }
+
+    return (
+      (await toDataUrl(await asBlob(file, resolved.path))) +
+      (resolved.suffix.match(/#[^#]*$/)?.[0] || '')
+    );
+  } catch (_error) {
+    // A local file may disappear or become unreadable after the directory was selected.
+    // Keep the HTML page usable and show an empty placeholder for this asset.
+    return 'about:blank';
   }
-
-  return (
-    (await toDataUrl(await asBlob(file, resolved.path))) +
-    (resolved.suffix.match(/#[^#]*$/)?.[0] || '')
-  );
 }
 
 async function rewriteCss(css, mountId, cssPath, cssStack) {

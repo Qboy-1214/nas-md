@@ -3093,7 +3093,29 @@ async function openFile(path, preferredMountId, searchKeyword) {
         /* file may have been deleted */
       }
     }
-    if (content === null) {
+    if (content == null) {
+      if (/\.html?$/i.test(path)) {
+        const previewHost = $('nasmd-html-preview-host');
+        const vditorHost = $('vditor');
+        if (window.nasmdHtmlPreview) window.nasmdHtmlPreview.clear();
+        previewHost.style.display = '';
+        previewHost.replaceChildren();
+        vditorHost.style.display = 'none';
+        $('editor-modes').style.display = 'none';
+        $('save-group').style.display = 'none';
+        $('export-pdf-top-btn').style.display = 'none';
+        $('history-top-btn').style.display = 'none';
+        showPage('editor');
+        const error = document.createElement('div');
+        error.className = 'html-preview-error';
+        error.textContent = 'HTML 文件不存在或无法读取';
+        previewHost.appendChild(error);
+        state.currentPath = path;
+        state.currentMountId = mount.id;
+        $('breadcrumb').textContent = mount.name + path;
+        showToast('HTML 文件不存在或无法读取');
+        return;
+      }
       showToast('文件加载失败，请查看浏览器控制台获取详情');
       // Remove from recent files if file doesn't exist
       const idx = state.recentFiles.findIndex((f) => f.mountId === mount.id && f.path === path);
@@ -3126,7 +3148,7 @@ async function openFile(path, preferredMountId, searchKeyword) {
     renderRecentFiles();
 
     $('breadcrumb').textContent = mount.name + path + (mount.readonly ? ' (只读)' : '');
-    const isHtmlFile = /\.(?:html?|xhtml?)$/i.test(path);
+    const isHtmlFile = /\.html?$/i.test(path);
     // Show rename/delete buttons if file is writable and not root
     const renameBtn = $('rename-top-btn');
     const deleteBtn = $('delete-top-btn');
