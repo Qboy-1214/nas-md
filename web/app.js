@@ -1476,10 +1476,10 @@ function setupDragDrop() {
     // Handle external file drop (from OS file manager)
     if (!_dragData && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const files = Array.from(e.dataTransfer.files);
-      // Check all files are .md
-      const nonMd = files.find((f) => !f.name.toLowerCase().endsWith('.md'));
-      if (nonMd) {
-        showToast('请放入受支持的文件格式（仅支持 .md 文件）');
+      // Check all files are supported (.md / .html / .htm)
+      const unsupported = files.find((f) => !isDisplayableFile(f.name));
+      if (unsupported) {
+        showToast('请放入受支持的文件格式（仅支持 .md / .html / .htm 文件）');
         return;
       }
       const destMount = state.mounts.find((m) => m.id === destMountId);
