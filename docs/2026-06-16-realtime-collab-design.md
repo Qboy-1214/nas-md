@@ -1,3 +1,11 @@
+---
+id: nas-md-realtime-collab
+type: submodule-design
+status: draft
+title: 实时协同编辑设计
+parent: nas-md-webserver
+---
+
 # 实时协同编辑设计
 
 > Date: 2026-06-16
@@ -6,6 +14,7 @@
 ## 1. 目标
 
 两个人同时编辑同一个 MD 文件时：
+
 - A 在编辑中，B 保存后 A 能在亚秒级看到改动
 - 能看到是谁改的（改动者标注）
 - A 正在编辑的段落不被远程更新打断
@@ -13,13 +22,13 @@
 
 ## 2. 设计决策
 
-| 决策点 | 选择 | 理由 |
-|--------|------|------|
-| 传输协议 | SSE | 单向推送 + 自动重连 + HTTP 兼容 + 实现量 ~30 行 |
-| 冲突处理 | 编辑中保护 + 乐观锁兜底 | 不打断正在编辑的用户，冲突走现有 .conflict.md 机制 |
-| 段落定义 | 空行（`\n\n`）分隔 | 最自然的段落语义，与 MD 源文本一致 |
-| 改动标注 | 5 秒后自动褪色 | 信息已传达，不打扰 |
-| 更新方式 | `setValue()` 全量（后续迭代局部替换） | 三种模式统一处理，功能正确优先 |
+| 决策点   | 选择                                  | 理由                                               |
+| -------- | ------------------------------------- | -------------------------------------------------- |
+| 传输协议 | SSE                                   | 单向推送 + 自动重连 + HTTP 兼容 + 实现量 ~30 行    |
+| 冲突处理 | 编辑中保护 + 乐观锁兜底               | 不打断正在编辑的用户，冲突走现有 .conflict.md 机制 |
+| 段落定义 | 空行（`\n\n`）分隔                    | 最自然的段落语义，与 MD 源文本一致                 |
+| 改动标注 | 5 秒后自动褪色                        | 信息已传达，不打扰                                 |
+| 更新方式 | `setValue()` 全量（后续迭代局部替换） | 三种模式统一处理，功能正确优先                     |
 
 ## 3. 整体架构
 
@@ -95,6 +104,7 @@ Accept: text/event-stream
 ```
 
 响应：
+
 ```
 HTTP/1.1 200 OK
 Content-Type: text/event-stream
@@ -110,11 +120,11 @@ data: {"type":"ping"}
 
 **事件类型：**
 
-| 类型 | 方向 | 用途 |
-|------|------|------|
-| `connected` | 服务端 → 客户端 | 连接建立，返回 clientId |
-| `remote_edit` | 服务端 → 客户端 | B 保存后的段落级 diff |
-| `ping` | 服务端 → 客户端 | 心跳，每 30 秒 |
+| 类型          | 方向            | 用途                    |
+| ------------- | --------------- | ----------------------- |
+| `connected`   | 服务端 → 客户端 | 连接建立，返回 clientId |
+| `remote_edit` | 服务端 → 客户端 | B 保存后的段落级 diff   |
+| `ping`        | 服务端 → 客户端 | 心跳，每 30 秒          |
 
 **广播触发点：**
 
@@ -159,19 +169,19 @@ def split_paragraphs(text: str) -> list[str]:
 
 def compute_diff(old_text: str, new_text: str) -> list[dict]:
     """计算段落级 diff
-    
+
     返回: [{"type": "replace"|"insert"|"delete", "paraIdx": int, "content": str}]
-    
+
     paraIdx 含义：
     - replace/delete: 要替换/删除的第 N 个段落（0-indexed）
     - insert: 在第 N 个段落之前插入（0-indexed，paraIdx=0 表示插入到最前面）
     """
     old_paras = split_paragraphs(old_text)
     new_paras = split_paragraphs(new_text)
-    
+
     sm = SequenceMatcher(None, old_paras, new_paras)
     changes = []
-    
+
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == 'replace':
             for i, j in zip(range(i1, i2), range(j1, j2)):
@@ -193,17 +203,17 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
         elif tag == 'insert':
             for j in range(j1, j2):
                 changes.append({'type': 'insert', 'paraIdx': i1, 'content': new_paras[j]})
-    
+
     return changes
 ```
 
 **边界情况：**
 
-| 场景 | 处理 |
-|------|------|
-| B 在末尾新增段落 | `insert`，`paraIdx` = 末尾位置 |
-| B 删除段落 | `delete`，只标记索引 |
-| 内容完全一样 | 不广播（调用前检查） |
+| 场景                   | 处理                                            |
+| ---------------------- | ----------------------------------------------- |
+| B 在末尾新增段落       | `insert`，`paraIdx` = 末尾位置                  |
+| B 删除段落             | `delete`，只标记索引                            |
+| 内容完全一样           | 不广播（调用前检查）                            |
 | 文件很大（1000+ 段落） | SequenceMatcher O(N²)，但 MD 文件通常不大，够用 |
 
 ## 6. 前端设计
@@ -211,33 +221,43 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
 ### 6.1 身份管理（`identity.js`）
 
 ```js
-(function() {
-    const STORAGE_KEY = 'nasmd_identity';
-    
-    function generateIdentity() {
-        const adjectives = ['Swift', 'Calm', 'Bold', 'Keen', 'Wise', 'Bright', 'Silent', 'Wild'];
-        const animals = ['Fox', 'Owl', 'Cat', 'Bear', 'Wolf', 'Raven', 'Crane', 'Deer'];
-        const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e'];
-        
-        const name = adjectives[Math.floor(Math.random() * adjectives.length)] + 
-                     animals[Math.floor(Math.random() * animals.length)] + 
-                     Math.floor(Math.random() * 100);
-        const color = colors[Math.floor(Math.random() * colors.length)];
-        
-        return { id: crypto.randomUUID(), name, color };
-    }
-    
-    function getIdentity() {
-        try {
-            const stored = localStorage.getItem(STORAGE_KEY);
-            if (stored) return JSON.parse(stored);
-        } catch (_) {}
-        const id = generateIdentity();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(id));
-        return id;
-    }
-    
-    window.nasmdIdentity = { get: getIdentity };
+(function () {
+  const STORAGE_KEY = 'nasmd_identity';
+
+  function generateIdentity() {
+    const adjectives = ['Swift', 'Calm', 'Bold', 'Keen', 'Wise', 'Bright', 'Silent', 'Wild'];
+    const animals = ['Fox', 'Owl', 'Cat', 'Bear', 'Wolf', 'Raven', 'Crane', 'Deer'];
+    const colors = [
+      '#e74c3c',
+      '#3498db',
+      '#2ecc71',
+      '#f39c12',
+      '#9b59b6',
+      '#1abc9c',
+      '#e67e22',
+      '#34495e',
+    ];
+
+    const name =
+      adjectives[Math.floor(Math.random() * adjectives.length)] +
+      animals[Math.floor(Math.random() * animals.length)] +
+      Math.floor(Math.random() * 100);
+    const color = colors[Math.floor(Math.random() * colors.length)];
+
+    return { id: crypto.randomUUID(), name, color };
+  }
+
+  function getIdentity() {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) return JSON.parse(stored);
+    } catch (_) {}
+    const id = generateIdentity();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(id));
+    return id;
+  }
+
+  window.nasmdIdentity = { get: getIdentity };
 })();
 ```
 
@@ -247,42 +267,47 @@ def compute_diff(old_text: str, new_text: str) -> list[dict]:
 
 ```js
 class SSEClient {
-    constructor() {
-        this.es = null;
-        this.identity = nasmdIdentity.get();
-        this.handlers = {};
-        this._reconnectDelay = 1000;
+  constructor() {
+    this.es = null;
+    this.identity = nasmdIdentity.get();
+    this.handlers = {};
+    this._reconnectDelay = 1000;
+  }
+
+  connect(mountId, path) {
+    this.disconnect();
+    const url = `/api/events?file=${encodeURIComponent(mountId + ':' + path)}`;
+    this.es = new EventSource(url);
+
+    this.es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (this.handlers[data.type]) {
+          this.handlers[data.type](data);
+        }
+      } catch (_) {}
+    };
+
+    this.es.onerror = () => {
+      // EventSource 自动重连，但可以在这里加逻辑
+      if (this.handlers['error']) this.handlers['error']();
+    };
+  }
+
+  on(type, handler) {
+    this.handlers[type] = handler;
+  }
+
+  disconnect() {
+    if (this.es) {
+      this.es.close();
+      this.es = null;
     }
-    
-    connect(mountId, path) {
-        this.disconnect();
-        const url = `/api/events?file=${encodeURIComponent(mountId + ':' + path)}`;
-        this.es = new EventSource(url);
-        
-        this.es.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (this.handlers[data.type]) {
-                    this.handlers[data.type](data);
-                }
-            } catch (_) {}
-        };
-        
-        this.es.onerror = () => {
-            // EventSource 自动重连，但可以在这里加逻辑
-            if (this.handlers['error']) this.handlers['error']();
-        };
-    }
-    
-    on(type, handler) { this.handlers[type] = handler; }
-    
-    disconnect() {
-        if (this.es) { this.es.close(); this.es = null; }
-    }
-    
-    switchFile(mountId, path) {
-        this.connect(mountId, path);
-    }
+  }
+
+  switchFile(mountId, path) {
+    this.connect(mountId, path);
+  }
 }
 ```
 
@@ -297,14 +322,14 @@ let _pendingUpdates = [];
 
 // 复用现有的 onEditorInput
 const _origOnEditorInput = window.onEditorInput;
-window.onEditorInput = function() {
-    _lastInputTime = Date.now();
-    _cursorParaIdx = getCursorParagraphIndex();
-    if (_origOnEditorInput) _origOnEditorInput();
+window.onEditorInput = function () {
+  _lastInputTime = Date.now();
+  _cursorParaIdx = getCursorParagraphIndex();
+  if (_origOnEditorInput) _origOnEditorInput();
 };
 
 function isActivelyEditing() {
-    return Date.now() - _lastInputTime < 2000;
+  return Date.now() - _lastInputTime < 2000;
 }
 ```
 
@@ -312,22 +337,22 @@ function isActivelyEditing() {
 
 ```js
 function getCursorParagraphIndex() {
-    if (!window._vditor) return -1;
-    const sel = window.getSelection();
-    if (!sel.rangeCount) return -1;
-    const range = sel.getRangeAt(0);
-    const node = range.startContainer;
-    const el = node.nodeType === 3 ? node.parentElement : node;
-    
-    // 获取所有段落级 DOM 元素
-    const vditorEl = document.getElementById('vditor');
-    const paraSelectors = 'p, h1, h2, h3, h4, h5, h6, pre, blockquote, ul, ol, table, hr';
-    const allParas = Array.from(vditorEl.querySelectorAll(paraSelectors));
-    
-    for (let i = 0; i < allParas.length; i++) {
-        if (allParas[i].contains(el) || allParas[i] === el) return i;
-    }
-    return -1;
+  if (!window._vditor) return -1;
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return -1;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  const el = node.nodeType === 3 ? node.parentElement : node;
+
+  // 获取所有段落级 DOM 元素
+  const vditorEl = document.getElementById('vditor');
+  const paraSelectors = 'p, h1, h2, h3, h4, h5, h6, pre, blockquote, ul, ol, table, hr';
+  const allParas = Array.from(vditorEl.querySelectorAll(paraSelectors));
+
+  for (let i = 0; i < allParas.length; i++) {
+    if (allParas[i].contains(el) || allParas[i] === el) return i;
+  }
+  return -1;
 }
 ```
 
@@ -335,64 +360,64 @@ function getCursorParagraphIndex() {
 
 ```js
 function handleRemoteEdit(data) {
-    for (const change of data.changes) {
-        const isProtected = isActivelyEditing() && change.paraIdx === _cursorParaIdx;
-        
-        if (isProtected) {
-            // 正在编辑的段落被改了 → 暂存
-            _pendingUpdates.push({
-                type: change.type,
-                paraIdx: change.paraIdx,
-                content: change.content,
-                author: { id: data.authorId, name: data.authorName, color: data.authorColor }
-            });
-        } else {
-            // 直接更新
-            applyRemoteChange(change, data);
-        }
+  for (const change of data.changes) {
+    const isProtected = isActivelyEditing() && change.paraIdx === _cursorParaIdx;
+
+    if (isProtected) {
+      // 正在编辑的段落被改了 → 暂存
+      _pendingUpdates.push({
+        type: change.type,
+        paraIdx: change.paraIdx,
+        content: change.content,
+        author: { id: data.authorId, name: data.authorName, color: data.authorColor },
+      });
+    } else {
+      // 直接更新
+      applyRemoteChange(change, data);
     }
+  }
 }
 
 function applyRemoteChange(change, author) {
-    // 获取当前 MD 源文本
-    const currentContent = window._vditor.getValue();
-    const paragraphs = currentContent.split('\n\n');
-    
-    switch (change.type) {
-        case 'replace':
-            if (change.paraIdx < paragraphs.length) {
-                paragraphs[change.paraIdx] = change.content;
-            }
-            break;
-        case 'delete':
-            if (change.paraIdx < paragraphs.length) {
-                paragraphs.splice(change.paraIdx, 1);
-            }
-            break;
-        case 'insert':
-            paragraphs.splice(change.paraIdx, 0, change.content);
-            break;
-    }
-    
-    const newContent = paragraphs.join('\n\n');
-    
-    // 保存光标位置
-    const savedPos = saveCursorScrollToStorage();
-    
-    // 全量替换
-    window._vditor.setValue(newContent);
-    window._originalContent = window._vditor.getValue();
-    
-    // 恢复光标
-    if (savedPos) {
-        window._pendingRestore = savedPos;
-        // doRestore 会在 initEditor 的 after 回调里执行
-        // 但 setValue 不会触发 after 回调，所以需要手动恢复
-        setTimeout(() => restoreCursorScrollFromStorage(), 100);
-    }
-    
-    // 高亮标注
-    highlightParagraph(change.paraIdx, author.name, author.color);
+  // 获取当前 MD 源文本
+  const currentContent = window._vditor.getValue();
+  const paragraphs = currentContent.split('\n\n');
+
+  switch (change.type) {
+    case 'replace':
+      if (change.paraIdx < paragraphs.length) {
+        paragraphs[change.paraIdx] = change.content;
+      }
+      break;
+    case 'delete':
+      if (change.paraIdx < paragraphs.length) {
+        paragraphs.splice(change.paraIdx, 1);
+      }
+      break;
+    case 'insert':
+      paragraphs.splice(change.paraIdx, 0, change.content);
+      break;
+  }
+
+  const newContent = paragraphs.join('\n\n');
+
+  // 保存光标位置
+  const savedPos = saveCursorScrollToStorage();
+
+  // 全量替换
+  window._vditor.setValue(newContent);
+  window._originalContent = window._vditor.getValue();
+
+  // 恢复光标
+  if (savedPos) {
+    window._pendingRestore = savedPos;
+    // doRestore 会在 initEditor 的 after 回调里执行
+    // 但 setValue 不会触发 after 回调，所以需要手动恢复
+    setTimeout(() => restoreCursorScrollFromStorage(), 100);
+  }
+
+  // 高亮标注
+  highlightParagraph(change.paraIdx, author.name, author.color);
 }
 ```
 
@@ -401,16 +426,16 @@ function applyRemoteChange(change, author) {
 ```js
 // 光标移动时检查暂存更新
 setInterval(() => {
-    if (_pendingUpdates.length === 0) return;
-    const newParaIdx = getCursorParagraphIndex();
-    if (newParaIdx !== _cursorParaIdx) {
-        _cursorParaIdx = newParaIdx;
-        const pending = [..._pendingUpdates];
-        _pendingUpdates = [];
-        for (const update of pending) {
-            applyRemoteChange(update, update.author);
-        }
+  if (_pendingUpdates.length === 0) return;
+  const newParaIdx = getCursorParagraphIndex();
+  if (newParaIdx !== _cursorParaIdx) {
+    _cursorParaIdx = newParaIdx;
+    const pending = [..._pendingUpdates];
+    _pendingUpdates = [];
+    for (const update of pending) {
+      applyRemoteChange(update, update.author);
     }
+  }
 }, 500);
 ```
 
@@ -419,25 +444,27 @@ setInterval(() => {
 ```css
 /* 段落高亮 */
 .paragraph-highlight {
-    background-color: var(--highlight-color, rgba(52, 152, 219, 0.15));
-    border-left: 3px solid var(--author-color, #3498db);
-    transition: background-color 5s ease-out, border-color 5s ease-out;
-    border-radius: 2px;
-    padding-left: 4px;
-    margin-left: -7px;
-    position: relative;
+  background-color: var(--highlight-color, rgba(52, 152, 219, 0.15));
+  border-left: 3px solid var(--author-color, #3498db);
+  transition:
+    background-color 5s ease-out,
+    border-color 5s ease-out;
+  border-radius: 2px;
+  padding-left: 4px;
+  margin-left: -7px;
+  position: relative;
 }
 
 /* 改动者标注 */
 .paragraph-highlight .author-label {
-    position: absolute;
-    right: 8px;
-    top: 2px;
-    font-size: 11px;
-    color: var(--author-color, #3498db);
-    opacity: 0.8;
-    font-weight: 500;
-    transition: opacity 5s ease-out;
+  position: absolute;
+  right: 8px;
+  top: 2px;
+  font-size: 11px;
+  color: var(--author-color, #3498db);
+  opacity: 0.8;
+  font-weight: 500;
+  transition: opacity 5s ease-out;
 }
 ```
 
@@ -445,35 +472,35 @@ setInterval(() => {
 
 ## 7. 新增文件清单
 
-| 文件 | 位置 | 职责 |
-|------|------|------|
-| `sse_handler.py` | `nas_md/webserver/` | SSE 连接管理 + 事件广播 |
-| `paragraph_diff.py` | `nas_md/webserver/` | 段落分割 + diff 计算 |
-| `sse_client.js` | `web/` | EventSource 封装 |
-| `sync_layer.js` | `web/` | 段落更新 + 编辑中保护 + 暂存队列 |
-| `identity.js` | `web/` | 匿名身份生成 + 持久化 |
-| `highlight.css` | `web/` | 段落高亮 + 改动者标注样式 |
+| 文件                | 位置                | 职责                             |
+| ------------------- | ------------------- | -------------------------------- |
+| `sse_handler.py`    | `nas_md/webserver/` | SSE 连接管理 + 事件广播          |
+| `paragraph_diff.py` | `nas_md/webserver/` | 段落分割 + diff 计算             |
+| `sse_client.js`     | `web/`              | EventSource 封装                 |
+| `sync_layer.js`     | `web/`              | 段落更新 + 编辑中保护 + 暂存队列 |
+| `identity.js`       | `web/`              | 匿名身份生成 + 持久化            |
+| `highlight.css`     | `web/`              | 段落高亮 + 改动者标注样式        |
 
 ## 8. 修改现有文件
 
-| 文件 | 改动内容 |
-|------|----------|
+| 文件                    | 改动内容                                                                                |
+| ----------------------- | --------------------------------------------------------------------------------------- |
 | `webserver/__init__.py` | 添加 SSE handler 路由、连接管理全局变量、在 `_handle_write_file` 中调用 `sse_broadcast` |
-| `app.js` | 引入 sse_client.js、sync_layer.js、identity.js、highlight.css；在初始化时启动 SSE 连接 |
-| `files.js` | API 请求添加 `X-Client-Id`、`X-Client-Name` header |
-| `index.html` | 添加 `<script>` 引用新文件 |
+| `app.js`                | 引入 sse_client.js、sync_layer.js、identity.js、highlight.css；在初始化时启动 SSE 连接  |
+| `files.js`              | API 请求添加 `X-Client-Id`、`X-Client-Name` header                                      |
+| `index.html`            | 添加 `<script>` 引用新文件                                                              |
 
 ## 9. 复用现有模块
 
-| 模块 | 位置 | 用途 |
-|------|------|------|
-| `_handle_write_file` | `webserver/__init__.py:1306` | 文件保存 + 乐观锁 |
-| `_handle_file` | `webserver/__init__.py:1262` | 文件读取 + `X-Mod-Time` |
-| `doRestore` | `editor.js:611` | 光标/滚动恢复 |
-| `onEditorInput` | `app.js:2776` | 编辑状态追踪（扩展） |
-| `fileMtimes` | `app.js:38` | 乐观锁 mtime 记录 |
-| `performSync` | `app.js:3237` | 30 秒轮询（SSE 断线兜底） |
-| `saveCursorScrollToStorage` | `app.js:2497` | 光标位置保存 |
+| 模块                        | 位置                         | 用途                      |
+| --------------------------- | ---------------------------- | ------------------------- |
+| `_handle_write_file`        | `webserver/__init__.py:1306` | 文件保存 + 乐观锁         |
+| `_handle_file`              | `webserver/__init__.py:1262` | 文件读取 + `X-Mod-Time`   |
+| `doRestore`                 | `editor.js:611`              | 光标/滚动恢复             |
+| `onEditorInput`             | `app.js:2776`                | 编辑状态追踪（扩展）      |
+| `fileMtimes`                | `app.js:38`                  | 乐观锁 mtime 记录         |
+| `performSync`               | `app.js:3237`                | 30 秒轮询（SSE 断线兜底） |
+| `saveCursorScrollToStorage` | `app.js:2497`                | 光标位置保存              |
 
 ## 10. 后续迭代
 

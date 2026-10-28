@@ -1,3 +1,11 @@
+---
+id: nas-md-multi-user-isolation
+type: submodule-design
+status: draft
+title: 多用户隔离设计（免登录）
+parent: nas-md-webserver
+---
+
 # 多用户隔离设计（免登录）
 
 ## 背景
@@ -43,30 +51,30 @@ class MountEntry:
 
 **挂载点分类：**
 
-| 类型 | `host` | `owner` | 说明 |
-|------|--------|---------|------|
-| 内置存储 | False | 空 | `builtin-storage`，所有人可见，只读 |
-| 宿主机挂载点 | True | 空 | 由 `MOUNT_DIRS` 配置，仅 Admin 可见 |
-| 用户挂载点 | False | session UUID | 用户通过 Web UI 添加，仅创建者可见 |
-| 遗留挂载点 | False | 空 | 升级前已存在的挂载点，对所有用户可见 |
+| 类型         | `host` | `owner`      | 说明                                 |
+| ------------ | ------ | ------------ | ------------------------------------ |
+| 内置存储     | False  | 空           | `builtin-storage`，所有人可见，只读  |
+| 宿主机挂载点 | True   | 空           | 由 `MOUNT_DIRS` 配置，仅 Admin 可见  |
+| 用户挂载点   | False  | session UUID | 用户通过 Web UI 添加，仅创建者可见   |
+| 遗留挂载点   | False  | 空           | 升级前已存在的挂载点，对所有用户可见 |
 
 **可见性规则（`_visible_mounts()`）：**
 
-| 用户类型 | 可见的挂载点 |
-|---------|------------|
-| 普通用户 | 内置存储 + 自己挂载的本机目录 + 遗留挂载点 |
-| Admin | 内置存储 + 宿主机挂载点（读写）+ 自己挂载的本机目录 + 遗留挂载点 |
+| 用户类型 | 可见的挂载点                                                     |
+| -------- | ---------------------------------------------------------------- |
+| 普通用户 | 内置存储 + 自己挂载的本机目录 + 遗留挂载点                       |
+| Admin    | 内置存储 + 宿主机挂载点（读写）+ 自己挂载的本机目录 + 遗留挂载点 |
 
 **关键：Admin 看不到其他用户的挂载点，用户之间完全隔离。**
 
 **所有权校验（`_owns_mount()`）：**
 
-| 挂载点类型 | 谁可以操作（写/删/重命名） |
-|-----------|------------------------|
-| 内置存储 | 无人（只读） |
-| 宿主机挂载点 | 仅 Admin |
-| 用户挂载点 | 仅创建者（owner 匹配） |
-| 遗留挂载点 | 任何用户 |
+| 挂载点类型   | 谁可以操作（写/删/重命名） |
+| ------------ | -------------------------- |
+| 内置存储     | 无人（只读）               |
+| 宿主机挂载点 | 仅 Admin                   |
+| 用户挂载点   | 仅创建者（owner 匹配）     |
+| 遗留挂载点   | 任何用户                   |
 
 ### 3. API 变更
 
@@ -85,14 +93,24 @@ class MountEntry:
 
 ```json
 {
-  "_host": [
-    {"id": "mount-0", "name": "data", "path": "/data", "host": true, "owner": ""}
-  ],
+  "_host": [{ "id": "mount-0", "name": "data", "path": "/data", "host": true, "owner": "" }],
   "uuid-user-a": [
-    {"id": "mount-1", "name": "work", "path": "/home/user-a/work", "host": false, "owner": "uuid-user-a"}
+    {
+      "id": "mount-1",
+      "name": "work",
+      "path": "/home/user-a/work",
+      "host": false,
+      "owner": "uuid-user-a"
+    }
   ],
   "uuid-user-b": [
-    {"id": "mount-2", "name": "docs", "path": "/home/user-b/docs", "host": false, "owner": "uuid-user-b"}
+    {
+      "id": "mount-2",
+      "name": "docs",
+      "path": "/home/user-b/docs",
+      "host": false,
+      "owner": "uuid-user-b"
+    }
   ]
 }
 ```
@@ -146,15 +164,15 @@ def _path_visible(self, file_path: str, mount_paths: list[str]) -> bool:
 
 39 个测试用例覆盖以下场景（`tests/test_multi_user_isolation.py`）：
 
-| 测试类 | 用例数 | 覆盖内容 |
-|--------|--------|---------|
-| TestSessionManagement | 4 | Cookie 生成、保持、区分、有效期 |
-| TestMountVisibility | 4 | 内置存储、宿主机、用户、遗留挂载点可见性 |
-| TestMountOwnership | 6 | 读写权限、删除权限、遗留挂载点兼容、Admin 宿主机写权限 |
-| TestFileOperationIsolation | 5 | 树浏览、文件读取、重命名、新建目录、删除文件隔离 |
-| TestMountsPersistence | 2 | 按用户分组存储、旧格式迁移 |
-| TestMountEntryOwner | 4 | to_dict/from_dict 序列化、默认值、缺失字段 |
-| TestPathVisibilityHelpers | 3 | 路径规范化、前缀匹配、跨平台分隔符 |
-| TestOwnsMount | 4 | 内置/宿主机/用户/遗留挂载点所有权 |
-| TestVisibleMounts | 5 | 各类型挂载点可见性组合 |
-| TestCompleteIsolation | 2 | 端到端双用户隔离、无数量限制 |
+| 测试类                     | 用例数 | 覆盖内容                                               |
+| -------------------------- | ------ | ------------------------------------------------------ |
+| TestSessionManagement      | 4      | Cookie 生成、保持、区分、有效期                        |
+| TestMountVisibility        | 4      | 内置存储、宿主机、用户、遗留挂载点可见性               |
+| TestMountOwnership         | 6      | 读写权限、删除权限、遗留挂载点兼容、Admin 宿主机写权限 |
+| TestFileOperationIsolation | 5      | 树浏览、文件读取、重命名、新建目录、删除文件隔离       |
+| TestMountsPersistence      | 2      | 按用户分组存储、旧格式迁移                             |
+| TestMountEntryOwner        | 4      | to_dict/from_dict 序列化、默认值、缺失字段             |
+| TestPathVisibilityHelpers  | 3      | 路径规范化、前缀匹配、跨平台分隔符                     |
+| TestOwnsMount              | 4      | 内置/宿主机/用户/遗留挂载点所有权                      |
+| TestVisibleMounts          | 5      | 各类型挂载点可见性组合                                 |
+| TestCompleteIsolation      | 2      | 端到端双用户隔离、无数量限制                           |

@@ -1,3 +1,13 @@
+---
+id: nas-md-mount-api
+type: submodule-design
+status: draft
+title: 挂载 API 参考
+parent: nas-md-webserver
+references:
+  - nas-md-multi-user-isolation
+---
+
 # 挂载 API 参考
 
 挂载 API 允许通过 Web UI 浏览、读取和管理服务器端目录上的文件。挂载点通过 `MOUNT_DIRS` 环境变量配置（分号分隔的绝对路径），也可通过 Web UI 动态挂载。
@@ -8,18 +18,19 @@
 
 **隔离规则：**
 
-| 挂载点类型 | 可见性 | 操作权限 |
-|-----------|--------|---------|
-| 内置存储（`builtin-storage`） | 所有用户 | 只读 |
-| 宿主机挂载点（`MOUNT_DIRS`） | 仅 Admin | Admin 可读写 |
-| 用户挂载点（Web UI 添加） | 仅创建者 | 仅创建者可操作 |
-| 遗留挂载点（升级前已存在） | 所有用户 | 任何用户可操作 |
+| 挂载点类型                    | 可见性   | 操作权限       |
+| ----------------------------- | -------- | -------------- |
+| 内置存储（`builtin-storage`） | 所有用户 | 只读           |
+| 宿主机挂载点（`MOUNT_DIRS`）  | 仅 Admin | Admin 可读写   |
+| 用户挂载点（Web UI 添加）     | 仅创建者 | 仅创建者可操作 |
+| 遗留挂载点（升级前已存在）    | 所有用户 | 任何用户可操作 |
 
 - 用户挂载目录无数量限制
 - Admin 只能看到自己的本机挂载点和宿主机挂载点，无法访问其他用户的挂载点
 - 搜索、统计、结构化查询结果均按用户可见性过滤
 
 **会话 Cookie：**
+
 - 名称：`nasmd_sid`
 - 有效期：1 年（`Max-Age=31536000`）
 - 重启浏览器和电脑后仍然有效
@@ -112,6 +123,7 @@ GET /api/mounts
 返回当前用户可见的挂载点。基于 Cookie 会话自动过滤，每个用户只能看到自己拥有的挂载点、内置存储、宿主机挂载点（仅 Admin）和遗留挂载点。
 
 **响应 200：**
+
 ```json
 [
   { "id": "mount-0", "name": "notes", "path": "/mnt/notes" },
@@ -120,6 +132,7 @@ GET /api/mounts
 ```
 
 **响应 200（无挂载点）：**
+
 ```json
 []
 ```
@@ -135,10 +148,23 @@ GET /api/mounts/public
 返回所有标记为 `public=true` 的挂载点。无需认证。
 
 **响应 200：**
+
 ```json
 [
-  { "id": "builtin-storage", "name": "nas-md", "path": "/app/storage", "public": true, "readonly": true },
-  { "id": "mount-1", "name": "work_TEST", "path": "/Documents/work_TEST", "public": true, "readonly": false }
+  {
+    "id": "builtin-storage",
+    "name": "nas-md",
+    "path": "/app/storage",
+    "public": true,
+    "readonly": true
+  },
+  {
+    "id": "mount-1",
+    "name": "work_TEST",
+    "path": "/Documents/work_TEST",
+    "public": true,
+    "readonly": false
+  }
 ]
 ```
 
@@ -153,13 +179,21 @@ POST /api/mounts
 动态添加新的挂载点。新挂载点自动绑定当前用户的 session（`owner` = 当前 session ID），无数量限制。
 
 **请求体：**
+
 ```json
 { "path": "/home/user/notes", "name": "我的笔记" }
 ```
 
 **响应 200：**
+
 ```json
-{ "id": "mount-2", "name": "我的笔记", "path": "/home/user/notes", "public": true, "readonly": false }
+{
+  "id": "mount-2",
+  "name": "我的笔记",
+  "path": "/home/user/notes",
+  "public": true,
+  "readonly": false
+}
 ```
 
 **响应 400：** 路径不存在或缺少参数。
@@ -175,6 +209,7 @@ DELETE /api/mounts/{id}
 删除挂载点。只能删除自己拥有的挂载点（`owner` 匹配当前 session）。内置挂载点（`builtin-storage`）不能删除。
 
 **响应 200：**
+
 ```json
 { "status": "ok" }
 ```
@@ -192,13 +227,21 @@ PUT /api/mounts/{id}
 更新挂载点属性（名称、公开状态）。需要认证。
 
 **请求体：**
+
 ```json
 { "name": "新名称", "public": true }
 ```
 
 **响应 200：**
+
 ```json
-{ "id": "mount-1", "name": "新名称", "path": "/Documents/work_TEST", "public": true, "readonly": false }
+{
+  "id": "mount-1",
+  "name": "新名称",
+  "path": "/Documents/work_TEST",
+  "public": true,
+  "readonly": false
+}
 ```
 
 ---
@@ -212,11 +255,13 @@ GET /api/find-path?name=xxx
 在常见位置（用户目录、文档、桌面、所有驱动器根目录及 Documents 子目录）搜索匹配的目录名，返回完整路径。无需认证。用于 Edge/Firefox 无法通过 `files[0].path` 获取完整路径时的自动定位。
 
 **响应 200（找到）：**
+
 ```json
 { "path": "E:\\Documents\\work_TEST", "name": "work_TEST" }
 ```
 
 **响应 200（未找到）：**
+
 ```json
 { "path": null, "name": "work_TEST" }
 ```
@@ -233,15 +278,22 @@ GET /api/mounts/{id}/tree?path=/
 
 **参数：**
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `path` | `/` | 相对于挂载根目录的路径 |
+| 参数   | 默认值 | 说明                   |
+| ------ | ------ | ---------------------- |
+| `path` | `/`    | 相对于挂载根目录的路径 |
 
 **响应 200：**
+
 ```json
 [
   { "name": "Projects", "path": "/Projects", "isDir": true, "size": 0, "modTime": 1719993600000 },
-  { "name": "Welcome.md", "path": "/Welcome.md", "isDir": false, "size": 512, "modTime": 1719993600000 }
+  {
+    "name": "Welcome.md",
+    "path": "/Welcome.md",
+    "isDir": false,
+    "size": 512,
+    "modTime": 1719993600000
+  }
 ]
 ```
 
@@ -259,11 +311,12 @@ GET /api/mounts/{id}/tree-recursive?path=/
 
 **参数：**
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `path` | `/` | 相对于挂载根目录的路径 |
+| 参数   | 默认值 | 说明                   |
+| ------ | ------ | ---------------------- |
+| `path` | `/`    | 相对于挂载根目录的路径 |
 
 **响应 200：**
+
 ```json
 {
   "name": "notes",
@@ -312,9 +365,9 @@ GET /api/mounts/{id}/file?path=/file.md
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `path` | 是 | 文件的相对路径 |
+| 参数   | 必填 | 说明           |
+| ------ | ---- | -------------- |
+| `path` | 是   | 文件的相对路径 |
 
 **响应 200：** 原始文件内容，附带正确的 `Content-Type` 头。
 
@@ -337,13 +390,14 @@ PUT /api/mounts/{id}/file?path=/file.md
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `path` | 是 | 文件的相对路径 |
+| 参数   | 必填 | 说明           |
+| ------ | ---- | -------------- |
+| `path` | 是   | 文件的相对路径 |
 
 **请求体：** 原始文件内容（二进制）。
 
 **响应 200：**
+
 ```json
 {
   "status": "ok",
@@ -368,12 +422,13 @@ PUT /api/mounts/{id}/rename?oldPath=/old-name.md&newPath=/new-name.md
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `oldPath` | 是 | 当前相对路径 |
-| `newPath` | 是 | 新相对路径 |
+| 参数      | 必填 | 说明         |
+| --------- | ---- | ------------ |
+| `oldPath` | 是   | 当前相对路径 |
+| `newPath` | 是   | 新相对路径   |
 
 **响应 200：**
+
 ```json
 { "status": "ok" }
 ```
@@ -394,11 +449,12 @@ PUT /api/mounts/{id}/mkdir?path=/new-directory
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `path` | 是 | 新目录的相对路径 |
+| 参数   | 必填 | 说明             |
+| ------ | ---- | ---------------- |
+| `path` | 是   | 新目录的相对路径 |
 
 **响应 200：**
+
 ```json
 { "status": "ok" }
 ```
@@ -419,11 +475,12 @@ DELETE /api/mounts/{id}/file?path=/file.md
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `path` | 是 | 文件或目录的相对路径 |
+| 参数   | 必填 | 说明                 |
+| ------ | ---- | -------------------- |
+| `path` | 是   | 文件或目录的相对路径 |
 
 **响应 200：**
+
 ```json
 { "status": "ok" }
 ```
@@ -444,16 +501,16 @@ POST /api/mounts/{id}/changes?path=/file.md
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `path` | 是 | 文件的相对路径 |
+| 参数   | 必填 | 说明           |
+| ------ | ---- | -------------- |
+| `path` | 是   | 文件的相对路径 |
 
 **请求头：**
 
-| Header | 说明 |
-|--------|------|
-| `X-Client-Id` | 客户端 session ID（自动生成） |
-| `X-Author-Name` | 作者显示名称（如 "CalmWolf60"） |
+| Header           | 说明                               |
+| ---------------- | ---------------------------------- |
+| `X-Client-Id`    | 客户端 session ID（自动生成）      |
+| `X-Author-Name`  | 作者显示名称（如 "CalmWolf60"）    |
 | `X-Author-Color` | 作者颜色（十六进制，如 "#3498db"） |
 
 **请求体：**
@@ -475,11 +532,11 @@ POST /api/mounts/{id}/changes?path=/file.md
 
 **变更类型：**
 
-| type | 说明 |
-|------|------|
+| type      | 说明                   |
+| --------- | ---------------------- |
 | `replace` | 替换指定索引的段落内容 |
-| `insert` | 在指定索引前插入新段落 |
-| `delete` | 删除指定索引的段落 |
+| `insert`  | 在指定索引前插入新段落 |
+| `delete`  | 删除指定索引的段落     |
 
 **响应 200（直接应用）：**
 
@@ -527,9 +584,9 @@ GET /api/mounts/{id}/version-history?path=/file.md
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `path` | 是 | 文件的相对路径 |
+| 参数   | 必填 | 说明           |
+| ------ | ---- | -------------- |
+| `path` | 是   | 文件的相对路径 |
 
 **响应 200：**
 
@@ -542,9 +599,7 @@ GET /api/mounts/{id}/version-history?path=/file.md
       "author_id": "session-uuid",
       "author_name": "CalmWolf60",
       "author_color": "#3498db",
-      "changes": [
-        { "type": "replace", "index": 0, "content": "新内容" }
-      ],
+      "changes": [{ "type": "replace", "index": 0, "content": "新内容" }],
       "content_snapshot": "文件完整内容快照",
       "client_ip": "10.10.77.91",
       "client_os": "Windows 10",
@@ -572,15 +627,15 @@ GET /api/remote/file?src=<远程服务URL>&path=<文件路径>
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `src` | 是 | 远程服务基础 URL（如 `https://10.10.77.91:9000`） |
-| `path` | 是 | 远程文件路径（如 `/docs/readme.md`） |
+| 参数   | 必填 | 说明                                              |
+| ------ | ---- | ------------------------------------------------- |
+| `src`  | 是   | 远程服务基础 URL（如 `https://10.10.77.91:9000`） |
+| `path` | 是   | 远程文件路径（如 `/docs/readme.md`）              |
 
 **请求头：**
 
-| Header | 说明 |
-|--------|------|
+| Header         | 说明                         |
+| -------------- | ---------------------------- |
 | `X-Remote-Key` | 远程服务的 API Key，用于认证 |
 
 **响应 200：**
@@ -604,16 +659,16 @@ PUT /api/remote/file?src=<远程服务URL>&path=<文件路径>
 
 **参数：**
 
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `src` | 是 | 远程服务基础 URL |
-| `path` | 是 | 远程文件路径 |
+| 参数   | 必填 | 说明             |
+| ------ | ---- | ---------------- |
+| `src`  | 是   | 远程服务基础 URL |
+| `path` | 是   | 远程文件路径     |
 
 **请求头：**
 
-| Header | 说明 |
-|--------|------|
-| `X-Remote-Key` | 远程服务的 API Key |
+| Header         | 说明                           |
+| -------------- | ------------------------------ |
+| `X-Remote-Key` | 远程服务的 API Key             |
 | `Content-Type` | `text/markdown; charset=utf-8` |
 
 **请求体：** 文件原始内容（text）。
@@ -632,9 +687,9 @@ PUT /api/remote/file?src=<远程服务URL>&path=<文件路径>
 
 远程服务需要提供以下两个接口供 nas-md 代理调用：
 
-| 方法 | 接口 | 说明 |
-|------|------|------|
-| `GET` | `/api/files?path=<path>` | 返回文件原始内容，通过 `X-API-Key` header 认证 |
+| 方法  | 接口                     | 说明                                             |
+| ----- | ------------------------ | ------------------------------------------------ |
+| `GET` | `/api/files?path=<path>` | 返回文件原始内容，通过 `X-API-Key` header 认证   |
 | `PUT` | `/api/files?path=<path>` | 接收文件内容并保存，通过 `X-API-Key` header 认证 |
 
 ### 深链 URL 格式
@@ -671,12 +726,13 @@ GET /api/search?q=keyword&limit=20
 
 **参数：**
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `q` | 必填 | 搜索关键词 |
-| `limit` | 20 | 返回结果数量上限 |
+| 参数    | 默认值 | 说明             |
+| ------- | ------ | ---------------- |
+| `q`     | 必填   | 搜索关键词       |
+| `limit` | 20     | 返回结果数量上限 |
 
 **响应 200：**
+
 ```json
 [
   {"path": "notes/todo.md", "title": "Todo", "snippet": "...matching text..."},
@@ -702,12 +758,13 @@ GET /api/query?type=task&status=pending
 
 **参数：**
 
-| 参数 | 说明 |
-|------|------|
-| `type` | 必填，固定为 `task` |
+| 参数     | 说明                                      |
+| -------- | ----------------------------------------- |
+| `type`   | 必填，固定为 `task`                       |
 | `status` | 可选，`pending` 或 `done`，不传则返回全部 |
 
 **响应 200：**
+
 ```json
 {
   "tasks": [
@@ -726,12 +783,13 @@ GET /api/query?type=tag&name=project
 
 **参数：**
 
-| 参数 | 说明 |
-|------|------|
-| `type` | 必填，固定为 `tag` |
+| 参数   | 说明                                     |
+| ------ | ---------------------------------------- |
+| `type` | 必填，固定为 `tag`                       |
 | `name` | 可选，指定标签名则返回含该标签的页面列表 |
 
 **响应 200（无 name，返回标签列表）：**
+
 ```json
 {
   "tags": [
@@ -743,6 +801,7 @@ GET /api/query?type=tag&name=project
 ```
 
 **响应 200（有 name，返回页面列表）：**
+
 ```json
 {
   "pages": [
@@ -760,12 +819,13 @@ GET /api/query?type=heading&page=notes/a.md
 
 **参数：**
 
-| 参数 | 说明 |
-|------|------|
-| `type` | 必填，固定为 `heading` |
+| 参数   | 说明                                     |
+| ------ | ---------------------------------------- |
+| `type` | 必填，固定为 `heading`                   |
 | `page` | 可选，指定页面路径则返回该页面的标题列表 |
 
 **响应 200：**
+
 ```json
 {
   "headings": [
@@ -785,17 +845,18 @@ GET /api/query?type=link&page=notes/a.md
 
 **参数：**
 
-| 参数 | 说明 |
-|------|------|
-| `type` | 必填，固定为 `link` |
+| 参数   | 说明                                     |
+| ------ | ---------------------------------------- |
+| `type` | 必填，固定为 `link`                      |
 | `page` | 可选，指定页面路径则返回该页面的出链列表 |
 
 **响应 200：**
+
 ```json
 {
   "links": [
-    {"target": "Project Notes", "display_text": "项目笔记", "line": 5},
-    {"target": "TODO", "display_text": null, "line": 12}
+    { "target": "Project Notes", "display_text": "项目笔记", "line": 5 },
+    { "target": "TODO", "display_text": null, "line": 12 }
   ]
 }
 ```
@@ -810,15 +871,16 @@ GET /api/backlinks?page=notes/a.md
 
 **参数：**
 
-| 参数 | 说明 |
-|------|------|
+| 参数   | 说明               |
+| ------ | ------------------ |
 | `page` | 必填，目标页面路径 |
 
 **响应 200：**
+
 ```json
 {
   "backlinks": [
-    {"path": "notes/b.md", "title": "Note B", "line": 3, "target": "a", "display_text": null}
+    { "path": "notes/b.md", "title": "Note B", "line": 3, "target": "a", "display_text": null }
   ]
 }
 ```
@@ -834,6 +896,7 @@ GET /api/stats
 获取索引统计信息。需要认证。
 
 **响应 200：**
+
 ```json
 {
   "file_count": 42,
@@ -842,9 +905,7 @@ GET /api/stats
   "tag_count": 12,
   "link_count": 30,
   "last_rebuild": "2026-06-04T10:00:00",
-  "recent_pages": [
-    {"path": "notes/a.md", "title": "Note A", "updated_at": 1749000000000}
-  ]
+  "recent_pages": [{ "path": "notes/a.md", "title": "Note A", "updated_at": 1749000000000 }]
 }
 ```
 
@@ -857,15 +918,14 @@ GET /api/graph
 获取知识图谱数据（节点+边），用于前端 D3.js 力导向图渲染。需要认证。
 
 **响应 200：**
+
 ```json
 {
   "nodes": [
-    {"id": 1, "path": "notes/a.md", "title": "Note A"},
-    {"id": 2, "path": "notes/b.md", "title": "Note B"}
+    { "id": 1, "path": "notes/a.md", "title": "Note A" },
+    { "id": 2, "path": "notes/b.md", "title": "Note B" }
   ],
-  "edges": [
-    {"source": 1, "target": 2}
-  ]
+  "edges": [{ "source": 1, "target": 2 }]
 }
 ```
 
@@ -878,6 +938,7 @@ POST /api/sync?mount={mountId}
 客户端发送本地文件列表（path + mtime），服务端返回差异。需要认证。
 
 **请求体：**
+
 ```json
 {
   "files": {
@@ -888,17 +949,12 @@ POST /api/sync?mount={mountId}
 ```
 
 **响应 200：**
+
 ```json
 {
-  "download": [
-    {"path": "notes/a.md", "mtime": 1749005000000}
-  ],
-  "upload": [
-    {"path": "notes/b.md", "mtime": 1749001000000}
-  ],
-  "delete": [
-    {"path": "notes/old.md"}
-  ],
+  "download": [{ "path": "notes/a.md", "mtime": 1749005000000 }],
+  "upload": [{ "path": "notes/b.md", "mtime": 1749001000000 }],
+  "delete": [{ "path": "notes/old.md" }],
   "server_time": 1749006000000
 }
 ```
@@ -916,6 +972,7 @@ GET /api/sync/status?mount={mountId}
 获取挂载点的同步状态信息。需要认证。
 
 **响应 200：**
+
 ```json
 {
   "mount_id": "default",
@@ -944,14 +1001,14 @@ GET /api/sync/status?mount={mountId}
 { "error": "问题描述" }
 ```
 
-| 状态码 | 含义 |
-|--------|------|
-| 400 | 请求错误（缺少参数） |
-| 401 | 未认证（需要 Bearer Token） |
-| 403 | 禁止访问（路径逃逸出挂载根目录） |
-| 404 | 不存在（挂载点或文件不存在） |
-| 405 | 方法不允许 |
-| 500 | 服务器内部错误 |
+| 状态码 | 含义                             |
+| ------ | -------------------------------- |
+| 400    | 请求错误（缺少参数）             |
+| 401    | 未认证（需要 Bearer Token）      |
+| 403    | 禁止访问（路径逃逸出挂载根目录） |
+| 404    | 不存在（挂载点或文件不存在）     |
+| 405    | 方法不允许                       |
+| 500    | 服务器内部错误                   |
 
 ## 安全
 
@@ -966,13 +1023,13 @@ GET /api/sync/status?mount={mountId}
 const API = 'http://localhost:8080';
 
 // 列出挂载点
-const mounts = await fetch(`${API}/api/mounts`).then(r => r.json());
+const mounts = await fetch(`${API}/api/mounts`).then((r) => r.json());
 
 // 浏览目录
-const tree = await fetch(`${API}/api/mounts/mount-0/tree?path=/`).then(r => r.json());
+const tree = await fetch(`${API}/api/mounts/mount-0/tree?path=/`).then((r) => r.json());
 
 // 读取文件
-const content = await fetch(`${API}/api/mounts/mount-0/file?path=/notes.md`).then(r => r.text());
+const content = await fetch(`${API}/api/mounts/mount-0/file?path=/notes.md`).then((r) => r.text());
 
 // 写入文件
 await fetch(`${API}/api/mounts/mount-0/file?path=/new.md`, {

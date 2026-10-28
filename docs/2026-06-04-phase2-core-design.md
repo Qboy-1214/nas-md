@@ -1,3 +1,11 @@
+---
+id: nas-md-search
+type: module-design
+status: draft
+title: 搜索与对象索引（Phase 2 核心）
+parent: nas-md-architecture
+---
+
 # Phase 2 核心：Frontmatter + 对象索引器 设计 ✅ 已完成
 
 > 日期：2026-06-04
@@ -114,11 +122,11 @@ CREATE INDEX idx_headings_page_id ON headings(page_id);
 
 在 webserver 中新增 `/api/query` 端点：
 
-| 参数 | 说明 |
-|------|------|
-| `type=task` | 查询任务，可选 `status=pending`/`done` |
-| `type=tag` | 标签列表（含计数），可选 `name=xxx` 筛选某标签下的页面 |
-| `type=heading` | 可选 `page=path` 查某页面的标题列表 |
+| 参数           | 说明                                                   |
+| -------------- | ------------------------------------------------------ |
+| `type=task`    | 查询任务，可选 `status=pending`/`done`                 |
+| `type=tag`     | 标签列表（含计数），可选 `name=xxx` 筛选某标签下的页面 |
+| `type=heading` | 可选 `page=path` 查某页面的标题列表                    |
 
 响应格式：
 
@@ -137,13 +145,13 @@ CREATE INDEX idx_headings_page_id ON headings(page_id);
 
 ## 文件变更清单
 
-| 文件 | 变更类型 | 说明 |
-|------|----------|------|
-| `nas_md/search/extract.py` | 新建 | 提取器（frontmatter/tags/tasks/headings） |
-| `nas_md/search/__init__.py` | 修改 | 扩展 init_db/index_file/rebuild_index，新增查询函数 |
-| `nas_md/webserver/__init__.py` | 修改 | 新增 /api/query 端点 |
-| `tests/test_search.py` | 修改 | 扩展测试覆盖新功能 |
-| `tests/test_extract.py` | 新建 | 提取器单元测试 |
+| 文件                           | 变更类型 | 说明                                                |
+| ------------------------------ | -------- | --------------------------------------------------- |
+| `nas_md/search/extract.py`     | 新建     | 提取器（frontmatter/tags/tasks/headings）           |
+| `nas_md/search/__init__.py`    | 修改     | 扩展 init_db/index_file/rebuild_index，新增查询函数 |
+| `nas_md/webserver/__init__.py` | 修改     | 新增 /api/query 端点                                |
+| `tests/test_search.py`         | 修改     | 扩展测试覆盖新功能                                  |
+| `tests/test_extract.py`        | 新建     | 提取器单元测试                                      |
 
 ## 不在本次范围
 

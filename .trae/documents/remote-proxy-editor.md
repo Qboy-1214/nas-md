@@ -1,3 +1,11 @@
+---
+id: nas-md-remote-proxy
+type: submodule-design
+status: draft
+title: 远程文件代理编辑
+parent: nas-md-webserver
+---
+
 # 远程文件代理编辑功能
 
 ## Context
@@ -5,6 +13,7 @@
 用户有另一个自研服务（存储 MD 文件 + 版本管理），需要查看和编辑功能但不想重复造编辑器轮子。希望像 Nextcloud 调用 OnlyOffice 那样，通过深链跳转到 nas-md 打开远程文件，编辑后回写，nas-md 不持久化文件。
 
 已确认：
+
 - 只做深链跳转模式（方式B），不做侧边栏浏览
 - 不需要协同编辑
 - 认证用 API Key
@@ -44,12 +53,14 @@ PUT {src}/api/files?path={path}
 **文件**: `nas_md/webserver/__init__.py`
 
 在 `do_GET` 中新增路由：
+
 ```
 if path == "/api/remote/file":
     self._handle_remote_file(qs)
 ```
 
 在 `do_PUT` 中新增路由：
+
 ```
 if path == "/api/remote/file":
     self._handle_remote_write(qs)
@@ -58,6 +69,7 @@ if path == "/api/remote/file":
 新增两个处理函数：
 
 `_handle_remote_file(qs)`:
+
 - 从 `qs` 获取 `src` 和 `path` 参数
 - 从请求头 `X-Remote-Key` 获取 API Key
 - 用 `urllib.request` 向 `{src}/api/files?path={path}` 发 GET 请求，带 `X-API-Key` header
@@ -65,6 +77,7 @@ if path == "/api/remote/file":
 - 错误处理：远程返回 404/403/500 时转发对应状态码
 
 `_handle_remote_write(qs)`:
+
 - 从 `qs` 获取 `src` 和 `path` 参数
 - 从请求头 `X-Remote-Key` 获取 API Key
 - 读取请求 body（文件内容）
@@ -72,6 +85,7 @@ if path == "/api/remote/file":
 - 将远程响应返回给前端
 
 安全考虑：
+
 - 验证 `src` 是合法的 http/https URL
 - 请求超时设置（10 秒）
 - 不记录 API Key 到日志
@@ -104,12 +118,14 @@ async putRemoteFile(src, path, content, apiKey) {
 #### 3a. 新增 `_parseRemoteHash()` 函数
 
 在 `_parseShareHash()` 旁边新增，解析 `#remote=<base64>` 格式的 hash：
+
 - 解码 base64，解析 JSON
 - 返回 `{ src, path, key }` 或 null
 
 #### 3b. 新增 `state.remoteFile` 状态
 
 在 `state` 对象中新增：
+
 ```javascript
 remoteFile: null, // { src, path, key } when in remote proxy mode
 ```
@@ -117,6 +133,7 @@ remoteFile: null, // { src, path, key } when in remote proxy mode
 #### 3c. 修改初始化流程
 
 在 `init()` 函数中（`_parseShareHash` 检查之后）新增远程文件检查：
+
 - 调用 `_parseRemoteHash()`
 - 如果有远程文件参数，调用 `openRemoteFile(src, path, key)`
 
@@ -136,6 +153,7 @@ remoteFile: null, // { src, path, key } when in remote proxy mode
 **文件**: `web/app.js` 的 `saveFile()` 函数
 
 在函数开头新增远程模式分支：
+
 ```javascript
 if (state.remoteFile) {
   content = window._vditor.getValue();
@@ -143,7 +161,7 @@ if (state.remoteFile) {
     state.remoteFile.src,
     state.remoteFile.path,
     content,
-    state.remoteFile.key
+    state.remoteFile.key,
   );
   if (resp && resp.status === 'ok') {
     markClean();
@@ -162,6 +180,7 @@ if (state.remoteFile) {
 **文件**: `web/app.js`
 
 在 `openRemoteFile()` 中：
+
 - 隐藏侧边栏（`#sidebar`）
 - 隐藏文件树相关按钮
 - 隐藏版本历史按钮（`#history-top-btn`）
@@ -175,11 +194,11 @@ if (state.remoteFile) {
 
 ## 关键文件清单
 
-| 文件 | 改动 |
-|------|------|
-| `nas_md/webserver/__init__.py` | 新增 `/api/remote/file` GET/PUT 路由和处理函数 |
-| `web/files.js` | 新增 `getRemoteFile` / `putRemoteFile` 函数 |
-| `web/app.js` | 新增 `_parseRemoteHash` / `openRemoteFile`，修改 `saveFile` 和初始化流程 |
+| 文件                           | 改动                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| `nas_md/webserver/__init__.py` | 新增 `/api/remote/file` GET/PUT 路由和处理函数                           |
+| `web/files.js`                 | 新增 `getRemoteFile` / `putRemoteFile` 函数                              |
+| `web/app.js`                   | 新增 `_parseRemoteHash` / `openRemoteFile`，修改 `saveFile` 和初始化流程 |
 
 ## 验证方案
 

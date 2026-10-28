@@ -1,8 +1,16 @@
+---
+id: nas-md-architecture
+type: architecture-design
+status: draft
+title: nas-md 项目架构
+parent: nas-md-goal
+---
+
 # 项目架构梳理
 
 ## 概述
 
-nas-md 是一个**纯 Python 标准库**构建的个人知识管理系统。所有数据以 `.md` 文件存储在本地，通过 Telegram Bot 和 PWA 前端双入口访问。项目零第三方依赖，设计目标是一个人（或一个 LLM）能装下整个项目的全部逻辑。
+nas-md 是一个**以 Python 标准库为主**构建的个人知识管理系统。所有数据以 `.md` 文件存储在本地，通过 Telegram Bot 和 PWA 前端双入口访问。运行时仅两个第三方依赖（pyyaml=frontmatter 解析、watchdog=外部文件监视；旧版本文档「零第三方依赖」的说法已过时，2026-10-28 修正），设计目标是一个人（或一个 LLM）能装下整个项目的全部逻辑。
 
 ## 架构分层
 
@@ -147,6 +155,7 @@ class Cmd:
 **Ctrl+C 处理**：Windows 上 `serve_forever()` 内部的 `select()` 会阻塞信号，设置 `server.timeout = 0.5` 让 `select()` 定期超时，使 `KeyboardInterrupt` 能被及时处理。
 
 **认证模型**：
+
 - Token 写在配置文件（`WEB_AUTH_TOKEN` 环境变量），非随机生成，禁止注册
 - 公开挂载点（`public=true`）的 tree/file 读取无需认证
 - 游客挂载的目录自动设为 `public=true`
@@ -190,6 +199,7 @@ IP 暴力破解防护：连续提交无效令牌会封禁 IP 10 分钟。
 
 ```markdown
 ## 3 June, Monday
+
 `14:30` 今天开始写架构文档
 `15:00` 完成了翻译工作 ✅
 ```
@@ -303,18 +313,18 @@ links          — 链接索引（target, display_text, line_number）
 
 ### 技术选型
 
-| 组件 | 选择 | 说明 |
-|------|------|------|
-| 语言 | 原生 JavaScript | 无框架，零构建步骤 |
-| 编辑器 | Vditor | Markdown 编辑器，vendored 到 `web/lib/vditor/` |
-| 布局 | CSS Flexbox | `.layout` 容器 `display: flex`，侧边栏 + 主内容区 |
-| 状态管理 | 全局 `state` 对象 | 集中式，无响应式绑定 |
-| 事件绑定 | `onclick` HTML 属性 + 事件委托 | 全局函数绑定 + `data-idx` 委托处理搜索结果 |
-| DOM 操作 | 原生 DOM API | `getElementById` / `innerHTML` / `style.display` |
-| 样式系统 | CSS 变量（设计令牌） | 色彩、排版、间距、圆角、阴影统一管理 |
-| 图标 | 内联 SVG | 替代 emoji，支持样式控制和动画 |
-| 代码检查 | ESLint + Prettier | 配置见 `eslint.config.js` 和 `.prettierrc` |
-| 端到端测试 | Playwright | 测试用例在 `tests/e2e/` |
+| 组件       | 选择                           | 说明                                              |
+| ---------- | ------------------------------ | ------------------------------------------------- |
+| 语言       | 原生 JavaScript                | 无框架，零构建步骤                                |
+| 编辑器     | Vditor                         | Markdown 编辑器，vendored 到 `web/lib/vditor/`    |
+| 布局       | CSS Flexbox                    | `.layout` 容器 `display: flex`，侧边栏 + 主内容区 |
+| 状态管理   | 全局 `state` 对象              | 集中式，无响应式绑定                              |
+| 事件绑定   | `onclick` HTML 属性 + 事件委托 | 全局函数绑定 + `data-idx` 委托处理搜索结果        |
+| DOM 操作   | 原生 DOM API                   | `getElementById` / `innerHTML` / `style.display`  |
+| 样式系统   | CSS 变量（设计令牌）           | 色彩、排版、间距、圆角、阴影统一管理              |
+| 图标       | 内联 SVG                       | 替代 emoji，支持样式控制和动画                    |
+| 代码检查   | ESLint + Prettier              | 配置见 `eslint.config.js` 和 `.prettierrc`        |
+| 端到端测试 | Playwright                     | 测试用例在 `tests/e2e/`                           |
 
 ### 文件结构
 
@@ -325,7 +335,11 @@ web/
 ├── files.js                # 文件浏览 + API 封装（含远程文件代理）
 ├── editor.js               # Vditor 编辑器封装
 ├── sync_layer.js           # 协同编辑同步层（SSE 连接、段落 diff 应用）
+├── sse_client.js           # SSE 客户端封装
 ├── version_history.js      # 版本历史面板（预览、恢复）
+├── html_preview.js         # HTML 页面预览（隔离 iframe + 相对资源重写）
+├── mermaid_enhancer.js     # Mermaid 图表全屏增强
+├── draft_storage.js        # 离线草稿存取
 ├── identity.js             # 匿名身份生成与管理（形容词+动物+数字）
 ├── app.css                 # 应用样式（设计令牌 + 布局 + 组件 + 主题）
 └── lib/
@@ -340,24 +354,24 @@ web/
 
 ```javascript
 const state = {
-  token: null,              // 认证 token
-  sidebarCollapsed: false,  // 侧边栏折叠状态
-  mounts: [],               // 挂载点列表
-  expandedMounts: [],       // 已展开的挂载点 ID（含目录路径）
-  treeData: {},             // 递归树缓存 { mountId: { path: DirEntry } }
-                          //   DirEntry: { name, path, isDir, hasMd, children, ... }
-  currentPath: null,        // 当前打开的文件路径
-  currentMountId: null,     // 当前文件所属挂载点
-  editorMode: 'ir',         // 编辑器模式 (ir | sv | wysiwyg)
-  dirty: false,             // 是否有未保存修改
-  searchResults: [],        // 搜索结果
-  recentFiles: [],          // 最近访问文件
-  accessLog: {},            // 访问日志 { "mountId:path": timestamp }，localStorage 持久化
-  showSettings: false,      // 是否显示设置页
-  baseVersion: 0,           // 当前加载内容的版本号（协同编辑乐观锁）
-  baseContent: '',          // baseVersion 对应的内容快照（用于 diff 计算）
-  fileVersions: {},         // "mountId:path" -> 最后已知版本号
-  remoteFile: null,         // 远程代理模式: { src, path, key }，非 null 时启用
+  token: null, // 认证 token
+  sidebarCollapsed: false, // 侧边栏折叠状态
+  mounts: [], // 挂载点列表
+  expandedMounts: [], // 已展开的挂载点 ID（含目录路径）
+  treeData: {}, // 递归树缓存 { mountId: { path: DirEntry } }
+  //   DirEntry: { name, path, isDir, hasMd, children, ... }
+  currentPath: null, // 当前打开的文件路径
+  currentMountId: null, // 当前文件所属挂载点
+  editorMode: 'ir', // 编辑器模式 (ir | sv | wysiwyg)
+  dirty: false, // 是否有未保存修改
+  searchResults: [], // 搜索结果
+  recentFiles: [], // 最近访问文件
+  accessLog: {}, // 访问日志 { "mountId:path": timestamp }，localStorage 持久化
+  showSettings: false, // 是否显示设置页
+  baseVersion: 0, // 当前加载内容的版本号（协同编辑乐观锁）
+  baseContent: '', // baseVersion 对应的内容快照（用于 diff 计算）
+  fileVersions: {}, // "mountId:path" -> 最后已知版本号
+  remoteFile: null, // 远程代理模式: { src, path, key }，非 null 时启用
 };
 ```
 
@@ -418,6 +432,7 @@ CSS 中 `.modal-overlay` 默认 `display: none`，通过添加 `.active` 类切�
 ### 各文件职责
 
 **index.html**：页面骨架
+
 - `.layout` 容器（flex 行布局）
 - `#sidebar` 侧边栏（可折叠）
 - `.main` 主内容区（顶部栏 + 编辑器区域）
@@ -426,6 +441,7 @@ CSS 中 `.modal-overlay` 默认 `display: none`，通过添加 `.active` 类切�
 - 脚本加载顺序：vditor → files.js → editor.js → app.js（同步，无 defer）
 
 **app.js**：应用主逻辑
+
 - 全局 `state` 对象
 - `showPage(page)` — 页面切换
 - `renderSidebar()` — 侧边栏渲染（文件树递归）
@@ -441,6 +457,7 @@ CSS 中 `.modal-overlay` 默认 `display: none`，通过添加 `.active` 类切�
 - 搜索结果点击使用事件委托（`data-idx`），避免中文路径转义问题
 
 **files.js**：API 层
+
 - `API.request(path, options)` — 统一 fetch 封装（自动附加 Authorization header）
 - `API.getMounts()` / `API.getPublicMounts()` — 挂载点列表
 - `API.getTree(mountId, path)` — 递归目录树（tree-recursive API）
@@ -454,6 +471,7 @@ CSS 中 `.modal-overlay` 默认 `display: none`，通过添加 `.active` 类切�
 - 辅助函数：`loadMounts()` / `loadTree()` / `findMountForPath()` / `_treeHasPath()`
 
 **editor.js**：编辑器封装
+
 - `initEditor(content, mode, readonly, cursorOffset)` — 初始化 Vditor 实例（仅创建，不对外暴露）
 - `window._getVditor()` — 暴露 Vditor 实例给 app.js
 - `window._reinitEditor(mode)` — 销毁当前实例并用新模式重建（Vditor 3.x 无 `setMode()`）
@@ -463,6 +481,7 @@ CSS 中 `.modal-overlay` 默认 `display: none`，通过添加 `.active` 类切�
 - **模式切换机制**：Vditor 3.x 不支持运行时 `setMode()`，切换模式必须 destroy + reinit。`_reinitEditor` 在销毁前保存 scrollTop 和 cursor text offset，新实例渲染后通过 `requestAnimationFrame` 恢复两者，保证切换编辑模式时滚动位置和光标不丢失
 
 **app.css**：样式系统
+
 - **设计令牌**：CSS 变量定义色彩、排版、间距、圆角、阴影等设计属性，实现全局样式统一
 - **亮色/暗色主题**：通过 `html.dark` 类切换暗色主题，CSS 变量覆盖实现主题切换，localStorage 持久化
 - **Inter 字体**：vendored 变量字体，通过 `web/lib/fonts/inter.css` 引入
@@ -572,27 +591,27 @@ storage/
 
 ## 安全设计
 
-| 威胁 | 防护措施 |
-|------|----------|
-| 路径穿越 | `FS.safe_path()` + `_is_local()` 双重校验；Mount API 使用 `realpath` + 前缀匹配 |
-| 文件名注入 | `FORBIDDEN_CHARS` 全角替换 |
-| 令牌暴力破解 | IP 封禁 10 分钟；SHA-256(salt+token) 存储 |
-| 跨域请求 | CORS 头 `Access-Control-Allow-Origin: *` |
-| 隐藏文件泄露 | 目录列表自动过滤 `.` 开头的文件 |
-| 并发写入冲突 | 用户级别 `Lock`（Journal 模块） |
+| 威胁         | 防护措施                                                                        |
+| ------------ | ------------------------------------------------------------------------------- |
+| 路径穿越     | `FS.safe_path()` + `_is_local()` 双重校验；Mount API 使用 `realpath` + 前缀匹配 |
+| 文件名注入   | `FORBIDDEN_CHARS` 全角替换                                                      |
+| 令牌暴力破解 | IP 封禁 10 分钟；SHA-256(salt+token) 存储                                       |
+| 跨域请求     | CORS 头 `Access-Control-Allow-Origin: *`                                        |
+| 隐藏文件泄露 | 目录列表自动过滤 `.` 开头的文件                                                 |
+| 并发写入冲突 | 用户级别 `Lock`（Journal 模块）                                                 |
 
 ## 测试策略
 
 ### 后端测试（pytest）
 
-- **384 个测试**，覆盖所有核心模块
+- **797 个测试函数**（2026-10-28 实测），覆盖所有核心模块
 - **Fake 而非 Mock**：使用 `FakeTG`、`FakeDB`、内存 `FS` 实现完全隔离的单元测试
 - **临时目录**：文件操作测试使用 `tempfile.mkdtemp()`，测试后自动清理
 - **双后端验证**：FS 模块的所有操作在 OS 后端和内存后端上行为一致
 
 ### 前端测试（Playwright）
 
-- **15 个端到端测试**，覆盖核心用户交互流程
+- **141 个端到端测试**（2026-10-28 实测），覆盖核心用户交互流程
 - **测试范围**：
   - 应用加载与页面元素完整性
   - 暗色模式切换及 localStorage 持久化
@@ -611,23 +630,24 @@ storage/
 
 ### 前端代码质量（ESLint + Prettier）
 
-| 工具 | 用途 | 配置文件 |
-|------|------|----------|
-| ESLint | JavaScript 代码检查 | `eslint.config.js` |
-| Prettier | 代码格式化 | `.prettierrc` |
+| 工具     | 用途                | 配置文件           |
+| -------- | ------------------- | ------------------ |
+| ESLint   | JavaScript 代码检查 | `eslint.config.js` |
+| Prettier | 代码格式化          | `.prettierrc`      |
 
 **ESLint 规则要点**：
+
 - `no-unused-vars`：未使用变量警告，以 `_` 开头的变量和 catch 参数自动忽略
 - `no-undef`：未定义变量报错，全局变量通过 `globals` 配置声明
 - `prettier/prettier`：Prettier 规则作为 ESLint 错误强制执行
 
 **与 Python 工具的对应关系**：
 
-| Python | 前端 | 说明 |
-|--------|------|------|
-| ruff | ESLint | 代码检查/lint |
-| black | Prettier | 代码格式化 |
-| pytest | Playwright | 自动化测试 |
+| Python | 前端       | 说明          |
+| ------ | ---------- | ------------- |
+| ruff   | ESLint     | 代码检查/lint |
+| black  | Prettier   | 代码格式化    |
+| pytest | Playwright | 自动化测试    |
 
 ### CI 流程
 
@@ -646,7 +666,7 @@ frontend-quality        ──→  frontend-test (Playwright, 15 tests)
 ## 设计哲学
 
 1. **纯文件即数据库**：没有 ORM，没有迁移脚本，文件系统就是数据库
-2. **纯标准库**：零第三方依赖，Python 3.11+ 开箱即用
+2. **标准库优先**：运行时仅 pyyaml + watchdog 两个依赖（单一职责），Python 3.11+ 开箱即用
 3. **对 LLM 友好**：代码结构清晰，命名直观，一个上下文窗口能装下整个项目
 4. **可移植性优先**：文件名跨平台安全，路径分隔符统一处理，无平台特定代码
 5. **减法设计**：没有前端构建系统，没有微服务，没有消息队列 —— 只有文件和打开文件的软件
