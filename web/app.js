@@ -11,6 +11,30 @@ function isDisplayableFile(path) {
   return path.toLowerCase().endsWith('.md') || isHtmlFile(path);
 }
 
+// === DOM 构建工具（替代 innerHTML 模板：数据一律经 textContent / 属性赋值注入，防 HTML 注入） ===
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+// 看板空态占位段落
+function emptyNote(text) {
+  const p = el('p', null, text);
+  p.style.color = 'var(--c-muted)';
+  return p;
+}
+
+// 看板列表项（最近访问 / 孤立页面共用）
+function dashItem(titleText, timeText, onClick) {
+  const item = el('div', 'dash-recent-item');
+  item.appendChild(el('span', 'dash-recent-title', titleText));
+  item.appendChild(el('span', 'dash-recent-time', timeText));
+  item.addEventListener('click', onClick);
+  return item;
+}
+
 // Vditor's getValue() may normalize content (e.g. add trailing newline).
 // Use this for dirty comparison and originalContent sync to avoid false positives.
 function _normContent(s) {
@@ -1340,32 +1364,35 @@ function suggestRename(name) {
  */
 function showDuplicateDialog(suggestedName) {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay active';
-    overlay.innerHTML = `
-      <div class="modal-box">
-        <div class="modal-header">文件名冲突</div>
-        <div class="modal-body">
-          目标位置已存在同名文件。<br>
-          重命名规则：在文件名后添加时间戳后缀，如 <code>${suggestedName}</code>
-        </div>
-        <div class="modal-actions">
-          <button class="modal-btn" id="dup-cancel">取消</button>
-          <button class="modal-btn primary" id="dup-rename">重命名</button>
-          <button class="modal-btn danger" id="dup-overwrite">覆盖</button>
-        </div>
-      </div>
-    `;
+    const overlay = el('div', 'modal-overlay active');
+    const box = el('div', 'modal-box');
+    box.appendChild(el('div', 'modal-header', '文件名冲突'));
+    const bodyEl = el('div', 'modal-body');
+    bodyEl.append('目标位置已存在同名文件。');
+    bodyEl.appendChild(document.createElement('br'));
+    bodyEl.append('重命名规则：在文件名后添加时间戳后缀，如 ');
+    bodyEl.appendChild(el('code', null, suggestedName));
+    box.appendChild(bodyEl);
+    const actions = el('div', 'modal-actions');
+    const cancelBtn = el('button', 'modal-btn', '取消');
+    cancelBtn.id = 'dup-cancel';
+    const renameBtn = el('button', 'modal-btn primary', '重命名');
+    renameBtn.id = 'dup-rename';
+    const overwriteBtn = el('button', 'modal-btn danger', '覆盖');
+    overwriteBtn.id = 'dup-overwrite';
+    actions.append(cancelBtn, renameBtn, overwriteBtn);
+    box.appendChild(actions);
+    overlay.appendChild(box);
     document.body.appendChild(overlay);
-    overlay.querySelector('#dup-cancel').onclick = () => {
+    cancelBtn.onclick = () => {
       overlay.remove();
       resolve('cancel');
     };
-    overlay.querySelector('#dup-rename').onclick = () => {
+    renameBtn.onclick = () => {
       overlay.remove();
       resolve('rename');
     };
-    overlay.querySelector('#dup-overwrite').onclick = () => {
+    overwriteBtn.onclick = () => {
       overlay.remove();
       resolve('overwrite');
     };
@@ -1618,23 +1645,24 @@ function setupDragDrop() {
 
 function showMoveCopyDialog(isCrossMachine = false) {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay active';
+    const overlay = el('div', 'modal-overlay active');
     const title = isCrossMachine ? '跨机器操作' : '跨挂载点操作';
-    const body = isCrossMachine
+    const bodyText = isCrossMachine
       ? '源文件与目标目录不在同一台机器上，请选择操作：'
       : '目标目录与源文件不在同一挂载点，请选择操作：';
-    overlay.innerHTML = `
-      <div class="modal-box">
-        <div class="modal-title">${title}</div>
-        <div class="modal-body">${body}</div>
-        <div class="modal-actions">
-          <button class="modal-btn primary" data-action="move">移动（删除原文件）</button>
-          <button class="modal-btn" data-action="copy">复制（保留原文件）</button>
-          <button class="modal-btn cancel" data-action="cancel">取消</button>
-        </div>
-      </div>
-    `;
+    const box = el('div', 'modal-box');
+    box.appendChild(el('div', 'modal-title', title));
+    box.appendChild(el('div', 'modal-body', bodyText));
+    const actions = el('div', 'modal-actions');
+    const moveBtn = el('button', 'modal-btn primary', '移动（删除原文件）');
+    moveBtn.dataset.action = 'move';
+    const copyBtn = el('button', 'modal-btn', '复制（保留原文件）');
+    copyBtn.dataset.action = 'copy';
+    const cancelBtn = el('button', 'modal-btn cancel', '取消');
+    cancelBtn.dataset.action = 'cancel';
+    actions.append(moveBtn, copyBtn, cancelBtn);
+    box.appendChild(actions);
+    overlay.appendChild(box);
     document.body.appendChild(overlay);
     overlay.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');
@@ -2331,23 +2359,26 @@ function showRenameModal() {
   const oldName = path.substring(path.lastIndexOf('/') + 1);
   const isDir = !oldName.includes('.');
 
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay active';
-  overlay.innerHTML = `
-    <div class="modal-box">
-      <div class="modal-title">重命名</div>
-      <div class="modal-body">
-        <input type="text" id="rename-modal-input" class="rename-input" value="${oldName}" />
-      </div>
-      <div class="modal-actions">
-        <button class="modal-cancel" onclick="this.closest('.modal-overlay').remove()">取消</button>
-        <button class="modal-confirm" id="rename-modal-confirm">确定</button>
-      </div>
-    </div>
-  `;
+  const overlay = el('div', 'modal-overlay active');
+  const box = el('div', 'modal-box');
+  box.appendChild(el('div', 'modal-title', '重命名'));
+  const bodyEl = el('div', 'modal-body');
+  const input = el('input', 'rename-input');
+  input.type = 'text';
+  input.id = 'rename-modal-input';
+  input.value = oldName;
+  bodyEl.appendChild(input);
+  box.appendChild(bodyEl);
+  const actions = el('div', 'modal-actions');
+  const cancelBtn = el('button', 'modal-cancel', '取消');
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  const confirmBtn = el('button', 'modal-confirm', '确定');
+  confirmBtn.id = 'rename-modal-confirm';
+  actions.append(cancelBtn, confirmBtn);
+  box.appendChild(actions);
+  overlay.appendChild(box);
   document.body.appendChild(overlay);
 
-  const input = document.getElementById('rename-modal-input');
   if (!isDir && oldName.includes('.')) {
     input.setSelectionRange(0, oldName.lastIndexOf('.'));
   } else {
@@ -2374,7 +2405,7 @@ function showRenameModal() {
     }
   };
 
-  document.getElementById('rename-modal-confirm').addEventListener('click', doRename);
+  confirmBtn.addEventListener('click', doRename);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -2541,29 +2572,32 @@ async function createItem(mountId, dirPath, kind) {
 
   // Use modal dialog instead of prompt() which is blocked in iframes
   const name = await new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay active';
-    overlay.innerHTML = `
-      <div class="modal-box">
-        <div class="modal-title">${title}</div>
-        <div class="modal-body">
-          <input type="text" id="create-modal-input" class="rename-input" placeholder="${placeholder}" />
-        </div>
-        <div class="modal-actions">
-          <button class="modal-cancel" id="create-modal-cancel">取消</button>
-          <button class="modal-confirm" id="create-modal-confirm">确定</button>
-        </div>
-      </div>
-    `;
+    const overlay = el('div', 'modal-overlay active');
+    const box = el('div', 'modal-box');
+    box.appendChild(el('div', 'modal-title', title));
+    const bodyEl = el('div', 'modal-body');
+    const input = el('input', 'rename-input');
+    input.type = 'text';
+    input.id = 'create-modal-input';
+    input.placeholder = placeholder;
+    bodyEl.appendChild(input);
+    box.appendChild(bodyEl);
+    const actions = el('div', 'modal-actions');
+    const cancelBtn = el('button', 'modal-cancel', '取消');
+    cancelBtn.id = 'create-modal-cancel';
+    const confirmBtn = el('button', 'modal-confirm', '确定');
+    confirmBtn.id = 'create-modal-confirm';
+    actions.append(cancelBtn, confirmBtn);
+    box.appendChild(actions);
+    overlay.appendChild(box);
     document.body.appendChild(overlay);
-    const input = document.getElementById('create-modal-input');
     input.focus();
     const done = (val) => {
       overlay.remove();
       resolve(val);
     };
-    document.getElementById('create-modal-cancel').onclick = () => done(null);
-    document.getElementById('create-modal-confirm').onclick = () => done(input.value);
+    cancelBtn.onclick = () => done(null);
+    confirmBtn.onclick = () => done(input.value);
     input.onkeydown = (e) => {
       if (e.key === 'Enter') done(input.value);
       if (e.key === 'Escape') done(null);
@@ -2712,23 +2746,26 @@ async function renameFolder(mountId, dirPath) {
 
   const oldName = dirPath.substring(dirPath.lastIndexOf('/') + 1);
 
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay active';
-  overlay.innerHTML = `
-    <div class="modal-box">
-      <div class="modal-title">重命名文件夹</div>
-      <div class="modal-body">
-        <input type="text" id="rename-folder-input" class="rename-input" value="${oldName}" />
-      </div>
-      <div class="modal-actions">
-        <button class="modal-cancel" onclick="this.closest('.modal-overlay').remove()">取消</button>
-        <button class="modal-confirm" id="rename-folder-confirm">确定</button>
-      </div>
-    </div>
-  `;
+  const overlay = el('div', 'modal-overlay active');
+  const box = el('div', 'modal-box');
+  box.appendChild(el('div', 'modal-title', '重命名文件夹'));
+  const bodyEl = el('div', 'modal-body');
+  const input = el('input', 'rename-input');
+  input.type = 'text';
+  input.id = 'rename-folder-input';
+  input.value = oldName;
+  bodyEl.appendChild(input);
+  box.appendChild(bodyEl);
+  const actions = el('div', 'modal-actions');
+  const cancelBtn = el('button', 'modal-cancel', '取消');
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  const confirmBtn = el('button', 'modal-confirm', '确定');
+  confirmBtn.id = 'rename-folder-confirm';
+  actions.append(cancelBtn, confirmBtn);
+  box.appendChild(actions);
+  overlay.appendChild(box);
   document.body.appendChild(overlay);
 
-  const input = document.getElementById('rename-folder-input');
   input.select();
   input.focus();
 
@@ -2774,7 +2811,7 @@ async function renameFolder(mountId, dirPath) {
     }
   };
 
-  document.getElementById('rename-folder-confirm').onclick = doRename;
+  confirmBtn.onclick = doRename;
   input.onkeydown = (e) => {
     if (e.key === 'Enter') doRename();
     if (e.key === 'Escape') overlay.remove();
@@ -2797,20 +2834,26 @@ async function deleteFolder(mountId, dirPath) {
 
   const folderName = dirPath.substring(dirPath.lastIndexOf('/') + 1);
 
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay active';
-  overlay.innerHTML = `
-    <div class="modal-box">
-      <div class="modal-title">确认删除</div>
-      <div class="modal-body">
-        <p>确定要删除文件夹「${folderName}」吗？此操作不可撤销，文件夹内的所有文件也将被删除。</p>
-      </div>
-      <div class="modal-actions">
-        <button class="modal-cancel" onclick="this.closest('.modal-overlay').remove()">取消</button>
-        <button class="modal-confirm modal-danger" id="delete-folder-confirm">删除</button>
-      </div>
-    </div>
-  `;
+  const overlay = el('div', 'modal-overlay active');
+  const box = el('div', 'modal-box');
+  box.appendChild(el('div', 'modal-title', '确认删除'));
+  const bodyEl = el('div', 'modal-body');
+  bodyEl.appendChild(
+    el(
+      'p',
+      null,
+      `确定要删除文件夹「${folderName}」吗？此操作不可撤销，文件夹内的所有文件也将被删除。`,
+    ),
+  );
+  box.appendChild(bodyEl);
+  const actions = el('div', 'modal-actions');
+  const cancelBtn = el('button', 'modal-cancel', '取消');
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  const confirmBtn = el('button', 'modal-confirm modal-danger', '删除');
+  confirmBtn.id = 'delete-folder-confirm';
+  actions.append(cancelBtn, confirmBtn);
+  box.appendChild(actions);
+  overlay.appendChild(box);
   document.body.appendChild(overlay);
 
   const doDelete = async () => {
@@ -2872,7 +2915,7 @@ async function deleteFolder(mountId, dirPath) {
     }
   };
 
-  document.getElementById('delete-folder-confirm').onclick = doDelete;
+  confirmBtn.onclick = doDelete;
   overlay.onclick = (e) => {
     if (e.target === overlay) overlay.remove();
   };
@@ -3105,6 +3148,9 @@ async function openFile(path, preferredMountId, searchKeyword) {
         $('save-group').style.display = 'none';
         $('export-pdf-top-btn').style.display = 'none';
         $('history-top-btn').style.display = 'none';
+        $('btn-refresh').style.display = '';
+        const _htmlFsBtnErr = $('html-fs-top-btn');
+        if (_htmlFsBtnErr) _htmlFsBtnErr.style.display = '';
         showPage('editor');
         const error = document.createElement('div');
         error.className = 'html-preview-error';
@@ -3177,6 +3223,9 @@ async function openFile(path, preferredMountId, searchKeyword) {
     if (historyBtn) {
       historyBtn.style.display = path !== '/' && path.endsWith('.md') ? '' : 'none';
     }
+    // HTML 全屏预览：仅在打开 HTML 文件时显示
+    const htmlFsBtn = $('html-fs-top-btn');
+    if (htmlFsBtn) htmlFsBtn.style.display = isHtmlFile ? '' : 'none';
     $('editor-modes').style.display =
       !isHtmlFile && !mount.readonly && path.endsWith('.md') ? '' : 'none';
     $('save-group').style.display = !isHtmlFile && !mount.readonly ? '' : 'none';
@@ -3425,36 +3474,101 @@ function toggleSidebar() {
   let startX = 0;
   let startWidth = 0;
 
-  resizer.addEventListener('mousedown', (e) => {
+  function startDrag(clientX) {
+    if (isDragging) return;
     isDragging = true;
-    startX = e.clientX;
+    startX = clientX;
     startWidth = sidebar.offsetWidth;
     resizer.classList.add('dragging');
+    // 拖拽期间禁用 width 过渡，否则侧边栏跟不上鼠标、卡住不动
+    sidebar.classList.add('resizing');
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
+  }
+
+  function stopDrag() {
+    if (!isDragging) return;
+    isDragging = false;
+    resizer.classList.remove('dragging');
+    sidebar.classList.remove('resizing');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('nasmd_sidebar_width', sidebar.offsetWidth);
+  }
+
+  // 指针事件 + pointer capture：按下后即使指针滑出元素或浏览器介入（选中/滚动/失焦），
+  // move 事件仍持续派发到 resizer，不会中途“丢事件”导致卡住
+  resizer.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
     e.preventDefault();
+    try {
+      resizer.setPointerCapture(e.pointerId);
+    } catch (_err) {
+      /* 极老浏览器忽略 */
+    }
+    startDrag(e.clientX);
   });
 
-  document.addEventListener('mousemove', (e) => {
+  resizer.addEventListener('pointermove', (e) => {
     if (!isDragging) return;
     const delta = e.clientX - startX;
     let newWidth = startWidth + delta;
-    // 限制最小/最大宽度
+    // 限制最小/最大宽度（maxWidth 不得低于 minWidth）
     const minWidth = 180;
-    const maxWidth = Math.min(window.innerWidth - 300, 600);
+    const maxWidth = Math.max(minWidth, Math.min(window.innerWidth - 300, 600));
     newWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
     sidebar.style.width = newWidth + 'px';
   });
 
-  document.addEventListener('mouseup', () => {
-    if (!isDragging) return;
-    isDragging = false;
-    resizer.classList.remove('dragging');
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    localStorage.setItem('nasmd_sidebar_width', sidebar.offsetWidth);
+  resizer.addEventListener('pointerup', stopDrag);
+  resizer.addEventListener('pointercancel', stopDrag);
+
+  // 橡皮筋：松手后再按下时，鼠标常常已经飘出 4px 细条，
+  // 在 resizer 左侧 12px 内的非交互区域按下也视为拖拽起点，否则宽度会“卡住不动”
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || isDragging) return;
+    const rect = resizer.getBoundingClientRect();
+    const nearLeft = e.clientX >= rect.left - 12 && e.clientX <= rect.left + 4;
+    if (!nearLeft) return;
+    if (
+      e.target.closest(
+        'button, input, a, label, [draggable], [onclick], .modal-overlay, .menu-toggle, .tree-item, .dir-row',
+      )
+    )
+      return;
+    startDrag(e.clientX);
   });
+
+  document.addEventListener('mouseup', stopDrag);
+  // 拖拽中鼠标移出窗口导致 mouseup 丢失时，避免拖拽状态卡死
+  window.addEventListener('blur', stopDrag);
+  document.addEventListener(
+    'dragstart',
+    (e) => {
+      if (isDragging) e.preventDefault();
+    },
+    true,
+  );
 })();
+
+// === HTML 预览全屏 ===
+function toggleHtmlFullscreen() {
+  const on = document.documentElement.classList.toggle('html-preview-fullscreen');
+  const btn = $('html-fs-top-btn');
+  if (btn) btn.title = on ? '退出全屏预览' : '全屏预览';
+  localStorage.setItem('nasmd_html_preview_fs', on ? '1' : '0');
+  if (on) {
+    const host = $('nasmd-html-preview-host');
+    if (host && host.scrollIntoView) host.scrollIntoView();
+  }
+}
+
+// 页面加载时恢复 HTML 预览全屏状态
+if (localStorage.getItem('nasmd_html_preview_fs') === '1') {
+  document.documentElement.classList.add('html-preview-fullscreen');
+  const _fsBtnInit = $('html-fs-top-btn');
+  if (_fsBtnInit) _fsBtnInit.title = '退出全屏预览';
+}
 
 // === 暗色模式 ===
 if (localStorage.getItem('nasmd_dark') === '1') {
@@ -3494,15 +3608,14 @@ async function loadBacklinks(page) {
       return;
     }
     title.textContent = `反向链接 (${bls.length})`;
-    content.innerHTML = bls
-      .map(
-        (bl) =>
-          `<div class="backlink-item" onclick="openFile('${bl.path.replace(/'/g, "\\'")}')">
-        <span class="backlink-page">${bl.title || bl.path}</span>
-        <span class="backlink-line">第 ${bl.line} 行</span>
-      </div>`,
-      )
-      .join('');
+    content.replaceChildren();
+    bls.forEach((bl) => {
+      const item = el('div', 'backlink-item');
+      item.appendChild(el('span', 'backlink-page', bl.title || bl.path));
+      item.appendChild(el('span', 'backlink-line', `第 ${bl.line} 行`));
+      item.addEventListener('click', () => openFile(bl.path));
+      content.appendChild(item);
+    });
     panel.style.display = '';
     panel.classList.remove('collapsed');
   } catch (e) {
@@ -5123,36 +5236,37 @@ async function showDashboard() {
     $('dash-links').textContent = stats.link_count || 0;
 
     const recent = stats.recent_pages || [];
-    $('dash-recent').innerHTML =
-      recent.length === 0
-        ? '<p style="color:var(--c-muted)">暂无数据</p>'
-        : recent
-            .map(
-              (p) =>
-                `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
-          <span class="dash-recent-title">${p.title || p.path}</span>
-          <span class="dash-recent-time">${p.rel_path || p.path}</span>
-        </div>`,
-            )
-            .join('');
+    const recentEl = $('dash-recent');
+    recentEl.replaceChildren();
+    if (recent.length === 0) {
+      recentEl.appendChild(emptyNote('暂无数据'));
+    } else {
+      recent.forEach((p) => {
+        recentEl.appendChild(
+          dashItem(p.title || p.path, p.rel_path || p.path, () =>
+            openFile(p.rel_path || p.path, p.mount_id || ''),
+          ),
+        );
+      });
+    }
 
     // Load orphan pages
     try {
       const orphans = await API.getOrphans();
       const orphansEl = $('dash-orphans');
       if (orphansEl) {
-        orphansEl.innerHTML =
-          !orphans || orphans.length === 0
-            ? '<p style="color:var(--c-muted)">无孤立页面</p>'
-            : orphans
-                .map(
-                  (p) =>
-                    `<div class="dash-recent-item" onclick="openFile('${(p.rel_path || p.path).replace(/'/g, "\\'")}', '${p.mount_id || ''}')">
-              <span class="dash-recent-title">${p.title || p.path}</span>
-              <span class="dash-recent-time">孤立页面</span>
-            </div>`,
-                )
-                .join('');
+        orphansEl.replaceChildren();
+        if (!orphans || orphans.length === 0) {
+          orphansEl.appendChild(emptyNote('无孤立页面'));
+        } else {
+          orphans.forEach((p) => {
+            orphansEl.appendChild(
+              dashItem(p.title || p.path, '孤立页面', () =>
+                openFile(p.rel_path || p.path, p.mount_id || ''),
+              ),
+            );
+          });
+        }
       }
     } catch (_err) {}
   } catch (e) {
@@ -5527,7 +5641,7 @@ async function doSearch() {
   const query = $('search-input').value.trim();
   const resultsEl = $('search-results');
   if (!query) {
-    resultsEl.innerHTML = '';
+    resultsEl.replaceChildren();
     return;
   }
   try {
@@ -5550,22 +5664,30 @@ async function doSearch() {
     state.searchResults = [...localResults, ...serverResults];
 
     if (state.searchResults.length === 0) {
-      resultsEl.innerHTML = '<div style="padding:8px;color:var(--c-muted)">无结果</div>';
+      const emptyDiv = el('div', null, '无结果');
+      emptyDiv.style.padding = '8px';
+      emptyDiv.style.color = 'var(--c-muted)';
+      resultsEl.replaceChildren(emptyDiv);
       return;
     }
-    resultsEl.innerHTML = state.searchResults
-      .map((r, i) => {
-        const relPath = r.rel_path || r.path;
-        const displayTitle = r.title || r.filename;
-        const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
-        const snippet = (r.snippet || '').replace(/<[^>]*>/g, ''); // strip HTML tags from snippet
-        const localBadge = r._local ? ' 📁' : '';
-        return `<div class="search-result-item" data-idx="${i}">
-        <span class="result-path">${displayTitle}${localBadge} <small style="color:var(--c-muted)">${displayPath}</small></span>
-        <span class="result-snippet">${snippet}</span>
-      </div>`;
-      })
-      .join('');
+    resultsEl.replaceChildren();
+    state.searchResults.forEach((r, i) => {
+      const item = el('div', 'search-result-item');
+      item.dataset.idx = String(i);
+      const relPath = r.rel_path || r.path;
+      const displayTitle = r.title || r.filename;
+      const displayPath = relPath.length > 50 ? '...' + relPath.slice(-47) : relPath;
+      const snippet = (r.snippet || '').replace(/<[^>]*>/g, ''); // strip HTML tags from snippet
+      const localBadge = r._local ? ' 📁' : '';
+      const pathSpan = el('span', 'result-path');
+      const small = el('small', null, displayPath);
+      small.style.color = 'var(--c-muted)';
+      pathSpan.append(displayTitle + localBadge + ' ');
+      pathSpan.appendChild(small);
+      item.appendChild(pathSpan);
+      item.appendChild(el('span', 'result-snippet', snippet));
+      resultsEl.appendChild(item);
+    });
     // Use event delegation instead of inline onclick to avoid escaping issues
     resultsEl.onclick = (e) => {
       const item = e.target.closest('.search-result-item');
@@ -5586,7 +5708,7 @@ async function doSearch() {
       } else {
         openFile(relPath, mountId, query);
       }
-      resultsEl.innerHTML = '';
+      resultsEl.replaceChildren();
       $('search-input').value = '';
     };
   } catch (e) {
@@ -5728,23 +5850,22 @@ function collectFiles(entries, mountId, result) {
 }
 
 function renderRecentFiles() {
-  const el = $('recent-files');
-  if (state.recentFiles.length === 0) {
-    el.innerHTML = '';
-    return;
-  }
-  let html = '<h3 class="section-title">最近访问</h3><div class="recent-list">';
+  const listEl = $('recent-files');
+  listEl.replaceChildren();
+  if (state.recentFiles.length === 0) return;
+  listEl.appendChild(el('h3', 'section-title', '最近访问'));
+  const list = el('div', 'recent-list');
   for (const f of state.recentFiles) {
     if (f.name === '欢迎.md') continue;
     const accessTime = state.accessLog[f.mountId + ':' + f.path];
     const displayTime = accessTime ? formatTime(accessTime) : formatTime(f.modTime);
-    html += `<div class="recent-item" onclick="openFile('${f.path.replace(/'/g, "\\'")}', '${f.mountId}')">
-      <span class="recent-name">${f.name}</span>
-      <span class="recent-time">${displayTime}</span>
-    </div>`;
+    const item = el('div', 'recent-item');
+    item.appendChild(el('span', 'recent-name', f.name));
+    item.appendChild(el('span', 'recent-time', displayTime));
+    item.addEventListener('click', () => openFile(f.path, f.mountId));
+    list.appendChild(item);
   }
-  html += '</div>';
-  el.innerHTML = html;
+  listEl.appendChild(list);
 }
 
 function formatTime(ms) {
@@ -5781,9 +5902,12 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     showNewFile();
   }
-  // Escape: 关闭模态框/搜索结果
+  // Escape: 关闭模态框/搜索结果；退出 HTML 预览全屏
   if (e.key === 'Escape') {
     $('search-results').innerHTML = '';
     hideNewFile();
+    if (document.documentElement.classList.contains('html-preview-fullscreen')) {
+      toggleHtmlFullscreen();
+    }
   }
 });

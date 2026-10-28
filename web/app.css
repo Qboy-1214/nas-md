@@ -224,6 +224,11 @@ a:hover {
   flex-shrink: 0;
 }
 
+/* 拖拽调宽时禁用 width 过渡，否则侧边栏跟不上鼠标、卡住不动 */
+.sidebar.resizing {
+  transition: none;
+}
+
 .sidebar-resizer {
   width: 4px;
   cursor: col-resize;
@@ -233,6 +238,26 @@ a:hover {
   position: relative;
   z-index: 10;
   transition: background 0.15s ease;
+  user-select: none;
+  touch-action: none;
+}
+
+/* 左/右各扩展 10px 拖拽热区（视觉仍是 4px 细条）：松手后重新按下时鼠标常常已经飘出 4px 条，热区太窄会导致“再拖不动” */
+.sidebar-resizer::before,
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 10px;
+  height: 100%;
+}
+
+.sidebar-resizer::before {
+  left: -10px;
+}
+
+.sidebar-resizer::after {
+  right: -10px;
 }
 
 .sidebar-resizer:hover,
@@ -938,6 +963,16 @@ a:hover {
   height: 100%;
   min-height: 0;
   border: 0;
+}
+
+/* === HTML 预览全屏 === */
+html.html-preview-fullscreen .sidebar,
+html.html-preview-fullscreen .sidebar-resizer {
+  display: none;
+}
+
+html.html-preview-fullscreen .html-preview-host {
+  height: calc(100vh - var(--topbar-h));
 }
 .html-preview-error {
   padding: var(--s-md);
@@ -1757,6 +1792,11 @@ a:hover {
     height: 100%;
     transform: translateX(-100%);
     transition: transform 0.2s ease;
+  }
+
+  /* 移动端侧边栏为抽屉，宽度拖拽无意义 */
+  .sidebar-resizer {
+    display: none;
   }
 
   .sidebar.open {
