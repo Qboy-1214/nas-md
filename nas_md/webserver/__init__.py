@@ -981,6 +981,15 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
                     self._handle_create(mount_id, qs)
                     return
 
+            # POST /api/mounts/{id}/upload — upload raw file bytes
+            if path.startswith("/api/mounts/") and path.endswith("/upload"):
+                parts = path.split("/")
+                if len(parts) >= 4:
+                    mount_id = parts[3]
+                    qs = parse_qs(parsed.query)
+                    self._handle_upload(mount_id, qs)
+                    return
+
             # POST /api/mounts/{id}/changes — submit paragraph-level changes (version-driven)
             if path.startswith("/api/mounts/") and path.endswith("/changes"):
                 parts = path.split("/")
@@ -1049,6 +1058,94 @@ class MountHTTPHandler(SimpleHTTPRequestHandler):
         ts = datetime.now().strftime("_%Y%m%d%H%M%S")
         base, ext = os.path.splitext(name)
         return f"{base}{ts}{ext}"
+
+    @classmethod
+    def _unique_upload_name(cls, base_dir: str, name: str) -> str:
+        """Return a name that does not exist in base_dir."""
+        if not os.path.exists(os.path.join(base_dir, name)):
+            return name
+        candidate = cls._suggest_rename(base_dir, name)
+        _, ext = os.path.splitext(name)
+        timestamp = candidate[: len(candidate) - len(ext)] if ext else candidate
+        counter = 2
+        while os.path.exists(os.path.join(base_dir, candidate)):
+            candidate = f"{timestamp}_{counter}{ext}"
+            counter += 1
+        return candidate
+
+    def _handle_upload(self, mount_id: str, qs: dict):
+        """Upload raw file bytes into a directory, optionally auto-renaming duplicates."""
+        mount = self.mount_manager.find_mount(mount_id) if self.mount_manager else None
+        err = self._check_write_access(mount, mount_id)
+        if err:
+            return self._send_error(err, 404 if "not found" in err.lower() else 403)
+
+        parent_path = qs.get("path", ["/"])[0]
+        name = qs.get("name", [None])[0]
+        overwrite = qs.get("overwrite", ["0"])[0] == "1"
+        auto_rename = qs.get("autoRename", ["0"])[0] == "1"
+
+        if not name:
+            return self._send_error("Missing name parameter", 400)
+        name = name.strip()
+        if (
+            not name
+            or name.strip(".") == ""
+            or any(ch in '<>:"/\\|?*' or ord(ch) < 32 for ch in name)
+        ):
+            return self._send_error("Invalid name", 400)
+
+        abs_parent = self.mount_manager._safe_path(mount, parent_path)
+        if abs_parent is None:
+            return self._send_error("Path escapes mount root", 403)
+
+        try:
+            if os.path.exists(abs_parent) and not os.path.isdir(abs_parent):
+                return self._send_error("Destination is not a directory", 400)
+            os.makedirs(abs_parent, exist_ok=True)
+        except OSError as e:
+            logger.error("Upload directory creation failed: %s", e)
+            return self._send_error(f"Failed to create directory: {e}", 500)
+
+        target = os.path.join(abs_parent, name)
+        if os.path.exists(target):
+            if os.path.isdir(target):
+                if auto_rename:
+                    name = self._unique_upload_name(abs_parent, name)
+                    target = os.path.join(abs_parent, name)
+                else:
+                    return self._send_error("A directory with that name already exists", 409)
+            elif overwrite:
+                try:
+                    os.remove(target)
+                except OSError as e:
+                    logger.error("Upload overwrite failed: %s", e)
+                    return self._send_error(f"Failed to overwrite file: {e}", 500)
+            elif auto_rename:
+                name = self._unique_upload_name(abs_parent, name)
+                target = os.path.join(abs_parent, name)
+            else:
+                suggested = self._unique_upload_name(abs_parent, name)
+                return self._send_json({"error": "duplicate", "suggested_name": suggested}, 409)
+
+        try:
+            body = self._read_body()
+            with open(target, "wb") as f:
+                f.write(body)
+        except OSError as e:
+            logger.error("Upload write failed: %s", e)
+            return self._send_error(f"Failed to write file: {e}", 500)
+
+        rel_dir = parent_path if parent_path.startswith("/") else "/" + parent_path
+        rel_path = rel_dir.rstrip("/") + "/" + name
+        self._send_json(
+            {
+                "ok": True,
+                "name": name,
+                "path": rel_path,
+                "size": len(body),
+            }
+        )
 
     def _handle_create(self, mount_id: str, qs: dict):
         """Create a new file or folder in a mount point."""

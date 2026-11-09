@@ -599,6 +599,47 @@ a:hover {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
+.image-preview-modal {
+  width: min(92vw, 1200px);
+  max-height: 92vh;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-sm);
+}
+
+.image-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-md);
+}
+
+.image-preview-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--fw-semibold);
+}
+
+.image-preview-body {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  border-radius: var(--r-md);
+  background: var(--c-surface);
+}
+
+.image-preview-body img {
+  display: block;
+  max-width: 100%;
+  max-height: 82vh;
+  object-fit: contain;
+}
+
 .modal-header {
   font-size: var(--f-body-lg);
   font-weight: var(--fw-semibold);
@@ -2456,37 +2497,49 @@ html.html-preview-fullscreen .html-preview-host {
 
 /* Toolbar: inserted before .language-mermaid */
 .mme-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  padding: 3px;
   background: var(--c-surface, #f8f8f7);
+  background: color-mix(in srgb, var(--c-surface, #f8f8f7) 92%, transparent);
   border: 1px solid var(--c-border, #e5e3df);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  gap: 8px;
-  flex-wrap: wrap;
+  border-radius: 10px;
+  box-shadow:
+    0 5px 18px rgba(20, 20, 28, 0.1),
+    0 1px 3px rgba(20, 20, 28, 0.06);
+  gap: 2px;
+  flex-wrap: nowrap;
+  backdrop-filter: blur(10px);
 }
 
 /* Tabs: code / chart */
 .mme-tabs {
   display: flex;
-  gap: 2px;
-  background: var(--c-surface, #f0f0ee);
-  border-radius: 6px;
+  flex: 0 0 auto;
+  gap: 1px;
+  background: var(--c-hover, #efefed);
+  border-radius: 7px;
   padding: 2px;
 }
 
 .mme-tab {
-  padding: 4px 14px;
-  font-size: 12px;
+  padding: 3px 9px;
+  font-size: 11.5px;
   border: none;
   background: transparent;
   color: var(--c-text-muted, #999);
   cursor: pointer;
-  border-radius: 5px;
+  border-radius: 6px;
   transition: all 0.15s ease;
   font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
 }
 
 .mme-tab:hover {
@@ -2503,20 +2556,30 @@ html.html-preview-fullscreen .html-preview-host {
 .mme-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
+  flex: 0 0 auto;
+  gap: 1px;
+}
+
+.mme-zoom-group {
+  display: flex;
+  align-items: center;
+  gap: 0;
 }
 
 .mme-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 4px 8px;
-  font-size: 11px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 11.5px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--c-steel, #78787a);
   cursor: pointer;
-  border-radius: 5px;
+  border-radius: 7px;
   transition: all 0.15s ease;
   white-space: nowrap;
 }
@@ -2537,21 +2600,103 @@ html.html-preview-fullscreen .html-preview-host {
   border-color: rgba(39, 174, 96, 0.3);
 }
 
-.mme-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--c-border, #e5e3df);
-  margin: 0 4px;
+.mme-code-controls .mme-btn {
+  width: auto;
+  padding: 0 8px;
 }
 
-/* Chart target: the original mermaid element, styled to connect with toolbar */
+.mme-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--c-border, #e5e3df);
+  margin: 0 2px;
+}
+
+.mme-more {
+  position: relative;
+}
+
+.mme-more-trigger {
+  list-style: none;
+}
+
+.mme-more-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.mme-more-trigger::marker {
+  content: '';
+}
+
+.mme-more[open] .mme-more-trigger {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--c-text, #37352f);
+  border-color: var(--c-border, #e5e3df);
+}
+
+.mme-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 1px;
+  width: 168px;
+  padding: 4px;
+  background: var(--c-canvas, #ffffff);
+  border: 1px solid var(--c-border, #e5e3df);
+  border-radius: 9px;
+  box-shadow:
+    0 12px 30px rgba(20, 20, 28, 0.16),
+    0 2px 6px rgba(20, 20, 28, 0.08);
+}
+
+.mme-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-text, #37352f);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.mme-menu-item:hover,
+.mme-menu-item:focus-visible {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.mme-menu-item svg {
+  flex: 0 0 auto;
+}
+
+.mme-menu-sep {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--c-border, #e5e3df);
+}
+
+.mme-toolbar button:focus-visible,
+.mme-toolbar summary:focus-visible {
+  outline: 2px solid var(--c-primary, #5645d4);
+  outline-offset: 1px;
+}
+
+/* Chart target: the original mermaid element, with a compact floating toolbar */
 .mme-chart-target,
 .language-mermaid[data-mme-enhanced] {
-  margin-top: 38px !important;
+  margin-top: 0 !important;
   border: 1px solid var(--c-border, #e5e3df) !important;
-  border-top: none !important;
-  border-radius: 0 0 8px 8px !important;
-  padding: 16px !important;
+  border-radius: 10px !important;
+  padding: 52px 16px 16px !important;
   overflow: auto !important;
   max-height: 70vh !important;
   text-align: center !important;
@@ -2572,11 +2717,10 @@ html.html-preview-fullscreen .html-preview-host {
 /* Code area: appears after the mermaid block */
 .mme-code-area {
   margin: 0 !important;
-  padding: 16px !important;
+  padding: 52px 16px 16px !important;
   background: var(--c-bg-code, #f6f5f4) !important;
   border: 1px solid var(--c-border, #e5e3df) !important;
-  border-top: none !important;
-  border-radius: 0 0 8px 8px !important;
+  border-radius: 10px !important;
   font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace !important;
   font-size: 13px !important;
   line-height: 1.6 !important;
@@ -2656,6 +2800,39 @@ html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-btn:hover {
 
 .mme-toolbar[data-mme-theme='dark'] .mme-sep,
 html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-sep {
+  background: #45475a;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-more[open] .mme-more-trigger,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-more[open] .mme-more-trigger {
+  background: #313244;
+  border-color: #45475a;
+  color: #cdd6f4;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-menu,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-menu {
+  background: #181825;
+  border-color: #313244;
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.4),
+    0 2px 6px rgba(0, 0, 0, 0.28);
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-menu-item,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-menu-item {
+  color: #cdd6f4;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-menu-item:hover,
+.mme-toolbar[data-mme-theme='dark'] .mme-menu-item:focus-visible,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-menu-item:hover,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-menu-item:focus-visible {
+  background: #313244;
+}
+
+.mme-toolbar[data-mme-theme='dark'] .mme-menu-sep,
+html.dark .mme-toolbar:not([data-mme-theme='light']) .mme-menu-sep {
   background: #45475a;
 }
 
@@ -2753,18 +2930,41 @@ html.dark .mme-overlay-item:not([data-mme-theme='light']):fullscreen {
   max-width: none !important;
 }
 
-html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-toolbar {
+html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-toolbar,
+.mme-overlay-item:fullscreen .mme-toolbar {
+  position: relative !important;
+  top: auto !important;
+  right: auto !important;
   flex: 0 0 auto;
+  justify-content: space-between;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
   padding: 8px 16px !important;
+  background: var(--c-surface, #f6f5f4) !important;
+  border: none !important;
+  border-bottom: 1px solid var(--c-border, #e5e3df) !important;
   border-radius: 0 !important;
-  border-left: none !important;
-  border-right: none !important;
-  border-top: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
   pointer-events: auto !important;
+}
+
+html.mme-fullscreen-active
+  .mme-overlay-item[data-mme-fullscreen='true']
+  .mme-toolbar[data-mme-theme='dark'],
+html.dark.mme-fullscreen-active
+  .mme-overlay-item[data-mme-fullscreen='true']
+  .mme-toolbar:not([data-mme-theme='light']),
+.mme-overlay-item:fullscreen .mme-toolbar[data-mme-theme='dark'],
+html.dark .mme-overlay-item:fullscreen .mme-toolbar:not([data-mme-theme='light']) {
+  background: #181825 !important;
+  border-bottom-color: #313244 !important;
 }
 
 html.mme-fullscreen-active .mme-overlay-item[data-mme-fullscreen='true'] .mme-code-area {
   flex: 1 1 auto !important;
+  padding: 16px !important;
   max-height: none !important;
   border: none !important;
   border-radius: 0 !important;

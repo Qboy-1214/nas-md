@@ -47,6 +47,20 @@ function fullscreenButton(page) {
   return page.locator('.mme-overlay-item .mme-toolbar [data-action="toggleFullscreen"]');
 }
 
+async function clickMermaidMenuAction(
+  page,
+  action,
+  toolbar = page.locator('.mme-toolbar').first(),
+) {
+  const menu = toolbar.locator('details.mme-more').first();
+  if (!(await menu.evaluate((element) => element.open))) {
+    await menu.locator('summary').click();
+  }
+  const item = menu.locator(`[data-action="${action}"]`).first();
+  await expect(item).toBeVisible();
+  await item.click();
+}
+
 async function rejectNativeFullscreen(page) {
   await page.evaluate(() => {
     const overlay = document.querySelector('.mme-overlay-item');
@@ -112,7 +126,7 @@ test('Mermaid fallback fullscreen keeps the chart and existing controls usable',
       }),
     )
     .toBeGreaterThan(fullscreenScaleBeforeZoom);
-  await page.locator('[data-action="toggleTheme"]').first().click();
+  await clickMermaidMenuAction(page, 'toggleTheme');
   await expect(page.locator('.language-mermaid svg').last()).toHaveAttribute('style', /invert/);
 
   await page.keyboard.press('Escape');
@@ -122,6 +136,35 @@ test('Mermaid fallback fullscreen keeps the chart and existing controls usable',
   expect(await page.evaluate(() => window._vditor.getValue().replace(/\n+$/, ''))).toBe(
     originalValue,
   );
+});
+
+test('Mermaid toolbar floats compactly and keeps secondary actions in a menu', async ({ page }) => {
+  await prepareEditor(page);
+  const chart = page.locator('.language-mermaid[data-mme-enhanced]').first();
+  const toolbar = page.locator('.mme-toolbar').first();
+  const more = toolbar.locator('details.mme-more');
+
+  const chartBox = await chart.boundingBox();
+  const toolbarBox = await toolbar.boundingBox();
+  expect(chartBox).not.toBeNull();
+  expect(toolbarBox).not.toBeNull();
+  expect(toolbarBox.width).toBeLessThan(chartBox.width * 0.65);
+  expect(toolbarBox.y).toBeGreaterThanOrEqual(chartBox.y);
+  expect(toolbarBox.y).toBeLessThan(chartBox.y + 24);
+  expect(toolbarBox.x + toolbarBox.width).toBeGreaterThan(chartBox.x + chartBox.width - 24);
+
+  await expect(toolbar.locator('[data-action="zoomIn"]')).toBeVisible();
+  await expect(toolbar.locator('[data-action="toggleFullscreen"]')).toBeVisible();
+  await expect(more.locator('[data-action="toggleTheme"]')).toBeHidden();
+  await expect(more.locator('[data-action="downloadSVG"]')).toBeHidden();
+
+  await more.locator('summary').click();
+  await expect(more.locator('[data-action="toggleTheme"]')).toBeVisible();
+  await expect(more.locator('[data-action="downloadSVG"]')).toBeVisible();
+  await expect(more.locator('[data-action="downloadPNG"]')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(more.locator('[data-action="toggleTheme"]')).toBeHidden();
 });
 
 test('Mermaid native fullscreen owns a cloned chart and the active controls', async ({ page }) => {
@@ -691,7 +734,7 @@ test('Mermaid native fullscreen controls use the clone and restore the prior vie
     );
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
-  await page.locator('[data-action="toggleTheme"]').click();
+  await clickMermaidMenuAction(page, 'toggleTheme', page.locator('.mme-toolbar').first());
   await page.locator('[data-action="showCode"]').click();
   const sourceBefore = await page.evaluate(() => {
     const svg = document.querySelector('.language-mermaid[data-mme-enhanced] svg');
@@ -713,7 +756,7 @@ test('Mermaid native fullscreen controls use the clone and restore the prior vie
   await page.locator('[data-action="showChart"]').click();
   await expect(page.locator('.mme-fullscreen-chart')).toBeVisible();
   await expect(page.locator('.mme-fullscreen-chart svg')).toHaveCSS('opacity', '1');
-  await page.locator('[data-action="toggleTheme"]').click();
+  await clickMermaidMenuAction(page, 'toggleTheme', page.locator('.mme-toolbar').first());
   await page.locator('[data-action="zoomIn"]').click();
   await page.evaluate(() => {
     const sourceSvg = document.querySelector('.language-mermaid[data-mme-enhanced] svg');
@@ -738,7 +781,7 @@ test('Mermaid native fullscreen controls use the clone and restore the prior vie
     );
     document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
-  await page.locator('[data-action="downloadSVG"]').click();
+  await clickMermaidMenuAction(page, 'downloadSVG', page.locator('.mme-toolbar').first());
 
   expect(await page.evaluate(() => window.nativeDownloadSource)).toBe('fullscreen');
   expect(
@@ -1109,14 +1152,13 @@ test('Mermaid chart theme toggles background together with node colors', async (
   await prepareEditor(page);
   const chartTarget = page.locator('.language-mermaid[data-mme-enhanced]').first();
   const toolbar = page.locator('.mme-toolbar').first();
-  const themeToggle = toolbar.locator('.mme-btn[data-action="toggleTheme"]').first();
 
   // In light mode, chart background should match warm surface rather than pure white #ffffff
   const lightBg = await chartTarget.evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(lightBg).not.toBe('rgb(255, 255, 255)');
 
   // Toggle to dark mode
-  await themeToggle.click();
+  await clickMermaidMenuAction(page, 'toggleTheme', toolbar);
   await expect(chartTarget).toHaveAttribute('data-mme-theme', 'dark');
   await expect(toolbar).toHaveAttribute('data-mme-theme', 'dark');
 

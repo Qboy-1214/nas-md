@@ -177,6 +177,38 @@ const API = {
     }
   },
 
+  // 上传原始文件字节。返回 { ok, name, path, size }。
+  // 目标同名时默认返回 duplicate；autoRename=true 时由服务端自动选择新文件名。
+  async uploadFile(mountId, dirPath, name, blob, options = {}) {
+    const params = new URLSearchParams({
+      path: dirPath || '/',
+      name,
+      overwrite: options.overwrite ? '1' : '0',
+      autoRename: options.autoRename ? '1' : '0',
+    });
+    const r = await this.request(`/api/mounts/${mountId}/upload?${params.toString()}`, {
+      method: 'POST',
+      body: blob,
+    });
+    const response = await r.json().catch(() => null);
+    if (r.status === 409 && response && response.error === 'duplicate') {
+      const error = new Error('duplicate');
+      error.code = 'duplicate';
+      error.suggestedName = response.suggested_name || '';
+      throw error;
+    }
+    if (!r.ok) {
+      const message = response && typeof response.error === 'string' ? response.error : '上传失败';
+      const error = new Error(message);
+      error.status = r.status;
+      throw error;
+    }
+    if (!response || response.ok !== true) {
+      throw new Error('Invalid upload response');
+    }
+    return response;
+  },
+
   // 提交段落级changes（版本号驱动的协同编辑）
   // 调用 POST /api/mounts/{id}/changes?path=...
   // 返回 { applied, merged, newVersion, content } 或 null（失败时）

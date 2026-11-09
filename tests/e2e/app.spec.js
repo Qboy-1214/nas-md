@@ -205,6 +205,13 @@ test.describe('HTML 文件树', () => {
                 hasHtml: true,
               },
               { name: 'docs', path: '/docs', isDir: true, hasMd: false, hasHtml: true },
+              {
+                name: 'photo.png',
+                path: '/photo.png',
+                isDir: false,
+                hasMd: false,
+                hasHtml: false,
+              },
               { name: 'notes.txt', path: '/notes.txt', isDir: false, hasMd: false, hasHtml: false },
               {
                 name: '.hidden.HTML',
@@ -250,6 +257,9 @@ test.describe('HTML 文件树', () => {
 
     const tree = page.locator('#file-tree');
     await expect(tree.locator('.tree-item').filter({ hasText: 'index.HTML' })).toBeVisible();
+    await expect(
+      tree.locator('.tree-item.image-file').filter({ hasText: 'photo.png' }),
+    ).toBeVisible();
     await expect(tree.locator('.tree-folder[title="docs"]')).toBeVisible();
     await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
     await expect(tree.locator('.tree-item').filter({ hasText: '.hidden.HTML' })).toHaveCount(0);
@@ -292,7 +302,7 @@ test.describe('HTML 文件树', () => {
     await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
   });
 
-  test('本机目录保留隐藏的静态资源供预览加载', async ({ page }) => {
+  test('本机目录显示图片并在树中打开预览，同时保留非文档静态资源', async ({ page }) => {
     await page.goto('/admin');
     const mountId = await page.evaluate(() => {
       const makeFile = (name, relativePath, content, type) => {
@@ -325,9 +335,18 @@ test.describe('HTML 文件树', () => {
     expect(assets).toEqual({ css: 'text/css', image: 'image/png', text: 'text/plain' });
 
     const tree = page.locator('#file-tree');
+    await tree.locator('.mount-name').filter({ hasText: 'local-assets' }).click();
     await expect(tree.locator('.tree-item').filter({ hasText: 'site.css' })).toHaveCount(0);
-    await expect(tree.locator('.tree-item').filter({ hasText: 'photo.png' })).toHaveCount(0);
+    const photo = tree.locator('.tree-item.image-file').filter({ hasText: 'photo.png' });
+    await expect(photo).toBeVisible();
     await expect(tree.locator('.tree-item').filter({ hasText: 'notes.txt' })).toHaveCount(0);
+
+    await photo.click();
+    const preview = page.locator('.image-preview-overlay');
+    await expect(preview).toBeVisible();
+    await expect(preview.locator('img')).toHaveAttribute('src', /^blob:/);
+    await preview.getByRole('button', { name: '关闭图片预览' }).click();
+    await expect(preview).toHaveCount(0);
   });
 });
 

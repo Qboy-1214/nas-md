@@ -25,6 +25,11 @@ function _isLocalMount() {
  * directory into a normalized mount-relative path starting with '/'.
  */
 function _resolveImagePath(src, dir) {
+  try {
+    src = decodeURIComponent(src);
+  } catch (_e) {
+    /* keep malformed percent escapes as-is */
+  }
   let resolved;
   if (src.startsWith('/')) {
     resolved = src;
@@ -294,6 +299,165 @@ async function _loadLocalImage(img, fullPath) {
   }
 }
 
+const _IMAGE_EXTENSIONS = new Set([
+  '.apng',
+  '.avif',
+  '.bmp',
+  '.cur',
+  '.gif',
+  '.heic',
+  '.heif',
+  '.ico',
+  '.jfif',
+  '.jpeg',
+  '.jpg',
+  '.pjp',
+  '.pjpeg',
+  '.png',
+  '.svg',
+  '.tif',
+  '.tiff',
+  '.webp',
+]);
+
+const _IMAGE_MIME_EXTENSIONS = {
+  'image/avif': '.avif',
+  'image/bmp': '.bmp',
+  'image/gif': '.gif',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/svg+xml': '.svg',
+  'image/tiff': '.tiff',
+  'image/webp': '.webp',
+  'image/x-icon': '.ico',
+};
+
+function _fileExtension(name) {
+  const clean = String(name || '');
+  const dot = clean.lastIndexOf('.');
+  return dot >= 0 ? clean.slice(dot).toLowerCase() : '';
+}
+
+function _isImageFile(file) {
+  if (!file) return false;
+  if (file.type && file.type.startsWith('image/')) return true;
+  return _IMAGE_EXTENSIONS.has(_fileExtension(file.name));
+}
+
+function _editorImageFileName(file) {
+  const sanitized = sanitizeUploadFileName(file.name);
+  let ext = _fileExtension(sanitized);
+  if (!/^\.[a-z0-9]{1,10}$/i.test(ext)) {
+    ext = _IMAGE_MIME_EXTENSIONS[file.type] || '.png';
+  }
+  let stem = sanitized;
+  if (ext && stem.toLowerCase().endsWith(ext)) {
+    stem = stem.slice(0, -ext.length);
+  }
+  if (!stem) stem = `image-${Date.now()}`;
+  return stem + ext;
+}
+
+function _encodeMarkdownImagePath(path) {
+  return String(path)
+    .split('/')
+    .map((segment) => encodeURIComponent(segment).replace(/\(/g, '%28').replace(/\)/g, '%29'))
+    .join('/');
+}
+
+function _escapeMarkdownAlt(text) {
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/\r?\n/g, ' ');
+}
+
+function _currentMarkdownDir() {
+  if (!_currentRelPath) return '/';
+  const rel = String(_currentRelPath).replace(/\\/g, '/');
+  const index = rel.lastIndexOf('/');
+  return index >= 0 ? rel.slice(0, index + 1) : '/';
+}
+
+function _currentImagesDir() {
+  const dir = _currentMarkdownDir().replace(/\/+$/, '');
+  return (dir ? dir : '') + '/imgs';
+}
+
+function _restoreEditorSelectionForInsert() {
+  const mode = _vditor?.getCurrentMode?.();
+  const editorState = _vditor?.vditor?.[mode];
+  const editorEl = editorState?.element;
+  if (!editorEl) return;
+
+  if (typeof editorEl.focus === 'function') editorEl.focus();
+
+  const selection = window.getSelection();
+  if (!selection) return;
+  const savedRange = editorState.range;
+  if (
+    savedRange &&
+    editorEl.contains(savedRange.startContainer) &&
+    editorEl.contains(savedRange.endContainer)
+  ) {
+    selection.removeAllRanges();
+    selection.addRange(savedRange);
+    return;
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(editorEl);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+async function _handleEditorImageUpload(files) {
+  if (window.state && window.state.remoteFile) {
+    return '远程文件模式暂不支持上传图片';
+  }
+  if (!_currentMountId || !_currentRelPath) {
+    return '请先打开一个 Markdown 文件';
+  }
+  const mount = window.state?.mounts?.find((m) => m.id === _currentMountId);
+  if (!mount) return '当前挂载点不存在';
+  if (mount.readonly) return '当前文件不允许修改';
+  if (mount._local && (!window.state?.localMounts?.[_currentMountId]?.handle || mount._fallback)) {
+    return '当前本机挂载为只读，无法上传图片';
+  }
+
+  const images = Array.from(files || []).filter(_isImageFile);
+  if (images.length === 0) return '仅支持图片文件';
+
+  const imageDir = _currentImagesDir();
+  const markdownLines = [];
+  const tip = _vditor?.vditor?.tip;
+  try {
+    if (typeof tip?.show === 'function') tip.show(`正在上传 ${images.length} 张图片…`);
+    for (const file of images) {
+      const uploaded = await uploadFileToMount(_currentMountId, imageDir, file, {
+        fileName: _editorImageFileName(file),
+        autoRename: true,
+      });
+      const linkPath = 'imgs/' + _encodeMarkdownImagePath(uploaded.name);
+      markdownLines.push(`![${_escapeMarkdownAlt(uploaded.name)}](${linkPath})`);
+    }
+    _restoreEditorSelectionForInsert();
+    _vditor.insertMD(markdownLines.join('\n') + '\n');
+    if (typeof onEditorInput === 'function') onEditorInput();
+    if (typeof refreshTreeAfterUpload === 'function') refreshTreeAfterUpload(_currentMountId);
+    return `已上传 ${images.length} 张图片`;
+  } catch (e) {
+    console.error('[image-upload] failed:', e);
+    return e.message || '图片上传失败';
+  } finally {
+    if (typeof tip?.hide === 'function') tip.hide();
+  }
+}
+
 // Adjust mermaid node rect heights to fit expanded content
 function fixMermaidNodeHeights() {
   const vditorEl = document.getElementById('vditor');
@@ -543,6 +707,7 @@ function initEditor(content, mode, readonly, confirmedContent) {
       'italic',
       'strike',
       'link',
+      'upload',
       '|',
       'list',
       'ordered-list',
@@ -638,7 +803,12 @@ function initEditor(content, mode, readonly, confirmedContent) {
       ],
     },
     cache: { enable: false },
-    upload: { url: '', linkToImgUrl: '' },
+    upload: {
+      handler: _handleEditorImageUpload,
+      multiple: true,
+      accept:
+        'image/*,.apng,.avif,.bmp,.gif,.ico,.jfif,.jpeg,.jpg,.pjpeg,.png,.svg,.tif,.tiff,.webp',
+    },
     after: () => {
       if (_editorGeneration !== editorGeneration) return;
       const editorContent = _vditor.getValue();

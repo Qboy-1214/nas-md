@@ -13,6 +13,7 @@
   var _fullscreenState = null;
   var _fullscreenGeneration = 0;
   var _fullscreenListenersInstalled = false;
+  var _toolbarListenersInstalled = false;
 
   function removeLegacyMermaidUI() {
     var vditor = document.getElementById('vditor');
@@ -29,6 +30,7 @@
   function initOverlayLayer() {
     removeLegacyMermaidUI();
     installFullscreenListeners();
+    installToolbarMenuListeners();
     var vditorContainer =
       document.querySelector('.vditor-content') || document.querySelector('.vditor');
     if (_overlayLayer) {
@@ -67,6 +69,38 @@
     requestAnimationFrame(loop);
 
     return _overlayLayer;
+  }
+
+  function installToolbarMenuListeners() {
+    if (_toolbarListenersInstalled) return;
+    _toolbarListenersInstalled = true;
+
+    document.addEventListener(
+      'pointerdown',
+      function (event) {
+        document.querySelectorAll('.mme-toolbar details.mme-more[open]').forEach(function (menu) {
+          if (!menu.contains(event.target)) menu.open = false;
+        });
+      },
+      true,
+    );
+
+    document.addEventListener(
+      'keydown',
+      function (event) {
+        if (event.key !== 'Escape') return;
+        var openMenus = document.querySelectorAll('.mme-toolbar details.mme-more[open]');
+        if (!openMenus.length) return;
+        openMenus.forEach(function (menu) {
+          menu.open = false;
+        });
+        var trigger = openMenus[openMenus.length - 1].querySelector('summary');
+        if (trigger) trigger.focus();
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      true,
+    );
   }
 
   // Vditor IR snapshots include rendered Mermaid SVGs. Keep those snapshots
@@ -191,9 +225,7 @@
 
       var targetRect = state.targetEl.getBoundingClientRect();
       var layerRect = _overlayLayer.getBoundingClientRect();
-      var toolbar = ui.querySelector('.mme-toolbar');
-      var toolbarHeight = toolbar ? toolbar.offsetHeight : 38;
-      ui.style.top = targetRect.top - layerRect.top - toolbarHeight + 'px';
+      ui.style.top = targetRect.top - layerRect.top + 'px';
       ui.style.left = targetRect.left - layerRect.left + 'px';
       ui.style.width = targetRect.width + 'px';
     });
@@ -691,47 +723,60 @@
 
   function buildToolbarHTML() {
     return (
-      '<div class="mme-tabs">' +
-      '<button class="mme-tab" data-action="showCode">代码</button>' +
-      '<button class="mme-tab active" data-action="showChart">图表</button>' +
+      '<div class="mme-tabs" role="group" aria-label="Mermaid 视图">' +
+      '<button class="mme-tab" data-action="showCode" title="查看 Mermaid 源码">代码</button>' +
+      '<button class="mme-tab active" data-action="showChart" title="查看图表">图表</button>' +
       '</div>' +
       '<div class="mme-controls mme-chart-controls">' +
-      '<button class="mme-btn" data-action="toggleTheme" title="切换亮色/暗色">' +
-      '<svg class="mme-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>' +
-      '<svg class="mme-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>' +
-      '</button>' +
-      '<button class="mme-btn" data-action="zoomIn" title="放大">' +
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>' +
-      '</button>' +
-      '<button class="mme-btn" data-action="zoomOut" title="缩小">' +
+      '<div class="mme-zoom-group" role="group" aria-label="缩放">' +
+      '<button class="mme-btn" data-action="zoomOut" title="缩小" aria-label="缩小">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>' +
       '</button>' +
-      '<div class="mme-sep"></div>' +
-      '<button class="mme-btn" data-action="downloadSVG" title="下载 SVG">' +
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>SVG</span>' +
+      '<button class="mme-btn" data-action="zoomIn" title="放大" aria-label="放大">' +
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>' +
       '</button>' +
-      '<button class="mme-btn" data-action="downloadPNG" title="下载 PNG">' +
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>PNG</span>' +
+      '</div>' +
+      '<span class="mme-sep" aria-hidden="true"></span>' +
+      '<details class="mme-more">' +
+      '<summary class="mme-btn mme-more-trigger" title="主题与导出" aria-label="主题与导出" aria-haspopup="menu">' +
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>' +
+      '</summary>' +
+      '<div class="mme-menu" role="menu" aria-label="Mermaid 更多操作">' +
+      '<button class="mme-menu-item" data-action="toggleTheme" role="menuitem" title="切换亮色/暗色">' +
+      '<svg class="mme-icon-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>' +
+      '<svg class="mme-icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>' +
+      '<span>切换亮色/暗色</span>' +
+      '</button>' +
+      '<div class="mme-menu-sep" role="separator"></div>' +
+      '<button class="mme-menu-item" data-action="downloadSVG" role="menuitem" title="下载 SVG">' +
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>下载 SVG</span>' +
+      '</button>' +
+      '<button class="mme-menu-item" data-action="downloadPNG" role="menuitem" title="下载 PNG">' +
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>下载 PNG</span>' +
+      '</button>' +
+      '</div>' +
+      '</details>' +
+      '</div>' +
+      '<div class="mme-controls mme-code-controls" style="display:none">' +
+      '<button class="mme-btn" data-action="copyCode" title="复制代码">' +
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>复制</span>' +
       '</button>' +
       '</div>' +
       '<button class="mme-btn mme-fullscreen-control" data-action="toggleFullscreen" title="全屏查看" aria-label="全屏查看">' +
       '<svg class="mme-icon-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>' +
       '<svg class="mme-icon-exit-fullscreen" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>' +
-      '</button>' +
-      '<div class="mme-controls mme-code-controls" style="display:none">' +
-      '<button class="mme-btn" data-action="copyCode" title="复制代码">' +
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>复制</span>' +
-      '</button>' +
-      '</div>'
+      '</button>'
     );
   }
 
   function bindEvents(id, toolbar, chartEl, codeEl) {
     toolbar.addEventListener('click', function (e) {
+      e.stopPropagation();
       var btn = e.target.closest('[data-action]');
       if (!btn) return;
       e.preventDefault();
-      e.stopPropagation();
+      var menu = btn.closest('details.mme-more');
+      if (menu) menu.open = false;
       handleAction(id, btn.getAttribute('data-action'), toolbar, chartEl, codeEl, btn);
     });
 
@@ -883,6 +928,9 @@
     state.mode = mode;
     var chartCtrls = toolbar.querySelector('.mme-chart-controls');
     var codeCtrls = toolbar.querySelector('.mme-code-controls');
+    toolbar.querySelectorAll('details.mme-more[open]').forEach(function (menu) {
+      menu.open = false;
+    });
 
     toolbar.querySelectorAll('.mme-tab').forEach(function (t) {
       t.classList.toggle('active', t.getAttribute('data-action') === 'show' + capitalize(mode));

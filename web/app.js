@@ -11,6 +11,56 @@ function isDisplayableFile(path) {
   return path.toLowerCase().endsWith('.md') || isHtmlFile(path);
 }
 
+const _TREE_IMAGE_EXTENSIONS = new Set([
+  '.apng',
+  '.avif',
+  '.bmp',
+  '.cur',
+  '.gif',
+  '.heic',
+  '.heif',
+  '.ico',
+  '.jfif',
+  '.jpeg',
+  '.jpg',
+  '.pjp',
+  '.pjpeg',
+  '.png',
+  '.svg',
+  '.tif',
+  '.tiff',
+  '.webp',
+]);
+
+function isImageFile(path) {
+  const clean = String(path || '').toLowerCase();
+  const dot = clean.lastIndexOf('.');
+  return dot >= 0 && _TREE_IMAGE_EXTENSIONS.has(clean.slice(dot));
+}
+
+function isTreeFile(path) {
+  return isDisplayableFile(path) || isImageFile(path);
+}
+
+function treeContainsImage(entry) {
+  if (!entry) return false;
+  if (!entry.isDir) return isImageFile(entry.name);
+  return (entry.children || []).some(treeContainsImage);
+}
+
+function isVisibleTreeEntry(entry) {
+  if (!entry || entry.name.startsWith('.')) return false;
+  if (!entry.isDir) return isTreeFile(entry.name);
+  return !!(
+    entry.hasMd ||
+    entry.hasHtml ||
+    entry.hasImages ||
+    entry.isEmpty ||
+    entry.hasEmptyDir ||
+    treeContainsImage(entry)
+  );
+}
+
 // === DOM 构建工具（替代 innerHTML 模板：数据一律经 textContent / 属性赋值注入，防 HTML 注入） ===
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -626,6 +676,7 @@ async function readLocalDir(dirHandle, parentPath) {
       const subChildren = [];
       let hasMd = false;
       let hasHtml = false;
+      let hasImages = false;
       let isEmpty = true;
       let hasEmptyDir = false;
       try {
@@ -634,31 +685,34 @@ async function readLocalDir(dirHandle, parentPath) {
         subChildren.push(...(subResult.children || []));
         hasMd = subResult.hasMd || false;
         hasHtml = subResult.hasHtml || false;
+        hasImages = subResult.hasImages || false;
         isEmpty = subResult.isEmpty || false;
         hasEmptyDir = subResult.hasEmptyDir || false;
       } catch (_e) {
         /* skip unreadable dirs */
       }
-      // Include dirs that contain displayable files, are empty, or contain empty dirs
-      if (hasMd || hasHtml || isEmpty || hasEmptyDir) {
+      // Include dirs that contain visible files, are empty, or contain empty dirs.
+      if (hasMd || hasHtml || hasImages || isEmpty || hasEmptyDir) {
         children.push({
           name: entry.name,
           path: entryPath,
           isDir: true,
           hasMd,
           hasHtml,
+          hasImages,
           isEmpty,
           hasEmptyDir,
           children: subChildren,
         });
       }
-    } else if (entry.kind === 'file' && isDisplayableFile(entry.name)) {
+    } else if (entry.kind === 'file' && isTreeFile(entry.name)) {
       children.push({
         name: entry.name,
         path: entryPath,
         isDir: false,
         hasMd: entry.name.toLowerCase().endsWith('.md'),
         hasHtml: isHtmlFile(entry.name),
+        hasImages: isImageFile(entry.name),
         size: 0,
         modTime: 0,
       });
@@ -672,6 +726,7 @@ async function readLocalDir(dirHandle, parentPath) {
   });
   const hasMd = children.some((c) => c.hasMd);
   const hasHtml = children.some((c) => c.hasHtml);
+  const hasImages = children.some((c) => c.hasImages);
   const isEmpty = !hasRawEntries;
   const hasEmptyDir = children.some((c) => c.isDir && (c.isEmpty || c.hasEmptyDir));
   return {
@@ -681,6 +736,7 @@ async function readLocalDir(dirHandle, parentPath) {
     children,
     hasMd,
     hasHtml,
+    hasImages,
     isEmpty,
     hasEmptyDir,
   };
@@ -816,6 +872,7 @@ function onDirPicked(event) {
     children: [],
     hasMd: false,
     hasHtml: false,
+    hasImages: false,
   };
   const dirMap = { '/': root };
   const fileMap = {};
@@ -826,11 +883,12 @@ function onDirPicked(event) {
     const parts = relPath.split('/');
     const fileName = parts[parts.length - 1];
     // Keep every selected file available to the isolated HTML preview while
-    // exposing only Markdown and HTML documents in the navigation tree.
+    // exposing documents and images in the navigation tree.
     fileMap['/' + parts.slice(1).join('/')] = file;
-    if (!isDisplayableFile(fileName)) continue;
+    if (!isTreeFile(fileName)) continue;
     const hasMd = fileName.toLowerCase().endsWith('.md');
     const hasHtml = isHtmlFile(fileName);
+    const hasImages = isImageFile(fileName);
 
     // Save into fileMap and ensure all parent directories exist in the tree
     let currentPath = '';
@@ -845,6 +903,7 @@ function onDirPicked(event) {
           children: [],
           hasMd: false,
           hasHtml: false,
+          hasImages: false,
         };
         dirMap[currentPath] = dirEntry;
         const parent = dirMap[parentPath] || root;
@@ -861,21 +920,24 @@ function onDirPicked(event) {
       isDir: false,
       hasMd,
       hasHtml,
+      hasImages,
       size: file.size,
       modTime: file.lastModified,
     });
-    // Mark all ancestors as containing Markdown or HTML
+    // Mark all ancestors as containing documents or images.
     let markPath = currentPath;
     while (markPath) {
       if (dirMap[markPath]) {
         if (hasMd) dirMap[markPath].hasMd = true;
         if (hasHtml) dirMap[markPath].hasHtml = true;
+        if (hasImages) dirMap[markPath].hasImages = true;
       }
       const idx = markPath.lastIndexOf('/');
       markPath = idx > 0 ? markPath.substring(0, idx) : '';
     }
     if (hasMd) root.hasMd = true;
     if (hasHtml) root.hasHtml = true;
+    if (hasImages) root.hasImages = true;
   }
 
   // Sort children: dirs first, then files
@@ -1025,6 +1087,13 @@ async function loadTree(mountId, path, force = false) {
   }
 }
 
+function refreshTreeAfterUpload(mountId) {
+  if (!mountId || !state.treeData) return Promise.resolve();
+  return loadTree(mountId, '/', true)
+    .then(() => renderSidebar())
+    .catch(() => {});
+}
+
 async function getLocalDirHandle(rootHandle, path) {
   if (path === '/') return rootHandle;
   const parts = path.split('/').filter(Boolean);
@@ -1171,6 +1240,7 @@ function renderSidebar() {
   // SVG icon templates
   const svgFolder = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
   const svgFile = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+  const svgImage = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
   const svgLock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
 
   // Built-in files shown at root level (not nested under a mount point)
@@ -1179,14 +1249,7 @@ function renderSidebar() {
   const builtinEntries = builtinRoot?.children || null;
   if (builtinEntries) {
     const items = builtinEntries
-      .filter(
-        (e) =>
-          !e.name.startsWith('.') &&
-          e.name !== 'mounts.json' &&
-          (e.isDir
-            ? e.hasMd || e.hasHtml || e.isEmpty || e.hasEmptyDir
-            : isDisplayableFile(e.name)),
-      )
+      .filter((e) => !e.name.startsWith('.') && e.name !== 'mounts.json' && isVisibleTreeEntry(e))
       .sort((a, b) => {
         if (a.isDir && !b.isDir) return -1;
         if (!a.isDir && b.isDir) return 1;
@@ -1195,9 +1258,13 @@ function renderSidebar() {
     for (const e of items) {
       const fullPath = e.path;
       const isActive = state.currentPath === fullPath && state.currentMountId === builtin.id;
-      const icon = e.isDir ? svgFolder : svgFile;
-      const cls = `tree-item builtin-file ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
-      tree.innerHTML += `<div class="${cls}" onclick="openFile('${fullPath}','${builtin.id}')">
+      const isImage = !e.isDir && isImageFile(e.name);
+      const icon = e.isDir ? svgFolder : isImage ? svgImage : svgFile;
+      const cls = `tree-item builtin-file ${e.isDir ? 'folder' : isImage ? 'image-file' : ''} ${isActive ? 'active' : ''}`;
+      const openAction = isImage
+        ? `previewTreeImage('${fullPath}','${builtin.id}')`
+        : `openFile('${fullPath}','${builtin.id}')`;
+      tree.innerHTML += `<div class="${cls}" onclick="${openAction}" title="${isImage ? '预览图片' : ''}">
         <span class="tree-icon">${icon}</span>
         <span title="${e.name}">${e.name}</span>
         <span class="mount-builtin-badge" title="内置只读">${svgLock}</span>
@@ -1238,24 +1305,16 @@ function renderSidebar() {
 }
 
 function renderEntries(entries, mountId, _parentPath) {
-  const items = entries
-    .filter((e) => {
-      if (e.name.startsWith('.')) return false;
-      // Show Markdown and HTML files, plus dirs that contain them or are empty.
-      if (!e.isDir && isDisplayableFile(e.name)) return true;
-      if (e.isDir && (e.hasMd || e.hasHtml || e.isEmpty || e.hasEmptyDir)) return true;
-      // Hide unsupported files and directories without displayable content.
-      return false;
-    })
-    .sort((a, b) => {
-      if (a.isDir && !b.isDir) return -1;
-      if (!a.isDir && b.isDir) return 1;
-      return a.name.localeCompare(b.name);
-    });
+  const items = entries.filter(isVisibleTreeEntry).sort((a, b) => {
+    if (a.isDir && !b.isDir) return -1;
+    if (!a.isDir && b.isDir) return 1;
+    return a.name.localeCompare(b.name);
+  });
 
   // SVG icon templates
   const svgFolder = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
   const svgFile = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+  const svgImage = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-steel)" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`;
 
   const mount = state.mounts.find((m) => m.id === mountId);
   const canWrite = mount && !mount.readonly;
@@ -1264,8 +1323,9 @@ function renderEntries(entries, mountId, _parentPath) {
     .map((e) => {
       const fullPath = e.path;
       const isActive = state.currentPath === fullPath && state.currentMountId === mountId;
-      const icon = e.isDir ? svgFolder : svgFile;
-      const cls = `tree-item ${e.isDir ? 'folder' : ''} ${isActive ? 'active' : ''}`;
+      const isImage = !e.isDir && isImageFile(e.name);
+      const icon = e.isDir ? svgFolder : isImage ? svgImage : svgFile;
+      const cls = `tree-item ${e.isDir ? 'folder' : isImage ? 'image-file' : ''} ${isActive ? 'active' : ''}`;
 
       if (e.isDir) {
         const dirKey = `${mountId}:${fullPath}`;
@@ -1310,16 +1370,85 @@ function renderEntries(entries, mountId, _parentPath) {
         return html;
       }
 
-      // MD file: draggable if writable
+      // Document or image file: draggable if writable.
       const dragAttr = canWrite
         ? `draggable="true" data-drag-mount="${mountId}" data-drag-path="${fullPath}" data-drag-isdir="false"`
         : '';
-      return `<div class="${cls}" onclick="openFile('${fullPath}','${mountId}')" ${dragAttr}>
+      const openAction = isImage
+        ? `previewTreeImage('${fullPath}','${mountId}')`
+        : `openFile('${fullPath}','${mountId}')`;
+      return `<div class="${cls}" onclick="${openAction}" ${dragAttr} title="${isImage ? '预览图片' : ''}">
       <span class="tree-icon">${icon}</span>
       <span title="${e.name}">${e.name}</span>
     </div>`;
     })
     .join('');
+}
+
+async function previewTreeImage(path, mountId) {
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount) {
+    showToast('挂载点不存在');
+    return;
+  }
+
+  let src;
+  let blobUrl = '';
+  try {
+    if (mount._local && state.localMounts[mountId]) {
+      const localMount = state.localMounts[mountId];
+      let file = localMount.fileMap?.[path];
+      if (!file && localMount.handle) {
+        const handle = await getLocalFileHandle(localMount.handle, path);
+        if (handle) file = await handle.getFile();
+      }
+      if (!file) throw new Error('图片文件不存在');
+      blobUrl = URL.createObjectURL(file);
+      src = blobUrl;
+    } else {
+      src = API.previewResourceUrl(mountId, path);
+    }
+  } catch (e) {
+    console.error('Image preview failed:', e);
+    showToast('图片预览失败');
+    return;
+  }
+
+  document.querySelectorAll('.image-preview-overlay').forEach((node) => node.remove());
+
+  const overlay = el('div', 'modal-overlay active image-preview-overlay');
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  const box = el('div', 'modal-box image-preview-modal');
+  const header = el('div', 'image-preview-header');
+  const title = el('div', 'image-preview-title', path.substring(path.lastIndexOf('/') + 1));
+  const closeBtn = el('button', 'modal-close', '×');
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', '关闭图片预览');
+  header.append(title, closeBtn);
+
+  const body = el('div', 'image-preview-body');
+  const img = el('img');
+  img.alt = title.textContent;
+  img.src = src;
+  body.appendChild(img);
+  box.append(header, body);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKeyDown);
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+  };
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape') close();
+  };
+  closeBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener('keydown', onKeyDown);
 }
 
 // === 文件操作 ===
@@ -1503,12 +1632,6 @@ function setupDragDrop() {
     // Handle external file drop (from OS file manager)
     if (!_dragData && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const files = Array.from(e.dataTransfer.files);
-      // Check all files are supported (.md / .html / .htm)
-      const unsupported = files.find((f) => !isDisplayableFile(f.name));
-      if (unsupported) {
-        showToast('请放入受支持的文件格式（仅支持 .md / .html / .htm 文件）');
-        return;
-      }
       const destMount = state.mounts.find((m) => m.id === destMountId);
       if (!destMount || destMount.readonly) {
         showToast('该目录不可写');
@@ -1517,8 +1640,39 @@ function setupDragDrop() {
       state._fileOpInProgress = true;
       try {
         for (const file of files) {
-          const content = await file.text();
           const fileName = file.name;
+          const isMarkdown = /\.(md|markdown)$/i.test(fileName);
+          if (!isMarkdown) {
+            let uploadName = sanitizeUploadFileName(fileName);
+            if (!uploadName) {
+              showToast('文件名无效');
+              continue;
+            }
+            let overwrite = false;
+            while (true) {
+              try {
+                const uploaded = await uploadFileToMount(destMountId, destPath, file, {
+                  fileName: uploadName,
+                  overwrite,
+                });
+                showToast(`已导入: ${uploaded.name}`);
+                break;
+              } catch (err) {
+                if (err.code !== 'duplicate') throw err;
+                const suggested = err.suggestedName || suggestRename(uploadName);
+                const choice = await showDuplicateDialog(suggested);
+                if (choice === 'cancel') break;
+                if (choice === 'rename') {
+                  uploadName = suggested;
+                  overwrite = false;
+                  continue;
+                }
+                overwrite = true;
+              }
+            }
+            continue;
+          }
+          const content = await file.text();
           if (destMount._local && state.localMounts[destMountId]) {
             // Write to local mount
             if (!(await ensureWritePermission(destMountId))) return;
@@ -2124,6 +2278,102 @@ async function writeLocalFileBytes(mountId, path, arrayBuffer) {
   const writable = await fileHandle.createWritable();
   await writable.write(arrayBuffer);
   await writable.close();
+}
+
+function sanitizeUploadFileName(name) {
+  let base = String(name || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    .trim();
+  base = base.replace(/[\p{Cc}<>:"|?*]/gu, '-');
+  if (!base || /^\.+$/.test(base)) return '';
+  return base;
+}
+
+function joinMountPath(dirPath, name) {
+  const cleanDir = String(dirPath || '/')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  return (cleanDir ? cleanDir : '') + '/' + name;
+}
+
+async function getOrCreateLocalDirHandle(rootHandle, path) {
+  let current = rootHandle;
+  for (const part of String(path || '/').split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') throw new Error('无效的上传目录');
+    current = await current.getDirectoryHandle(part, { create: true });
+  }
+  return current;
+}
+
+async function chooseLocalUploadName(dirHandle, fileName) {
+  if (!(await localEntryExists(dirHandle, fileName, false))) return fileName;
+  const suggested = suggestRename(fileName);
+  if (!(await localEntryExists(dirHandle, suggested, false))) return suggested;
+  const dot = suggested.lastIndexOf('.');
+  const base = dot > 0 ? suggested.slice(0, dot) : suggested;
+  const ext = dot > 0 ? suggested.slice(dot) : '';
+  let counter = 2;
+  let candidate = `${base}_${counter}${ext}`;
+  while (await localEntryExists(dirHandle, candidate, false)) {
+    counter += 1;
+    candidate = `${base}_${counter}${ext}`;
+  }
+  return candidate;
+}
+
+/**
+ * Upload a File/Blob into a mount directory.
+ * Returns { ok, name, path, size }. Throws an error with code="duplicate"
+ * and suggestedName when the target exists and neither overwrite nor autoRename is set.
+ */
+async function uploadFileToMount(mountId, dirPath, file, options = {}) {
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount) throw new Error('挂载点不存在');
+  if (mount.readonly) throw new Error('该目录不可写');
+
+  const initialName = sanitizeUploadFileName(options.fileName || file.name);
+  if (!initialName) throw new Error('文件名无效');
+
+  if (mount._local && state.localMounts[mountId]) {
+    const localMount = state.localMounts[mountId];
+    if (mount._fallback || !localMount.handle) {
+      throw new Error('该本机挂载为只读，无法上传文件');
+    }
+    if (!(await ensureWritePermission(mountId))) throw new Error('权限不足');
+    const dirHandle = await getOrCreateLocalDirHandle(localMount.handle, dirPath);
+    let destName = initialName;
+    if (await localEntryExists(dirHandle, destName, false)) {
+      if (options.overwrite) {
+        await dirHandle.removeEntry(destName);
+      } else if (options.autoRename) {
+        destName = await chooseLocalUploadName(dirHandle, destName);
+      } else {
+        const duplicate = new Error('目标位置已存在同名文件');
+        duplicate.code = 'duplicate';
+        duplicate.suggestedName = await chooseLocalUploadName(dirHandle, destName);
+        throw duplicate;
+      }
+    }
+    const bytes = await file.arrayBuffer();
+    const fileHandle = await dirHandle.getFileHandle(destName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(bytes);
+    await writable.close();
+    return {
+      ok: true,
+      name: destName,
+      path: joinMountPath(dirPath, destName),
+      size: bytes.byteLength,
+    };
+  }
+
+  return await API.uploadFile(mountId, dirPath, initialName, file, {
+    overwrite: !!options.overwrite,
+    autoRename: !!options.autoRename,
+  });
 }
 
 // Helper: ensure a local directory exists (create if needed), returns dir handle

@@ -134,6 +134,27 @@ def _post(
         return e.code, e.read().decode("utf-8", errors="replace")
 
 
+def _post_raw(
+    url: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+    headers: dict | None = None,
+) -> tuple[int, str]:
+    """Send POST request with a raw body, return (status, body_text)."""
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", content_type)
+        if headers:
+            for k, v in headers.items():
+                req.add_header(k, v)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", errors="replace")
+
+
 def _put(url: str, data: bytes = b"", headers: dict | None = None) -> tuple[int, str]:
     """Send PUT request, return (status, body_text)."""
     import urllib.request
@@ -1714,6 +1735,82 @@ class TestWriteFileAPI:
             timeout=5,
         ) as resp:
             assert resp.read() == payload
+
+    def test_upload_creates_imgs_directory_and_auto_renames(
+        self, writable_server_url, writable_dir
+    ):
+        payload = b"\x89PNG\r\n\x1a\n" + bytes(range(128))
+        url = (
+            f"{writable_server_url}/api/mounts/writable/upload"
+            "?path=/notes/imgs&name=photo.png&autoRename=1"
+        )
+
+        status, body = _post_raw(url, payload, "image/png")
+        assert status == 200
+        first = json.loads(body)
+        assert first["name"] == "photo.png"
+        assert first["path"] == "/notes/imgs/photo.png"
+        with open(os.path.join(writable_dir, "notes", "imgs", "photo.png"), "rb") as f:
+            assert f.read() == payload
+
+        status, body = _post_raw(url, payload, "image/png")
+        assert status == 200
+        second = json.loads(body)
+        assert second["name"].startswith("photo_")
+        assert second["name"].endswith(".png")
+        assert second["name"] != first["name"]
+        with open(os.path.join(writable_dir, "notes", "imgs", second["name"]), "rb") as f:
+            assert f.read() == payload
+
+    def test_upload_duplicate_without_auto_rename_returns_suggestion(
+        self, writable_server_url, writable_dir
+    ):
+        target = os.path.join(writable_dir, "subdir", "note.md")
+        original = b"original"
+        with open(target, "wb") as f:
+            f.write(original)
+
+        status, body = _post_raw(
+            f"{writable_server_url}/api/mounts/writable/upload" "?path=/subdir&name=note.md",
+            b"replacement",
+        )
+
+        assert status == 409
+        response = json.loads(body)
+        assert response["error"] == "duplicate"
+        assert response["suggested_name"].startswith("note_")
+        with open(target, "rb") as f:
+            assert f.read() == original
+
+        status, body = _post_raw(
+            f"{writable_server_url}/api/mounts/writable/upload"
+            "?path=/subdir&name=note.md&overwrite=1",
+            b"replacement",
+        )
+        assert status == 200
+        assert json.loads(body)["name"] == "note.md"
+        with open(target, "rb") as f:
+            assert f.read() == b"replacement"
+
+    def test_upload_rejects_path_escape_and_readonly_mount(self, writable_server_url, writable_dir):
+        status, _body = _post_raw(
+            f"{writable_server_url}/api/mounts/writable/upload" "?path=../outside&name=escape.png",
+            b"x",
+        )
+        assert status == 403
+
+        status, _body = _post_raw(
+            f"{writable_server_url}/api/mounts/writable/upload" "?path=/subdir&name=C:escape.png",
+            b"x",
+        )
+        assert status == 400
+
+        status, _body = _post_raw(
+            f"{writable_server_url}/api/mounts/readonly/upload" "?path=/&name=blocked.png",
+            b"x",
+        )
+        assert status == 403
+        assert not os.path.exists(os.path.join(writable_dir, "blocked.png"))
 
     def test_write_markdown_work_limit_returns_resync_without_overwriting(
         self, writable_server_url, writable_dir
