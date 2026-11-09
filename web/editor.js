@@ -9,6 +9,7 @@ let _originalContent = '';
 let _editorMode = 'ir';
 // Blob URLs created for local-mount images, revoked when switching files to avoid leaks
 let _localImageBlobUrls = [];
+let _clipboardImageUploadInProgress = false;
 
 /**
  * Whether the currently open file lives in a local (File System Access API) mount.
@@ -375,6 +376,98 @@ function _escapeMarkdownAlt(text) {
     .replace(/\r?\n/g, ' ');
 }
 
+function _imageExtensionForMime(mime) {
+  const subtype = String(mime || '')
+    .split('/')[1]
+    ?.replace(/[^a-z0-9]/gi, '')
+    .slice(0, 10);
+  return _IMAGE_MIME_EXTENSIONS[mime] || (subtype ? `.${subtype}` : '.png');
+}
+
+function _dataImageToFile(src, index) {
+  const match = /^data:(image\/[^;,]+)((?:;[^,]*)?),([\s\S]*)$/i.exec(String(src || '').trim());
+  if (!match) return null;
+
+  const mime = match[1].toLowerCase();
+  const metadata = match[2] || '';
+  const payload = match[3];
+  let bytes;
+  try {
+    if (/;base64(?:;|$)/i.test(metadata)) {
+      const binary = window.atob(payload.replace(/\s+/g, ''));
+      bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+    } else {
+      bytes = new window.TextEncoder().encode(decodeURIComponent(payload));
+    }
+  } catch (_e) {
+    return null;
+  }
+  if (bytes.length === 0) return null;
+
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  const fileName = `pasted-image-${stamp}-${index + 1}${_imageExtensionForMime(mime)}`;
+  return new window.File([bytes], fileName, { type: mime });
+}
+
+function _clipboardImageFiles(event) {
+  const clipboard = event.clipboardData;
+  if (!clipboard) return [];
+
+  const files = Array.from(clipboard.files || []).filter(_isImageFile);
+  if (files.length > 0) return files;
+
+  const itemFiles = Array.from(clipboard.items || [])
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(_isImageFile);
+  if (itemFiles.length > 0) return itemFiles;
+
+  const html = clipboard.getData('text/html');
+  if (!html || !/data:image\//i.test(html)) return [];
+
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const sources = Array.from(doc.querySelectorAll('img[src]'))
+      .map((img) => img.getAttribute('src'))
+      .filter((src) => /^data:image\//i.test(src || ''));
+    return sources.map(_dataImageToFile).filter(Boolean);
+  } catch (_e) {
+    return [];
+  }
+}
+
+async function _handleEditorPasteCapture(event) {
+  if (!_vditor) return;
+  const mode = _vditor.getCurrentMode?.();
+  const editorEl = _vditor.vditor?.[mode]?.element;
+  if (!editorEl || !(event.target === editorEl || editorEl.contains(event.target))) return;
+
+  const images = _clipboardImageFiles(event);
+  if (images.length === 0) return;
+
+  // Stop Vditor's native HTML paste path, which would insert a data:image URL
+  // instead of storing the image next to the Markdown file.
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+
+  if (_clipboardImageUploadInProgress) {
+    if (typeof window.showToast === 'function') window.showToast('图片正在上传，请稍候');
+    return;
+  }
+
+  _clipboardImageUploadInProgress = true;
+  try {
+    const message = await _handleEditorImageUpload(images);
+    if (message && typeof window.showToast === 'function') window.showToast(message);
+  } finally {
+    _clipboardImageUploadInProgress = false;
+  }
+}
+
 function _currentMarkdownDir() {
   if (!_currentRelPath) return '/';
   const rel = String(_currentRelPath).replace(/\\/g, '/');
@@ -688,6 +781,8 @@ function initEditor(content, mode, readonly, confirmedContent) {
   window._lastSavedContent = initialConfirmedContent;
   const vditorEl = document.getElementById('vditor');
   vditorEl.innerHTML = '';
+  vditorEl.removeEventListener('paste', _handleEditorPasteCapture, true);
+  vditorEl.addEventListener('paste', _handleEditorPasteCapture, true);
 
   _vditor = new Vditor('vditor', {
     mode: _editorMode,

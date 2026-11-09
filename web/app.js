@@ -1377,9 +1377,14 @@ function renderEntries(entries, mountId, _parentPath) {
       const openAction = isImage
         ? `previewTreeImage('${fullPath}','${mountId}')`
         : `openFile('${fullPath}','${mountId}')`;
+      const imageActions =
+        isImage && canWrite
+          ? `<span class="dir-actions"><button class="mount-create-btn dir-delete-btn" onclick="event.stopPropagation();deleteFileAtPath('${mountId}','${fullPath}')" title="删除图片"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></span>`
+          : '';
       return `<div class="${cls}" onclick="${openAction}" ${dragAttr} title="${isImage ? '预览图片' : ''}">
       <span class="tree-icon">${icon}</span>
       <span title="${e.name}">${e.name}</span>
+      ${imageActions}
     </div>`;
     })
     .join('');
@@ -1422,10 +1427,19 @@ async function previewTreeImage(path, mountId) {
   const box = el('div', 'modal-box image-preview-modal');
   const header = el('div', 'image-preview-header');
   const title = el('div', 'image-preview-title', path.substring(path.lastIndexOf('/') + 1));
+  const actions = el('div', 'image-preview-actions');
   const closeBtn = el('button', 'modal-close', '×');
   closeBtn.type = 'button';
   closeBtn.setAttribute('aria-label', '关闭图片预览');
-  header.append(title, closeBtn);
+  let deleteBtn = null;
+  if (!mount.readonly && mount.id !== 'builtin-storage') {
+    deleteBtn = el('button', 'image-preview-delete', '删除');
+    deleteBtn.type = 'button';
+    deleteBtn.setAttribute('aria-label', '删除图片');
+    actions.appendChild(deleteBtn);
+  }
+  actions.appendChild(closeBtn);
+  header.append(title, actions);
 
   const body = el('div', 'image-preview-body');
   const img = el('img');
@@ -1445,10 +1459,63 @@ async function previewTreeImage(path, mountId) {
     if (event.key === 'Escape') close();
   };
   closeBtn.addEventListener('click', close);
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', async () => {
+      if (await deleteFileAtPath(mountId, path)) close();
+    });
+  }
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) close();
   });
   document.addEventListener('keydown', onKeyDown);
+}
+
+async function deleteFileAtPath(mountId, path) {
+  const mount = state.mounts.find((m) => m.id === mountId);
+  if (!mount || mount.readonly) {
+    showToast('该文件不可删除');
+    return false;
+  }
+
+  const name = path.substring(path.lastIndexOf('/') + 1);
+  if (!window.confirm(`确定要删除「${name}」吗？此操作不可撤销。`)) return false;
+
+  try {
+    if (mount._local && state.localMounts[mountId]) {
+      const localMount = state.localMounts[mountId];
+      if (!localMount.handle || !(await ensureWritePermission(mountId))) {
+        showToast('该本机目录不可写');
+        return false;
+      }
+      const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
+      const parentHandle = await getLocalDirHandle(localMount.handle, parentPath);
+      if (!parentHandle) {
+        showToast('目录不存在');
+        return false;
+      }
+      await parentHandle.removeEntry(name);
+      await loadLocalTree(mountId);
+    } else {
+      const result = await API.deleteFile(mountId, path);
+      if (!result || result.error) {
+        throw new Error(result?.error || '删除失败');
+      }
+      delete state.treeData[mountId];
+      await loadTree(mountId, '/');
+    }
+
+    state.recentFiles = state.recentFiles.filter(
+      (file) => !(file.mountId === mountId && file.path === path),
+    );
+    renderRecentFiles();
+    renderSidebar();
+    showToast('已删除');
+    return true;
+  } catch (e) {
+    console.error('Delete file failed:', e);
+    showToast(e.message || '删除失败');
+    return false;
+  }
 }
 
 // === 文件操作 ===
@@ -1538,6 +1605,82 @@ function showDuplicateDialog(suggestedName) {
 let _dragData = null; // { mountId, path, isDir }
 
 let _dragDropSetup = false;
+
+function _droppedPathParts(relativePath) {
+  return String(relativePath || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .map((part) => sanitizeUploadFileName(part))
+    .filter(Boolean);
+}
+
+function _readDroppedDirectoryEntries(reader) {
+  return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+}
+
+async function _walkDroppedEntry(entry, parentPath, result) {
+  const relativePath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+  if (entry.isDirectory) {
+    result.directories.push(relativePath);
+    const reader = entry.createReader();
+    while (true) {
+      const children = await _readDroppedDirectoryEntries(reader);
+      if (children.length === 0) break;
+      for (const child of children) {
+        await _walkDroppedEntry(child, relativePath, result);
+      }
+    }
+    return;
+  }
+  if (!entry.isFile) return;
+  const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+  result.files.push({ file, relativePath });
+}
+
+async function _collectDroppedFiles(dataTransfer) {
+  if (!dataTransfer) return { files: [], directories: [] };
+  const entries = [];
+  for (const item of Array.from(dataTransfer.items || [])) {
+    if (item.kind !== 'file') continue;
+    try {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) entries.push(entry);
+    } catch (_e) {
+      /* fall back to dataTransfer.files below */
+    }
+  }
+
+  if (entries.length > 0) {
+    const result = { files: [], directories: [] };
+    for (const entry of entries) {
+      await _walkDroppedEntry(entry, '', result);
+    }
+    if (result.files.length > 0 || result.directories.length > 0) return result;
+  }
+
+  return {
+    files: Array.from(dataTransfer.files || []).map((file) => ({
+      file,
+      relativePath: file.webkitRelativePath || file.name,
+    })),
+    directories: [],
+  };
+}
+
+async function _ensureDroppedDirectories(mountId, destPath, directories, mount) {
+  for (const relativeDir of directories) {
+    const parts = _droppedPathParts(relativeDir);
+    if (parts.length === 0) continue;
+    const targetPath = joinMountPath(destPath, parts.join('/'));
+    if (mount._local && state.localMounts[mountId]) {
+      await ensureLocalDir(mountId, targetPath);
+    } else {
+      const result = await API.mkdir(mountId, targetPath);
+      if (result && result.error) throw new Error(result.error);
+    }
+  }
+}
 
 function setupDragDrop() {
   const tree = $('file-tree');
@@ -1629,18 +1772,35 @@ function setupDragDrop() {
       }
     }
 
-    // Handle external file drop (from OS file manager)
-    if (!_dragData && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const files = Array.from(e.dataTransfer.files);
+    // Handle external file/folder drop (from OS file manager)
+    const dropped = !_dragData
+      ? await _collectDroppedFiles(e.dataTransfer)
+      : { files: [], directories: [] };
+    if (!_dragData && (dropped.files.length > 0 || dropped.directories.length > 0)) {
       const destMount = state.mounts.find((m) => m.id === destMountId);
       if (!destMount || destMount.readonly) {
         showToast('该目录不可写');
         return;
       }
       state._fileOpInProgress = true;
+      let importedCount = 0;
+      let lastName = '';
       try {
-        for (const file of files) {
-          const fileName = file.name;
+        if (
+          destMount._local &&
+          state.localMounts[destMountId] &&
+          !(await ensureWritePermission(destMountId))
+        ) {
+          return;
+        }
+        await _ensureDroppedDirectories(destMountId, destPath, dropped.directories, destMount);
+
+        for (const droppedFile of dropped.files) {
+          const file = droppedFile.file;
+          const relativeParts = _droppedPathParts(droppedFile.relativePath);
+          if (relativeParts.length === 0) continue;
+          const fileName = relativeParts.pop();
+          const targetDir = joinMountPath(destPath, relativeParts.join('/'));
           const isMarkdown = /\.(md|markdown)$/i.test(fileName);
           if (!isMarkdown) {
             let uploadName = sanitizeUploadFileName(fileName);
@@ -1651,11 +1811,12 @@ function setupDragDrop() {
             let overwrite = false;
             while (true) {
               try {
-                const uploaded = await uploadFileToMount(destMountId, destPath, file, {
+                const uploaded = await uploadFileToMount(destMountId, targetDir, file, {
                   fileName: uploadName,
                   overwrite,
                 });
-                showToast(`已导入: ${uploaded.name}`);
+                importedCount += 1;
+                lastName = uploaded.name;
                 break;
               } catch (err) {
                 if (err.code !== 'duplicate') throw err;
@@ -1676,9 +1837,9 @@ function setupDragDrop() {
           if (destMount._local && state.localMounts[destMountId]) {
             // Write to local mount
             if (!(await ensureWritePermission(destMountId))) return;
-            const dirHandle = await getLocalDirHandle(
+            const dirHandle = await getOrCreateLocalDirHandle(
               state.localMounts[destMountId].handle,
-              destPath,
+              targetDir,
             );
             if (!dirHandle) {
               showToast('目录不存在');
@@ -1700,11 +1861,12 @@ function setupDragDrop() {
             const writable = await fh.createWritable();
             await writable.write(content);
             await writable.close();
-            showToast(`已导入: ${destName}`);
+            importedCount += 1;
+            lastName = destName;
           } else {
             // Write to server mount
             let destName = fileName;
-            const checkPath = destPath === '/' ? '/' + fileName : destPath + '/' + fileName;
+            const checkPath = joinMountPath(targetDir, fileName);
             const existing = await API.getFile(destMountId, checkPath);
             if (existing !== null) {
               const suggested = suggestRename(fileName);
@@ -1715,13 +1877,14 @@ function setupDragDrop() {
               }
               // overwrite: just write to same path, will replace content
             }
-            const writePath = destPath === '/' ? '/' + destName : destPath + '/' + destName;
+            const writePath = joinMountPath(targetDir, destName);
             const result = await API.putFile(destMountId, writePath, content);
             if (result?.status !== 'ok') {
               showToast(result?.error || '导入失败');
               return;
             }
-            showToast(`已导入: ${destName}`);
+            importedCount += 1;
+            lastName = destName;
           }
         }
         // Refresh tree
@@ -1732,6 +1895,13 @@ function setupDragDrop() {
           await loadTree(destMountId, '/');
         }
         renderSidebar();
+        if (importedCount === 1) {
+          showToast(`已导入: ${lastName}`);
+        } else if (importedCount > 1) {
+          showToast(`已导入 ${importedCount} 个文件`);
+        } else if (dropped.directories.length > 0) {
+          showToast('已创建文件夹');
+        }
       } catch (err) {
         console.error('External file import failed:', err);
         showToast('导入失败');

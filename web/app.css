@@ -484,6 +484,7 @@ a:hover {
 .dir-actions {
   display: flex;
   align-items: center;
+  margin-left: auto;
   gap: 2px;
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -527,7 +528,7 @@ a:hover {
   overflow: hidden;
 }
 
-.tree-item > span:not(.tree-icon):not(.mount-builtin-badge) {
+.tree-item > span:not(.tree-icon):not(.mount-builtin-badge):not(.dir-actions) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -621,6 +622,31 @@ a:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: var(--fw-semibold);
+}
+
+.image-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  flex-shrink: 0;
+}
+
+.image-preview-delete {
+  padding: 5px 10px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--c-danger);
+  font-size: var(--f-body-sm);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.image-preview-delete:hover {
+  border-color: var(--c-danger);
+  background: color-mix(in srgb, var(--c-danger) 10%, transparent);
 }
 
 .image-preview-body {
